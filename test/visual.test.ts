@@ -7,7 +7,8 @@ import { diffCells, diffLines, notebookChanges, onlyWhitespaceDiffers } from '..
 import { anchorForDocLines, buildReviewDoc, docLineForSource, docLinesForAnchor } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
 import { highlightLines, renderMarkdownCell } from '../src/render.ts';
-import { buildThreads, buildViewModel } from '../src/viewModel.ts';
+import { buildFileThreads, buildFileViewModel, buildThreads, buildViewModel, fileLanguage } from '../src/viewModel.ts';
+import { planFileComment } from '../src/core/fileComments.ts';
 import { diffPixels, pairImages } from '../src/webview/imageDiff.ts';
 import type { NotebookEntry } from '../src/session.ts';
 
@@ -297,4 +298,61 @@ test('pixel comparison marks what changed and boxes it, and ignores tiny differe
   assert.deepEqual([...d.pixels.slice((1 * w + 1) * 4, (1 * w + 1) * 4 + 4)], [255, 0, 170, 255], 'changed pixels are magenta');
   assert.deepEqual([...d.pixels.slice(0, 4)], [255, 255, 255, 255], 'unchanged white stays white');
   assert.equal(diffPixels(before, before, w, h).box, undefined);
+});
+
+test('other files: highlighted by their language, Markdown rendered', () => {
+  assert.equal(fileLanguage('src/pkg/train.py'), 'python');
+  assert.equal(fileLanguage('pyproject.toml'), 'ini');
+  assert.equal(fileLanguage('configs/a.YAML'), 'yaml');
+  assert.equal(fileLanguage('docker/Dockerfile'), 'dockerfile');
+  assert.equal(fileLanguage('Makefile'), 'makefile');
+  assert.equal(fileLanguage('README.md'), 'markdown');
+  assert.equal(fileLanguage('LICENSE'), 'plaintext');
+});
+
+test('a changed file is one cell, with its lines diffed and counted', () => {
+  const pr = { number: 7, title: 't', url: 'u' };
+  const file = { filename: 'src/train.py', status: 'modified' as const, additions: 1, deletions: 1, patch: '' };
+  const vm = buildFileViewModel(file, 'import os\ndef f():\n    return 1\n', 'import os\ndef f():\n    return 2\n', pr);
+  assert.equal(vm.kind, 'file');
+  assert.equal(vm.language, 'python');
+  assert.equal(vm.cells.length, 1);
+  const [c] = vm.cells;
+  assert.deepEqual([c.status, c.type, c.baseId, c.headId], ['modified', 'code', 'file', 'file']);
+  assert.deepEqual(c.headSource, ['import os', 'def f():', '    return 2']);
+  assert.match(c.headLines[0], /hljs-keyword/, 'Python is highlighted');
+  assert.deepEqual([vm.stats.additions, vm.stats.deletions], [1, 1]);
+
+  const added = buildFileViewModel({ ...file, status: 'added' }, undefined, 'x = 1\n', pr);
+  assert.equal(added.cells[0].status, 'added');
+  const removed = buildFileViewModel({ ...file, status: 'removed' }, 'x = 1\n', undefined, pr);
+  assert.equal(removed.cells[0].status, 'removed');
+
+  const md = buildFileViewModel({ ...file, filename: 'README.md' }, '# Title\n\nOld words here.\n', '# Title\n\nNew words here.\n', pr);
+  assert.equal(md.cells[0].type, 'markdown');
+  assert.match(md.cells[0].headHtml!, /x-ins/, 'changed words are marked');
+
+  const quiet = buildFileViewModel(file, 'x=1\n', 'x = 1\n', pr, undefined, { hideNoise: true });
+  assert.equal(quiet.cells[0].noiseHidden, 'whitespace');
+  const since = buildFileViewModel(file, 'a\n', 'b\n', pr, { label: 'your review' });
+  assert.deepEqual(since.since, { label: 'your review' });
+});
+
+test('threads on a file sit on their lines; file comments on the whole file', () => {
+  const gh = (id: string, subjectType: 'LINE' | 'FILE') => ({
+    id, path: 'a.py', line: 3, startLine: null, originalLine: 3, diffSide: 'RIGHT', subjectType, isResolved: false, isOutdated: false,
+    viewerCanResolve: true, viewerCanUnresolve: false,
+    comments: [{ id: `${id}c`, pending: false, body: 'hi', createdAt: 'x', url: 'u', author: 'm', viewerCanUpdate: false, viewerCanDelete: false, reactions: [] }],
+  });
+  const threads = buildFileThreads([
+    { gh: gh('T1', 'LINE'), path: 'a.py', side: 'RIGHT', docLine: 2, startDocLine: 1 },
+    { gh: gh('T2', 'FILE'), path: 'a.py', side: 'RIGHT', docLine: 0, note: 'file comment' },
+  ] as any, () => '');
+  assert.deepEqual(threads[0].anchor, { side: 'RIGHT', cellId: 'file', kind: 'source', start: 1, end: 2 });
+  assert.deepEqual(threads[1].anchor, { side: 'RIGHT', cellId: 'file', kind: 'cell' });
+  assert.equal(threads[1].label, 'GitHub · file comment');
+  assert.equal(threads[0].canResolve, true);
+  // A comment on the whole file is a file comment on GitHub, wherever the lines are.
+  const plan = planFileComment({ path: 'a.py', side: 'RIGHT', startLine: 1, endLine: 1, commentable: { left: new Set(), right: new Set([1]) }, text: 'x', wholeFile: true });
+  assert.equal(plan.subjectType, 'FILE');
 });

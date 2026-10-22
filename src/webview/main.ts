@@ -190,12 +190,12 @@ function renderToolbar(m: ViewModel): HTMLElement {
     h(
       'div',
       { class: 'title' },
-      icon('notebook'),
+      icon(m.kind === 'file' ? 'file' : 'notebook'),
       h('span', { class: 'dir', text: slash >= 0 ? m.path.slice(0, slash + 1) : '' }),
       h('span', { class: 'file', text: m.path.slice(slash + 1) }),
       h('a', { class: 'pr', href: m.pr.url, title: `${m.pr.title} (open on GitHub)`, text: `#${m.pr.number}` }),
       ...chips,
-      h('span', { class: 'summary', text: (describe.join(' · ') || 'no cell changes') + (m.since ? ` since ${m.since.label}` : '') }),
+      h('span', { class: 'summary', text: (m.kind === 'file' ? fileSummary(m) : describe.join(' · ') || 'no cell changes') + (m.since ? ` since ${m.since.label}` : '') }),
     ),
     h(
       'div',
@@ -208,7 +208,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
           title: panel.since.problem ?? `Only what changed after ${panel.since.label}`,
         })),
       noiseButton(m),
-      segmented([
+      m.kind === 'notebook' && segmented([
         ['Changes', 'Show changed cells; fold the rest', !ui.showAll, () => { ui.showAll = false; persist(); render(); }],
         ['All cells', 'Show every cell', ui.showAll, () => { ui.showAll = true; persist(); render(); }],
       ]),
@@ -242,6 +242,15 @@ function renderToolbar(m: ViewModel): HTMLElement {
         submitBox.open && renderSubmitBox()),
     ),
   );
+}
+
+/** What happened to a file that isn't a notebook: it is one cell. */
+function fileSummary(m: ViewModel): string {
+  const c = m.cells[0];
+  if (m.notice || !c) {
+    return '';
+  }
+  return c.status === 'unchanged' ? (c.noiseHidden ? 'only whitespace changed' : 'no changes') : c.status;
 }
 
 /**
@@ -372,6 +381,11 @@ function cellHasThreads(c: CellVM): boolean {
 
 function renderCells(m: ViewModel): HTMLElement {
   const root = h('main', { class: `cells ${layout()}` });
+  if (m.notice) {
+    root.append(h('div', { class: 'notice' }, h('span', { text: m.notice }),
+      button([icon('diff'), 'Open text diff'], () => post({ type: 'openTextDiff' }), { class: 'ghost' })));
+    return root;
+  }
   let group: CellVM[] = [];
   const flush = () => {
     if (!group.length) {
@@ -415,12 +429,13 @@ function renderCell(c: CellVM): HTMLElement {
   const number = c.headNumber ?? c.baseNumber;
   const renumbered = c.headNumber && c.baseNumber && c.headNumber !== c.baseNumber ? ` (was ${c.baseNumber})` : '';
   const cellAnchor = (): Anchor => (c.headId ? { side: 'RIGHT', cellId: c.headId, kind: 'cell' } : { side: 'LEFT', cellId: c.baseId!, kind: 'cell' });
+  const file = model?.kind === 'file';
   const head = h(
     'div',
     { class: 'cell-head' },
-    h('span', { class: `type ${c.type}`, text: c.type }),
-    h('span', { class: 'num', text: `cell ${number}${renumbered}` }),
-    h('span', { class: 'id', text: c.headId ?? c.baseId }),
+    h('span', { class: `type ${c.type}`, text: file ? fileType(model!) : c.type }),
+    !file && h('span', { class: 'num', text: `cell ${number}${renumbered}` }),
+    !file && h('span', { class: 'id', text: c.headId ?? c.baseId }),
     c.status !== 'unchanged' && h('span', { class: `status ${c.status}`, text: c.status === 'modified' && !c.sourceChanged ? 'outputs changed' : c.status }),
     c.moved && h('span', { class: 'status moved', text: 'moved' }),
     c.noiseHidden && h('span', { class: 'status noise', text: `${c.noiseHidden} changed`, title: 'Hidden as noise. Switch "Noise hidden" off in the toolbar to see the change.' }),
@@ -429,8 +444,8 @@ function renderCell(c: CellVM): HTMLElement {
     isMd && h('div', { class: 'segmented small' },
       button('Rendered', () => { delete ui.mdSource[c.key]; persist(); render(); }, { class: rendered ? 'on' : '' }),
       button('Source', () => { ui.mdSource[c.key] = true; persist(); render(); }, { class: rendered ? '' : 'on' })),
-    commentable(cellAnchor().side) && button(icon('comment'), () => openComposer(cellAnchor()), { class: 'icon-btn', title: 'Comment on this cell' }),
-    c.headId && button(icon('diff'), () => post({ type: 'openTextDiff', cellId: c.headId }), { class: 'icon-btn', title: 'Show in text diff' }),
+    commentable(cellAnchor().side) && button(icon('comment'), () => openComposer(cellAnchor()), { class: 'icon-btn', title: file ? 'Comment on the whole file' : 'Comment on this cell' }),
+    c.headId && button(icon('diff'), () => post({ type: 'openTextDiff', cellId: file ? undefined : c.headId }), { class: 'icon-btn', title: 'Show in text diff' }),
   );
   const card = h('section', { class: `cell ${c.status}${c.moved ? ' moved' : ''}`, data: { key: c.key, head: c.headId, base: c.baseId } }, head);
   const cellThreads = threadsFor(t => t.anchor.kind === 'cell' && matchesCell(t.anchor, c));
@@ -444,6 +459,13 @@ function renderCell(c: CellVM): HTMLElement {
     card.append(outputs);
   }
   return card;
+}
+
+/** "py", "toml", "Dockerfile": what kind of file it is, for the cell header. */
+function fileType(m: ViewModel): string {
+  const name = m.path.slice(m.path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1) : name;
 }
 
 function matchesCell(a: Anchor, c: CellVM): boolean {
@@ -1211,7 +1233,11 @@ const planRequests = new Map<number, string>();
 // --- Navigation --------------------------------------------------------------------------------
 
 function jump(dir: 1 | -1): void {
-  const cards = [...app.querySelectorAll<HTMLElement>('section.cell')].filter(el => !el.classList.contains('unchanged') || el.querySelector('.thread'));
+  // A notebook steps from changed cell to changed cell; any other file, from change to change.
+  const cards = model?.kind === 'file'
+    ? [...app.querySelectorAll<HTMLElement>('.source .row:not(.same), .md-block.changed-add, .md-block.changed-del')]
+      .filter(el => !el.previousElementSibling?.matches('.source .row:not(.same)'))
+    : [...app.querySelectorAll<HTMLElement>('section.cell')].filter(el => !el.classList.contains('unchanged') || el.querySelector('.thread'));
   if (!cards.length) {
     return;
   }

@@ -41,8 +41,13 @@ export function planFileComment(args: {
   endLine: number;
   commentable: CommentableLines;
   text: string;
+  /** A comment on the file as a whole, not on lines of it. */
+  wholeFile?: boolean;
 }): GhThreadTarget {
   const { path, side, startLine, endLine, text } = args;
+  if (args.wholeFile) {
+    return { path, side: 'RIGHT', subjectType: 'FILE', body: text, describe: `file comment on ${path}` };
+  }
   const allowed = side === 'RIGHT' ? args.commentable.right : args.commentable.left;
   if (allowed.has(endLine)) {
     let all = true;

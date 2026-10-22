@@ -6,6 +6,12 @@ export type Side = 'LEFT' | 'RIGHT';
 export interface ViewModel {
   pr: { number: number; title: string; url: string };
   path: string;
+  /** A notebook, or any other changed file shown as one cell. */
+  kind: 'notebook' | 'file';
+  /** For files: the language they are highlighted in (`markdown` ones are rendered). */
+  language?: string;
+  /** Why the file isn't shown (binary, too large), instead of its cells. */
+  notice?: string;
   /**
    * Set when the old side is the notebook as it was at the viewer's last review rather than the
    * pull request's base. Comments can't be made on that side: it isn't part of the pull request.

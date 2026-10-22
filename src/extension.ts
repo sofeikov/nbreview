@@ -85,9 +85,13 @@ export function activate(context: vscode.ExtensionContext): void {
       const pr = state.session?.pr;
       return pr && openPr(`${pr.owner}/${pr.repo}#${pr.number}`, false).catch(showError);
     }),
+    // Opens any changed file, notebook or not, in the view chosen in the settings.
     vscode.commands.registerCommand('nbreview.openNotebook', (path: string) => {
       const view = vscode.workspace.getConfiguration('nbreview').get<string>('defaultView', 'visual');
-      return view === 'text' ? text.openDiff(path) : visual.open(path);
+      if (view === 'text') {
+        return state.entry(path) ? text.openDiff(path) : text.openFileDiff(path);
+      }
+      return visual.open(path);
     }),
     vscode.commands.registerCommand('nbreview.openVisual', (arg?: Node | vscode.Uri | string) => {
       const path = pathFromArg(arg);
@@ -97,13 +101,17 @@ export function activate(context: vscode.ExtensionContext): void {
       const path = pathFromArg(arg);
       return path && text.openDiff(path);
     }),
-    vscode.commands.registerCommand('nbreview.openFileDiff', (path: string) => text.openFileDiff(path)),
+    vscode.commands.registerCommand('nbreview.openFileDiff', (arg?: Node | string) => {
+      const path = typeof arg === 'string' ? arg : arg && nodePath(arg);
+      return path && text.openFileDiff(path);
+    }),
     vscode.commands.registerCommand('nbreview.openChangesSinceReview', (arg?: Node | vscode.Uri | string) => {
       const path = pathFromArg(arg);
       if (!path || !state.session?.lastReview) {
         return;
       }
-      return state.session.notebooks.has(path) ? visual.open(path, undefined, { since: true }) : text.openSinceReviewDiff(path);
+      const view = vscode.workspace.getConfiguration('nbreview').get<string>('defaultView', 'visual');
+      return state.session.notebooks.has(path) || view === 'visual' ? visual.open(path, undefined, { since: true }) : text.openSinceReviewDiff(path);
     }),
     vscode.commands.registerCommand('nbreview.openOnGitHub', () => state.session && vscode.env.openExternal(vscode.Uri.parse(state.session.pr.url))),
     vscode.commands.registerCommand('nbreview.submitReview', (request?: SubmitRequest) =>
@@ -153,7 +161,7 @@ function pathFromArg(arg?: Node | vscode.Uri | string): string | undefined {
     return arg;
   }
   if (arg instanceof vscode.Uri) {
-    return text.docFor(arg)?.entry.path;
+    return text.docFor(arg)?.entry.path ?? text.rawFor(arg)?.path;
   }
   if (arg) {
     return nodePath(arg);
@@ -227,7 +235,7 @@ async function nextFile(arg?: vscode.Uri | string): Promise<void> {
     }
     return;
   }
-  await (state.session?.notebooks.has(next) ? vscode.commands.executeCommand('nbreview.openNotebook', next) : text.openFileDiff(next));
+  await vscode.commands.executeCommand('nbreview.openNotebook', next);
 }
 
 function showError(e: unknown): void {

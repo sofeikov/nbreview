@@ -366,6 +366,7 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .compare-diff { margin: 0; }
 .compare-diff img { max-width: 100%; }
 .compare-diff figcaption { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.notice { display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px dashed var(--border); border-radius: var(--radius); color: var(--muted); }
 .compare-wait { color: var(--muted); font-style: italic; font-size: 12px; padding: 8px 0; }
 
 .outputs .none { color: var(--muted); font-style: italic; font-size: 12px; padding: 4px 0; }

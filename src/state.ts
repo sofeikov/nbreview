@@ -38,6 +38,8 @@ export interface NewFileComment {
   text: string;
   /** Thread id when this is a reply. */
   replyTo?: string;
+  /** A comment on the file as a whole. */
+  wholeFile?: boolean;
 }
 
 function isFileComment(c: NewComment | NewFileComment): c is NewFileComment {

@@ -1,10 +1,13 @@
-// The visual review: one webview panel per notebook showing rendered cells, outputs and the same
-// comment threads as the text diff.
+// The review page: one webview panel per changed file, showing a notebook's rendered cells and
+// outputs, or any other file as one highlighted (or, for Markdown, rendered) cell, with the same
+// comment threads as the text diff and the same toolbar for both.
 import * as vscode from 'vscode';
-import type { ReviewState } from './state.ts';
+import type { NewFileComment, ReviewState } from './state.ts';
+import { planFileComment } from './core/fileComments.ts';
+import type { Anchor } from './webview/protocol.ts';
 import type { TextReview } from './textReview.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
-import type { HostMessage, SinceState, WebviewMessage } from './webview/protocol.ts';
+import type { HostMessage, SinceState, ViewModel, WebviewMessage } from './webview/protocol.ts';
 import { basename } from './paths.ts';
 
 export class VisualReview implements vscode.Disposable {
@@ -31,7 +34,7 @@ export class VisualReview implements vscode.Disposable {
       state.onDidChange(e => {
         for (const [path, panel] of this.panels) {
           if (e.session) {
-            if (!state.entry(path)) {
+            if (!this.reviewable(path)) {
               panel.dispose();
               continue;
             }
@@ -65,7 +68,7 @@ export class VisualReview implements vscode.Disposable {
       }
       return;
     }
-    if (!this.state.session || !this.state.entry(nbPath)) {
+    if (!this.state.session || !this.reviewable(nbPath)) {
       return;
     }
     const panel = vscode.window.createWebviewPanel(
@@ -81,7 +84,7 @@ export class VisualReview implements vscode.Disposable {
   private async restore(panel: vscode.WebviewPanel, saved: unknown): Promise<void> {
     await this.state.restoring;
     const nbPath = (saved as { path?: string } | undefined)?.path;
-    if (nbPath && this.state.entry(nbPath) && !this.panels.has(nbPath)) {
+    if (nbPath && this.reviewable(nbPath) && !this.panels.has(nbPath)) {
       panel.webview.options = { enableScripts: true, localResourceRoots: [this.dist()] };
       this.adopt(panel, nbPath);
     } else {
@@ -89,8 +92,21 @@ export class VisualReview implements vscode.Disposable {
     }
   }
 
-  private title(nbPath: string): string {
-    return `📓 ${basename(nbPath)} · #${this.state.session?.pr.number ?? ''}`;
+  private title(path: string): string {
+    return `${this.state.entry(path) ? '📓' : '📄'} ${basename(path)} · #${this.state.session?.pr.number ?? ''}`;
+  }
+
+  /** A notebook or another file of the pull request under review. */
+  private reviewable(path: string): boolean {
+    return !!this.state.entry(path) || !!this.state.session?.files.some(f => f.filename === path);
+  }
+
+  /** A comment on an ordinary file, from where it was made in the page: some of its lines, or the whole file. */
+  private fileComment(path: string, anchor: Anchor, text: string): NewFileComment {
+    if (anchor.kind !== 'source' || anchor.start === undefined) {
+      return { path, side: 'RIGHT', startLine: 1, endLine: 1, text, wholeFile: true };
+    }
+    return { path, side: anchor.side, startLine: anchor.start + 1, endLine: (anchor.end ?? anchor.start) + 1, text };
   }
 
   private dist(): vscode.Uri {
@@ -121,6 +137,12 @@ export class VisualReview implements vscode.Disposable {
         await this.sync(panel, nbPath, { model: true, threads: true });
         return;
       case 'plan': {
+        if (!this.state.entry(nbPath)) {
+          const c = this.fileComment(nbPath, msg.anchor, '');
+          const plan = planFileComment({ ...c, commentable: this.state.session!.commentable(nbPath) });
+          this.post(panel, { type: 'plan', requestId: msg.requestId, describe: `Will post as ${/^[aeiou]/.test(plan.describe) ? 'an' : 'a'} ${plan.describe}` });
+          return;
+        }
         const doc = this.state.doc(nbPath, msg.anchor.side);
         const lines = doc && docLinesForAnchor(doc, msg.anchor);
         const plan = lines && this.state.plan({ nbPath, side: msg.anchor.side, startDocLine: lines.start, endDocLine: lines.end, text: '' });
@@ -130,6 +152,11 @@ export class VisualReview implements vscode.Disposable {
       case 'addComment': {
         if (msg.anchor.side === 'LEFT' && this.since(nbPath)?.on) {
           throw new Error('The old side shows your last review, which is not part of the pull request: comment on the new side.');
+        }
+        if (!this.state.entry(nbPath)) {
+          const comment = this.fileComment(nbPath, msg.anchor, msg.text);
+          await (msg.mode === 'single' ? this.state.postSingle(comment) : this.state.addDraft(comment));
+          return;
         }
         const doc = this.state.doc(nbPath, msg.anchor.side);
         const lines = doc && docLinesForAnchor(doc, msg.anchor);
@@ -142,6 +169,13 @@ export class VisualReview implements vscode.Disposable {
       }
       case 'reply': {
         const placed = this.state.session?.placed.find(p => p.gh.id === msg.threadId);
+        const onFile = this.state.session?.fileThreads.get(nbPath)?.find(f => f.gh.id === msg.threadId);
+        if (!placed && onFile) {
+          const line = onFile.docLine + 1;
+          const reply = { path: nbPath, side: onFile.side, startLine: line, endLine: line, text: msg.text, replyTo: msg.threadId };
+          await (msg.mode === 'single' ? this.state.postSingle(reply) : this.state.addDraft(reply));
+          return;
+        }
         if (!placed) {
           throw new Error('That thread is no longer on the pull request.');
         }
@@ -183,6 +217,10 @@ export class VisualReview implements vscode.Disposable {
         await this.state.setViewed([nbPath], msg.viewed);
         return;
       case 'openTextDiff': {
+        if (!this.state.entry(nbPath)) {
+          await this.text.openFileDiff(nbPath);
+          return;
+        }
         const doc = this.state.doc(nbPath, 'RIGHT');
         const line = msg.cellId && doc ? headerLine(doc, msg.cellId) : undefined;
         await this.text.openDiff(nbPath, line === undefined ? undefined : { side: 'RIGHT', docLine: line });
@@ -231,6 +269,18 @@ export class VisualReview implements vscode.Disposable {
     const s = this.state.session;
     const entry = this.state.entry(nbPath);
     const since = this.since(nbPath);
+    const file = s?.files.find(f => f.filename === nbPath);
+    if (s && file && !entry) {
+      if (what.model) {
+        this.post(panel, { type: 'model', model: await this.fileModel(vm, nbPath, since) });
+      }
+      if (what.threads) {
+        const list = (s.fileThreads.get(nbPath) ?? []).filter(f => !since?.on || f.side === 'RIGHT');
+        this.post(panel, { type: 'threads', threads: vm.buildFileThreads(list, gh => this.state.describe(gh)) });
+      }
+      this.post(panel, this.stateMessage(nbPath));
+      return;
+    }
     if (s && entry && what.model) {
       const base = since?.on ? await s.sinceReviewDoc(nbPath) : undefined;
       const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
@@ -246,7 +296,27 @@ export class VisualReview implements vscode.Disposable {
     this.post(panel, this.stateMessage(nbPath));
   }
 
-  /** Whether the notebook can be, and is, compared with the viewer's last review. */
+  /** An ordinary file as one cell; binary and very large files get a notice instead. */
+  private async fileModel(vm: typeof import('./viewModel.ts'), path: string, since: SinceState | undefined): Promise<ViewModel> {
+    const s = this.state.session!;
+    const file = s.files.find(f => f.filename === path)!;
+    const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
+    const [base, head] = await Promise.all([s.content(path, 'LEFT'), s.content(path, 'RIGHT')]);
+    let old = base;
+    if (since?.on && s.lastReview) {
+      old = (await s.contentAt(path, s.lastReview.sha)) ?? (file.previousFilename ? await s.contentAt(file.previousFilename, s.lastReview.sha) : undefined);
+    }
+    const unreadable = [old, head].find(t => t !== undefined && (t.length > 2_000_000 || t.slice(0, 8000).includes('\u0000')));
+    if (unreadable !== undefined) {
+      const notice = unreadable.length > 2_000_000
+        ? 'This file is too large to show here.'
+        : 'This is a binary file, so there is nothing to show line by line.';
+      return { ...vm.buildFileViewModel(file, undefined, undefined, pr), notice };
+    }
+    return vm.buildFileViewModel(file, old, head, pr, since?.on ? { label: since.label } : undefined, { hideNoise: this.hideNoise() });
+  }
+
+  /** Whether the file can be, and is, compared with the viewer's last review. */
   private since(nbPath: string): SinceState | undefined {
     const s = this.state.session;
     const last = s?.lastReview;
@@ -263,7 +333,7 @@ export class VisualReview implements vscode.Disposable {
       available,
       on: available && this.sinceOn.has(nbPath),
       label,
-      ...(available ? {} : { problem: `No changes to this notebook since ${label}.` }),
+      ...(available ? {} : { problem: `No changes to this ${this.state.entry(nbPath) ? 'notebook' : 'file'} since ${label}.` }),
     };
   }
 
@@ -303,7 +373,7 @@ export class VisualReview implements vscode.Disposable {
 <link rel="stylesheet" href="${uri('webview.css')}">
 </head>
 <body data-path="${escapeAttr(nbPath)}">
-<div id="app"><div class="loading">Loading notebook…</div></div>
+<div id="app"><div class="loading">Loading…</div></div>
 <script nonce="${nonce}" src="${uri('webview.js')}"></script>
 </body>
 </html>`;

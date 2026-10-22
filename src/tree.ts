@@ -162,7 +162,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         item.iconPath = new vscode.ThemeIcon('file', statusColor(other.file.status));
         item.contextValue = s.changedSince(other.file.filename) ? 'file since' : 'file';
         item.checkboxState = this.checkbox(other.file.filename);
-        item.command = { command: 'nbreview.openFileDiff', title: 'Open diff', arguments: [other.file.filename] };
+        item.command = { command: 'nbreview.openNotebook', title: 'Review file', arguments: [other.file.filename] };
         return item;
       }
     }

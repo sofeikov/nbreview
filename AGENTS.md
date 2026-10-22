@@ -29,8 +29,8 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
 - **`src/state.ts`** (`ReviewState`) is the review in progress. Both views listen to its change events.
 - **The views:**
   - `textReview.ts` is the text diff. VS Code's Comments API doesn't work inside notebook cells, so notebooks are shown as a virtual document (scheme `nbreview:`) in the diff editor. Other files use `nbreview-raw:`.
-  - `visualReview.ts` and `src/webview/` are the rendered review page: a webview with a CSP nonce, `retainContextWhenHidden`, and a panel serializer. The page's codicons are built into the page script from `src/webview/icons.json`.
-  - `viewModel.ts` builds the page's data, and `mdDiff.ts` does the word-level diff of Markdown cells.
+  - `visualReview.ts` and `src/webview/` are the review page, for every changed file: a webview with a CSP nonce, `retainContextWhenHidden`, and a panel serializer. The page's codicons are built into the page script from `src/webview/icons.json`.
+  - `viewModel.ts` builds the page's data. A notebook gives one card per cell. Any other file is one cell (`id: 'file'`) in its language, or Markdown; its comments go through `planFileComment` (`kind: 'cell'` means the whole file). `mdDiff.ts` does the word-level diff of Markdown, and `webview/imageDiff.ts` the plot comparison.
 - **The side panels:**
   - `tree.ts` is the Review panel, with Viewed checkboxes and a tree or list layout.
   - `prList.ts` is the Pull Requests panel, with the PR picker and badges.

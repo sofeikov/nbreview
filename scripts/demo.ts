@@ -5,8 +5,8 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { parseNotebook } from '../src/core/notebook.ts';
 import { buildReviewDoc, docLineForSource } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
-import { buildThreads, buildViewModel } from '../src/viewModel.ts';
-import type { NotebookEntry, PlacedThread } from '../src/session.ts';
+import { buildFileThreads, buildFileViewModel, buildThreads, buildViewModel } from '../src/viewModel.ts';
+import type { FileThread, NotebookEntry, PlacedThread } from '../src/session.ts';
 
 const path = 'nbs/02_xg_model.ipynb';
 const patch = readFileSync('docs/demo/xg_model.patch', 'utf8');
@@ -69,9 +69,58 @@ const placed = [
 ] as unknown as PlacedThread[];
 const threads = buildThreads(entry, placed, () => 'Pending · comment on the output → nbs/02_xg_model.ipynb L48');
 
+// Another file of the same pull request, shown as one cell: the training module.
+const trainBase = `"""Train the xG model on the latest shots."""
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+
+
+def train(path: str) -> LogisticRegression:
+    shots = pd.read_parquet(path)
+    model = LogisticRegression()
+    model.fit(shots[["distance", "angle"]], shots["goal"])
+    return model
+`;
+const trainHead = `"""Train the xG model on the latest shots."""
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+
+FEATURES = ["distance", "angle", "header"]
+
+
+def train(path: str, c: float = 0.5) -> LogisticRegression:
+    shots = pd.read_parquet(path)
+    shots["header"] = (shots["body_part"] == "head").astype(int)
+    model = LogisticRegression(C=c, max_iter=500)
+    model.fit(shots[FEATURES], shots["goal"])
+    return model
+`;
+const trainFile = { filename: 'src/xg/train.py', status: 'modified' as const, additions: 6, deletions: 3, patch: '' };
+const fileModel = buildFileViewModel(trainFile, trainBase, trainHead, { number: 42, title: 'Add a body-part term to the xG model', url: 'https://github.com/' });
+const fileThreads = buildFileThreads([
+  {
+    path: trainFile.filename,
+    side: 'RIGHT',
+    docLine: 7,
+    gh: {
+      id: 'file-thread-1', isResolved: false, isOutdated: false, viewerCanResolve: true, viewerCanUnresolve: false, subjectType: 'LINE',
+      comments: [{
+        id: 'fc-1', author: 'maria', body: 'Could `c` come from `configs/xg.toml` instead of a default here, so the notebook and the pipeline agree?',
+        createdAt: hoursAgo(3), url: 'https://github.com/', pending: false, viewerCanUpdate: false, viewerCanDelete: false,
+        reactions: [{ content: 'THUMBS_UP', count: 1, viewerHasReacted: true }],
+      }],
+    },
+  },
+] as unknown as FileThread[], () => '');
+
 mkdirSync('out/demo', { recursive: true });
 cpSync('dist', 'out/demo/dist', { recursive: true });
-writeFileSync('out/demo/data.js', `window.__MODEL__ = ${JSON.stringify(model)};\nwindow.__THREADS__ = ${JSON.stringify(threads)};\n`);
+writeFileSync('out/demo/data.js', [
+  `window.__MODEL__ = ${JSON.stringify(model)};`,
+  `window.__THREADS__ = ${JSON.stringify(threads)};`,
+  `window.__FILE_MODEL__ = ${JSON.stringify(fileModel)};`,
+  `window.__FILE_THREADS__ = ${JSON.stringify(fileThreads)};`,
+].join('\n') + '\n');
 writeFileSync('out/demo/index.html', `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -119,11 +168,12 @@ window.acquireVsCodeApi = () => ({
 <script src="data.js"></script>
 <script src="dist/webview.js"></script>
 <script>
-deliver({ type: 'model', model: window.__MODEL__ });
-deliver({ type: 'threads', threads: window.__THREADS__ });
-deliver({ type: 'state', state: { viewed: false, pending: 1, pendingReview: true } });
-// Scenes for the README screenshots: index.html#outputs (a changed plot), #comment, #submit.
+// Scenes for the README screenshots: index.html#outputs (a changed plot), #comment, #submit, and
+// #file (another file of the pull request).
 const scene = location.hash.slice(1);
+deliver({ type: 'model', model: scene === 'file' ? window.__FILE_MODEL__ : window.__MODEL__ });
+deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : window.__THREADS__ });
+deliver({ type: 'state', state: { viewed: false, pending: 1, pendingReview: true } });
 // Headless Firefox captures from the top of the page, so a scene hides the cells above its subject.
 const scrollTo = el => {
   const card = el && el.closest('main > *');

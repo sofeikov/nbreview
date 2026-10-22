@@ -30,13 +30,15 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 - **Resolve conversations.** Resolve a thread when it's dealt with, or unresolve it, from the review page or the text diff, synced with GitHub. The comment counter shows the unresolved threads, and resolved ones can be hidden.
 - **Edit, delete and react.** Edit or delete your own comments after they are posted, not only pending ones, and react to any comment with GitHub's 👍 👎 😄 🎉 😕 ❤️ 🚀 👀.
 - **Changes since your last review.** When the author pushes after you reviewed, files changed since your review are marked *new*. The review page's **Since your review** switch, or the history button next to a file, shows only what changed since then, not the whole pull request again.
-- **The whole pull request, not just notebooks.** Every other changed file opens in VS Code's diff editor with its own syntax highlighting, the review threads already on it, and the same comment widgets: line comments, single comments, replies, all in the same review.
+- **The whole pull request, not just notebooks.** Every other changed file (Python modules, configs, tests, the README) opens in the same review page with the same toolbar: highlighted code (Python, YAML, TOML, JSON, SQL, shell, Dockerfile, Makefile, JavaScript, TypeScript, HTML, CSS, R), Markdown rendered with the changed words marked, line and file comments, threads, reactions, **Viewed**, **Next file**, **Since your review** and **Submit review**. **Text diff** opens VS Code's own diff of the file, with the same comments.
 - **"Viewed" checkboxes and "Next file".** Mark files as viewed, synced with GitHub's own "Viewed" flags, and step to the next file you haven't viewed.
 - **Text diff too.** A line-by-line text view of the notebook in VS Code's diff editor, with VS Code's comment widgets, cell headers, outline, sticky scroll and folding. Both views share the same comments.
 
 ![Commenting on a line of a notebook code cell; the box shows where the comment will land on GitHub](images/comment.png)
 
 ![A changed plot in the Swipe view: the old curve left of the divider and the new one right, with a pending review comment on the new plot](images/outputs.png)
+
+![A Python module of the same pull request in the review page: highlighted split diff, a review thread on a line, and the same toolbar as for notebooks](images/file.png)
 
 ![Finish your review: a summary, Comment, Approve or Request changes](images/submit.png)
 
@@ -73,7 +75,7 @@ code --install-extension nbreview.vsix
    - **Created by me**: your own open pull requests.
 
    The badge on each pull request is the number of notebooks it changes, and its tooltip lists them. Click a pull request to review it. To find one that isn't listed, use the search button (or **Notebook Review: Open Pull Request…**): type to search by title, number, author or branch, or paste a number, `owner/repo#123` or a pull request URL.
-2. Click a notebook to open its visual review (the diff icon next to it opens the text diff instead), or any other file to open its diff. Every diff has **Mark as viewed**, **Next file** and **Submit review** buttons in its title bar (the visual review has them in its toolbar), so you can go through the whole pull request file by file. The **Review** panel shows the files grouped into folders; its **View as List** button (next to Collapse All) switches to a flat list, and **View as Tree** switches back.
+2. Click any changed file, a notebook or not, to open it in the review page (the diff icon next to it opens VS Code's text diff instead). The page's toolbar has **Viewed**, **Next file** and **Submit review**, so you can go through the whole pull request file by file; in a text diff they are the icons in the title bar. The **Review** panel shows the files grouped into folders; its **View as List** button (next to Collapse All) switches to a flat list, and **View as Tree** switches back.
 3. Comment with `+` or the comment buttons, then choose **Start a review** (`Ctrl+Enter`) to add it to your pending review on GitHub, or **Add single comment** to post it now. Your comments can be edited and deleted, pending or posted; deleting the last pending one discards the empty review. Replies to existing threads work the same way. **Resolve conversation** under a thread marks it resolved on GitHub, and the smiley button adds a reaction.
 4. Back on a pull request you have reviewed before, files changed since your review are marked *new* in the Review panel. Click the history button next to one, or **Since your review** in the review page, to see only those changes. Comments go on the new side; the old side shows your last review, which is not part of the pull request.
 5. Click **Submit review** (in the page, the panel title or the status bar), write an optional summary and choose **Comment**, **Approve** or **Request changes**. **Discard review** (in the same box, or **Notebook Review: Discard Pending Review…**) deletes the pending review and its comments.
@@ -94,7 +96,7 @@ Sign-in uses the GitHub CLI (`gh auth login`) when it is installed, otherwise VS
 
 | Setting | Default | Description |
 |---|---|---|
-| `nbreview.defaultView` | `visual` | What opens when you click a notebook: `visual` (rendered cells) or `text` (line-by-line text diff). |
+| `nbreview.defaultView` | `visual` | What opens when you click a changed file, and with **Next file**: `visual` (the review page) or `text` (VS Code's line-by-line text diff). |
 | `nbreview.hideNoise` | `false` | Fold cells whose only change is their outputs or whitespace in the review page. The page's **Hide noise** switch changes it and remembers the choice. |
 | `nbreview.fileLayout` | `tree` | How the Review panel shows the changed files by default: `tree` (grouped into folders) or `list` (flat). The title bar buttons switch it and remember the choice, as in Source Control. **Next file** follows the order shown. |
 | `nbreview.useGhCli` | `true` | Use the GitHub CLI's login when it is available, before asking for VS Code's GitHub sign-in. |
@@ -135,9 +137,14 @@ The core does not use the VS Code API and is in `src/core/`:
 
 - GitHub only: GitLab and Bitbucket are not supported.
 - Notebooks whose cells are stored as one string, not a list of lines, are commented on per cell, not per line.
-- Images with relative paths in Markdown cells do not show.
+- Images with relative paths in Markdown cells and files do not show.
+- Binary files and files over 2 MB are not shown in the review page; **Open text diff** shows them in VS Code's diff.
 
 ## Changelog
+
+### 0.12.0
+- **Every file in the review page**: Python modules, configs, tests and Markdown open in the same page as notebooks, with the same toolbar (Viewed, Next file, Since your review, Hide noise, Submit review), line comments and comments on the whole file, threads, reactions and resolving. Code is highlighted in the usual languages of a data-science repository, and Markdown files are rendered with the changed words marked. **Text diff** still opens VS Code's own diff. `nbreview.defaultView` applies to every file.
+- ↑ and ↓ in a file's page step from change to change.
 
 ### 0.11.0
 - **Compare changed plots**: Side by side, Swipe, Onion skin and Difference views for plots that changed, in the review page. Difference marks the changed pixels and says how much of the plot changed, ignoring faint re-rendering differences.
