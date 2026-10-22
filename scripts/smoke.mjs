@@ -10,10 +10,12 @@
 // error notification or extension host error from Notebook Review, or, in B, if the new version
 // isn't the one running after the restart.
 //
-//   npm run smoke -- [--from REV] [--vscode VERSION] [--keep]
+//   npm run smoke -- [--from REV] [--vscode VERSION] [--keep] [--visible]
 //
 // --from: the previous release to update from (default: the last commit with another version in
 // package.json). --vscode: the VS Code to download (default: stable). --keep: keep the profiles.
+// On Linux, VS Code runs on a virtual display (Xvfb) when it is installed, so no window opens on
+// your screen; --visible shows the windows instead.
 import { downloadAndUnzipVSCode, resolveCliPathFromVSCodeExecutablePath } from '@vscode/test-electron';
 import { execFileSync, execSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -26,6 +28,7 @@ const flag = (name, fallback) => {
   return i < 0 ? fallback : argv[i + 1];
 };
 const keep = argv.includes('--keep');
+const visible = argv.includes('--visible');
 const vscodeVersion = flag('--vscode', 'stable');
 
 // Commands run with no pull request open. They should do nothing, or work on their own.
@@ -65,6 +68,7 @@ const work = mkdtempSync(join(tmpdir(), 'nbreview-smoke-'));
 const log = (...a) => console.log('•', ...a);
 
 let failed = false;
+let display;
 try {
   log(`packaging ${version}`);
   execSync('npm run package', { stdio: 'ignore' });
@@ -76,6 +80,8 @@ try {
   log(`downloading VS Code ${vscodeVersion}`);
   const exe = await downloadAndUnzipVSCode({ version: vscodeVersion, cachePath: join(repo, '.vscode-test') });
   const cli = resolveCliPathFromVSCodeExecutablePath(exe);
+
+  display = visible ? undefined : await virtualDisplay();
 
   const results = [];
   results.push(await scenario('A. fresh install', { exe, cli, install: vsix, fresh: true, expect: version }));
@@ -93,6 +99,7 @@ try {
   }
   failed = results.some(r => r.failures.length);
 } finally {
+  display?.stop();
   if (keep) {
     log(`profiles kept in ${work}`);
   } else {
@@ -101,6 +108,39 @@ try {
 }
 console.log(failed ? '\nSMOKE FAILED' : '\nSMOKE OK');
 process.exit(failed ? 1 : 0);
+
+/**
+ * A virtual X display for VS Code, so no window opens on the screen or takes the focus. Without
+ * Xvfb (or off Linux), the windows open on the screen.
+ */
+async function virtualDisplay() {
+  if (process.platform !== 'linux') {
+    return undefined;
+  }
+  try {
+    execFileSync('sh', ['-c', 'command -v Xvfb'], { stdio: 'ignore' });
+  } catch {
+    log('Xvfb is not installed, so VS Code windows will open on your screen (install it with `sudo apt install xvfb`)');
+    return undefined;
+  }
+  // Xvfb picks a free display number and writes it to file descriptor 3.
+  const xvfb = spawn('Xvfb', ['-displayfd', '3', '-screen', '0', '1440x900x24', '-nolisten', 'tcp'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe'] });
+  const number = await new Promise((ok, fail) => {
+    let out = '';
+    xvfb.stdio[3].on('data', d => {
+      out += d;
+      if (out.includes('\n')) {
+        ok(out.trim());
+      }
+    });
+    xvfb.once('exit', code => fail(new Error(`Xvfb exited (${code})`)));
+    setTimeout(() => fail(new Error('Xvfb did not start')), 10000);
+  });
+  log(`VS Code runs on virtual display :${number}`);
+  const env = { ...process.env, DISPLAY: `:${number}`, XDG_SESSION_TYPE: 'x11' };
+  delete env.WAYLAND_DISPLAY;
+  return { env, stop: () => xvfb.kill() };
+}
 
 /** The last commit whose package.json has another version than the working tree's. */
 function previousRelease() {
@@ -156,8 +196,11 @@ async function scenario(name, { exe, cli, install, update, fresh, expect }) {
     `--extensionDevelopmentPath=${join(repo, 'scripts', 'smoke', 'runner')}`,
     `--remote-debugging-port=${port}`,
     '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust', '--no-sandbox', '--new-window',
+    // No keyring prompt: the throwaway profile keeps nothing secret.
+    '--password-store=basic',
+    ...(display ? ['--ozone-platform=x11'] : []),
     folder,
-  ], { stdio: 'ignore' });
+  ], { stdio: 'ignore', env: display?.env ?? process.env });
   const exited = new Promise(r => app.once('exit', r));
   const failures = [];
   const notes = [];
