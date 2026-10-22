@@ -17,6 +17,7 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 
 ## Features
 
+- **Pull requests to review, at a glance.** The sidebar lists the pull requests waiting for your review, the open pull requests that change notebooks, your own, and the one for the branch you're on, each with the number of notebooks it changes. Click one to start reviewing. No links to copy.
 - **Rendered notebook diff.** Markdown is rendered with LaTeX maths, code is syntax-highlighted with the changed lines marked, and changed outputs (plots, pandas tables, text, errors) are shown before and after. Unchanged cells and unchanged lines fold away, so you only read what changed.
 - **Comment on any cell.** Hover a line of code or a Markdown paragraph and click `+`, or drag the `+` over several lines. Every cell and output also has a comment button, so you can comment on a whole cell or on a plot.
 - **Comments land on GitHub.** A comment becomes a line comment on the notebook in the pull request when GitHub allows it, otherwise a file comment. Every comment quotes the cell it is about, so it reads well on github.com too.
@@ -62,7 +63,13 @@ code --install-extension nbreview.vsix
 
 ## Use
 
-1. Open the **Notebook Review** view in the activity bar and click **Open Pull Request**. Give a PR number in the current repository, `owner/repo#123`, or a pull request URL. If the current branch has an open pull request, it is suggested.
+1. Open the **Notebook Review** view in the activity bar. **Pull Requests** lists:
+   - **This branch**: the pull request of the branch you have checked out;
+   - **Waiting for my review**: pull requests where your review is requested;
+   - **Changing notebooks**: open pull requests in the repository that change `.ipynb` files;
+   - **Created by me**: your own open pull requests.
+
+   The badge on each pull request is the number of notebooks it changes, and its tooltip lists them. Click a pull request to review it. To find one that isn't listed, use the search button (or **Notebook Review: Open Pull Request…**): type to search by title, number, author or branch, or paste a number, `owner/repo#123` or a pull request URL.
 2. Click a notebook to open its visual review. The diff icon next to a notebook opens the text diff instead.
 3. Comment with `+` or the comment buttons. Pending comments can be edited and deleted.
 4. Click **Submit review** (in the page, the panel title or the status bar), write an optional summary and choose **Comment**, **Approve** or **Request changes**.
@@ -120,6 +127,11 @@ The core does not use the VS Code API and is in `src/core/`:
 - Images with relative paths in Markdown cells do not show.
 
 ## Changelog
+
+### 0.4.0
+- A **Pull Requests** list in the sidebar: this branch, waiting for my review, changing notebooks, created by me, with the number of changed notebooks on each.
+- **Open Pull Request…** is a searchable list of those pull requests; a number, `owner/repo#123` or URL still works.
+- The list refreshes when you switch branches, after you submit a review, and when you come back to VS Code.
 
 ### 0.3.0
 - One-step review submission: a "Finish your review" box in the review page, and a single picker in VS Code with the summary and Comment, Approve or Request changes.

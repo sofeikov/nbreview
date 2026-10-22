@@ -58,6 +58,32 @@ export interface NewThread {
 
 export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
 
+/** A pull request as listed in the Pull Requests view and the picker. */
+export interface PrSummary {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  isDraft: boolean;
+  headRef: string;
+  baseRef: string;
+  updatedAt: string;
+  additions: number;
+  deletions: number;
+  reviewDecision?: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED';
+  /** Changed notebook paths (among the first 100 changed files). */
+  notebooks: string[];
+  changedFiles: number;
+}
+
+const PR_FIELDS = `... on PullRequest {
+  number title url isDraft updatedAt headRefName baseRefName additions deletions reviewDecision
+  author { login } repository { nameWithOwner }
+  files(first: 100) { totalCount nodes { path } }
+}`;
+
 export class GitHub {
   constructor(private readonly token: string) {}
 
@@ -107,11 +133,6 @@ export class GitHub {
       baseSha: pr.base.sha,
       headSha: pr.head.sha,
     };
-  }
-
-  async findPrForBranch(owner: string, repo: string, branch: string): Promise<number | undefined> {
-    const prs = await this.json<any[]>(`/repos/${owner}/${repo}/pulls?state=open&head=${owner}:${encodeURIComponent(branch)}`);
-    return prs[0]?.number;
   }
 
   async listFiles(owner: string, repo: string, number: number): Promise<PrFile[]> {
@@ -190,6 +211,49 @@ export class GitHub {
       after = page.pageInfo.endCursor;
     }
     return threads.filter(t => t.comments.length > 0);
+  }
+
+  /**
+   * Runs several pull request searches in one request, e.g.
+   * `{ mine: 'repo:o/r is:pr is:open author:@me' }`, newest activity first.
+   */
+  async searchPullRequests<K extends string>(queries: Record<K, string>, perQuery = 30): Promise<Record<K, PrSummary[]>> {
+    const keys = Object.keys(queries) as K[];
+    if (!keys.length) {
+      return {} as Record<K, PrSummary[]>;
+    }
+    const vars = keys.map((_, i) => `$q${i}: String!`).join(', ');
+    const body = keys.map((_, i) => `s${i}: search(query: $q${i}, type: ISSUE, first: ${perQuery}) { nodes { ${PR_FIELDS} } }`).join('\n');
+    const data: any = await this.graphql(
+      `query(${vars}) { ${body} }`,
+      Object.fromEntries(keys.map((k, i) => [`q${i}`, `${queries[k]} sort:updated-desc`])),
+    );
+    const out = {} as Record<K, PrSummary[]>;
+    keys.forEach((k, i) => {
+      out[k] = (data[`s${i}`]?.nodes ?? [])
+        .filter((n: any) => n && n.number)
+        .map((n: any): PrSummary => {
+          const [owner, repo] = String(n.repository.nameWithOwner).split('/');
+          return {
+            owner,
+            repo,
+            number: n.number,
+            title: n.title,
+            url: n.url,
+            author: n.author?.login ?? 'ghost',
+            isDraft: n.isDraft,
+            headRef: n.headRefName,
+            baseRef: n.baseRefName,
+            updatedAt: n.updatedAt,
+            additions: n.additions,
+            deletions: n.deletions,
+            reviewDecision: n.reviewDecision ?? undefined,
+            notebooks: (n.files?.nodes ?? []).map((f: any) => f.path).filter((p: string) => p.endsWith('.ipynb')),
+            changedFiles: n.files?.totalCount ?? 0,
+          };
+        });
+    });
+    return out;
   }
 
   /** GitHub's per-file "Viewed" checkboxes for the signed-in user. */

@@ -6,6 +6,7 @@ import { ReviewState } from './state.ts';
 import { TextReview } from './textReview.ts';
 import { VisualReview } from './visualReview.ts';
 import { FilesTree, nodePath, type Node } from './tree.ts';
+import { PrBadges, PrList, pickPullRequest, type RepoRef } from './prList.ts';
 
 let ctx: vscode.ExtensionContext;
 let log: vscode.OutputChannel;
@@ -14,6 +15,7 @@ let text: TextReview;
 let visual: VisualReview;
 let treeView: vscode.TreeView<Node>;
 let status: vscode.StatusBarItem;
+let prList: PrList;
 
 export function activate(context: vscode.ExtensionContext): void {
   ctx = context;
@@ -27,8 +29,32 @@ export function activate(context: vscode.ExtensionContext): void {
     manageCheckboxStateManually: true,
   });
   status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
+  prList = new PrList({
+    github: async interactive => {
+      const token = await getToken(interactive);
+      return token ? new GitHub(token) : undefined;
+    },
+    currentRepo,
+    activeKey: () => (state.session ? `${state.session.pr.owner}/${state.session.pr.repo}#${state.session.pr.number}` : undefined),
+  });
+  const prsView = vscode.window.createTreeView('nbreview.prs', { treeDataProvider: prList });
+  const refreshIfStale = () => {
+    if (prsView.visible && (!prList.sections || prList.isStale())) {
+      void prList.refresh();
+    }
+  };
 
   context.subscriptions.push(
+    prList,
+    prsView,
+    vscode.window.registerFileDecorationProvider(new PrBadges()),
+    prsView.onDidChangeVisibility(refreshIfStale),
+    vscode.window.onDidChangeWindowState(e => e.focused && refreshIfStale()),
+    state.onDidChange(e => e.session && prList.redraw()),
+    vscode.commands.registerCommand('nbreview.refreshPrs', () => prList.refresh(true)),
+    vscode.commands.registerCommand('nbreview.signIn', () => prList.refresh(true)),
+    vscode.commands.registerCommand('nbreview.openPrOnGitHub', (node?: { pr?: { url: string } }) =>
+      node?.pr && vscode.env.openExternal(vscode.Uri.parse(node.pr.url))),
     log,
     text,
     visual,
@@ -76,6 +102,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  refreshIfStale();
+  watchBranch(context);
+
   // Pick up where the reviewer left off after a reload.
   const active = ctx.globalState.get<string>('activePr');
   if (active) {
@@ -97,6 +126,33 @@ function pathFromArg(arg?: Node | vscode.Uri | string): string | undefined {
   }
   const uri = vscode.window.activeTextEditor?.document.uri;
   return uri && text.docFor(uri)?.entry.path;
+}
+
+/** Refreshes the pull request list when the checked-out branch changes ("This branch" follows it). */
+function watchBranch(context: vscode.ExtensionContext): void {
+  const git = vscode.extensions.getExtension('vscode.git');
+  const hook = (api: any) => {
+    const branches = new Map<unknown, string | undefined>();
+    const watch = (repo: any) => {
+      branches.set(repo, repo.state?.HEAD?.name);
+      context.subscriptions.push(repo.state.onDidChange(() => {
+        const name = repo.state?.HEAD?.name;
+        if (name !== branches.get(repo)) {
+          branches.set(repo, name);
+          void prList.refresh();
+        }
+      }));
+    };
+    api.repositories?.forEach(watch);
+    if (api.onDidOpenRepository) {
+      context.subscriptions.push(api.onDidOpenRepository(watch));
+    }
+  };
+  if (!git) {
+    return;
+  }
+  const activate = git.isActive ? Promise.resolve(git.exports) : git.activate();
+  activate.then(exports => hook(exports.getAPI(1)), () => undefined);
 }
 
 function showError(e: unknown): void {
@@ -128,7 +184,13 @@ function run(cmd: string, args: string[], cwd?: string): Promise<string> {
   );
 }
 
-async function getToken(): Promise<string> {
+/**
+ * A GitHub token: the GitHub CLI's login, then VS Code's GitHub sign-in. Without `interactive`
+ * nobody is asked to sign in, and undefined means "not signed in".
+ */
+async function getToken(interactive: true): Promise<string>;
+async function getToken(interactive: boolean): Promise<string | undefined>;
+async function getToken(interactive: boolean): Promise<string | undefined> {
   if (vscode.workspace.getConfiguration('nbreview').get<boolean>('useGhCli', true)) {
     try {
       const token = await run('gh', ['auth', 'token']);
@@ -139,11 +201,11 @@ async function getToken(): Promise<string> {
       // gh not installed or not signed in: fall back to VS Code's GitHub sign-in.
     }
   }
-  const auth = await vscode.authentication.getSession('github', ['repo'], { createIfNone: true });
-  return auth.accessToken;
+  const auth = await vscode.authentication.getSession('github', ['repo'], interactive ? { createIfNone: true } : { silent: true });
+  return auth?.accessToken;
 }
 
-async function currentRepo(): Promise<{ owner: string; repo: string; branch?: string } | undefined> {
+async function currentRepo(): Promise<RepoRef | undefined> {
   const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!folder) {
     return undefined;
@@ -178,37 +240,30 @@ function parsePrInput(input: string, fallback?: { owner: string; repo: string })
 }
 
 async function openPr(arg?: string, focus = true): Promise<void> {
-  const gh = new GitHub(await getToken());
-  const repo = await currentRepo();
   let input = arg;
   if (!input) {
-    let suggestion = ctx.globalState.get<string>('lastPr') ?? '';
-    if (repo?.branch) {
-      const n = await gh.findPrForBranch(repo.owner, repo.repo, repo.branch).catch(() => undefined);
-      if (n) {
-        suggestion = `${repo.owner}/${repo.repo}#${n}`;
-      }
-    }
-    input = await vscode.window.showInputBox({
-      title: 'Review notebooks in a pull request',
-      prompt: 'PR URL, owner/repo#123, or a PR number in the current repository',
-      value: suggestion,
-      ignoreFocusOut: true,
+    input = await pickPullRequest(prList, text => {
+      const ref = parsePrInput(text, prList.repo);
+      return ref && `${ref.owner}/${ref.repo}#${ref.number}`;
     });
   }
   if (!input) {
     return;
   }
-  const target = parsePrInput(input, repo);
+  const target = parsePrInput(input, prList.repo ?? (await currentRepo()));
   if (!target) {
     void vscode.window.showErrorMessage(`Couldn't read a pull request from "${input}".`);
     return;
   }
+  const gh = new GitHub(await getToken(true));
   let session: ReviewSession | undefined;
-  await vscode.window.withProgress({ location: { viewId: 'nbreview.files' }, title: 'Loading pull request' }, () =>
-    vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: 'Notebook review' }, async progress => {
-      session = await ReviewSession.load(gh, target.owner, target.repo, target.number, msg => progress.report({ message: msg }));
-    }),
+  const title = `Loading #${target.number}`;
+  await vscode.window.withProgress({ location: { viewId: 'nbreview.prs' }, title }, () =>
+    vscode.window.withProgress({ location: { viewId: 'nbreview.files' }, title }, () =>
+      vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: 'Notebook review' }, async progress => {
+        session = await ReviewSession.load(gh, target.owner, target.repo, target.number, msg => progress.report({ message: msg }));
+      }),
+    ),
   );
   const key = `${target.owner}/${target.repo}#${target.number}`;
   await ctx.globalState.update('lastPr', key);
@@ -324,5 +379,6 @@ async function submit({ event, body }: SubmitRequest): Promise<string> {
     throw new Error(message);
   } finally {
     await state.reloadThreads();
+    void prList.refresh();
   }
 }

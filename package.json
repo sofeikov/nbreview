@@ -2,7 +2,7 @@
   "name": "nbreview",
   "displayName": "Notebook Review for GitHub Pull Requests (Jupyter .ipynb)",
   "description": "Review Jupyter notebooks (.ipynb) in GitHub pull requests inside VS Code: rendered cell-by-cell diffs of code, Markdown, LaTeX and outputs, with line comments on any cell that post to GitHub as a normal PR review.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "KonstantinSofeikov",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -65,8 +65,13 @@
     "views": {
       "nbreview": [
         {
+          "id": "nbreview.prs",
+          "name": "Pull Requests",
+          "icon": "media/icon.svg"
+        },
+        {
           "id": "nbreview.files",
-          "name": "Pull Request",
+          "name": "Review",
           "icon": "media/icon.svg"
         }
       ]
@@ -74,7 +79,7 @@
     "viewsWelcome": [
       {
         "view": "nbreview.files",
-        "contents": "Review the Jupyter notebooks in a GitHub pull request cell by cell, and leave comments on code, Markdown and outputs that show up on GitHub.\n[Open Pull Request](command:nbreview.openPr)\nUses your `gh` CLI login, or VS Code's GitHub sign-in."
+        "contents": "Pick a pull request above to review its notebooks cell by cell: rendered Markdown and outputs, code diffs, and comments that post to GitHub.\n[Open Pull Request…](command:nbreview.openPr)"
       }
     ],
     "commands": [
@@ -82,7 +87,7 @@
         "command": "nbreview.openPr",
         "title": "Open Pull Request…",
         "category": "Notebook Review",
-        "icon": "$(git-pull-request)"
+        "icon": "$(search)"
       },
       {
         "command": "nbreview.refresh",
@@ -160,10 +165,37 @@
         "title": "Delete Pending Comment",
         "category": "Notebook Review",
         "icon": "$(trash)"
+      },
+      {
+        "command": "nbreview.refreshPrs",
+        "title": "Refresh Pull Requests",
+        "category": "Notebook Review",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nbreview.signIn",
+        "title": "Sign in to GitHub",
+        "category": "Notebook Review"
+      },
+      {
+        "command": "nbreview.openPrOnGitHub",
+        "title": "Open on GitHub",
+        "category": "Notebook Review",
+        "icon": "$(link-external)"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "nbreview.openPr",
+          "when": "view == nbreview.prs",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nbreview.refreshPrs",
+          "when": "view == nbreview.prs",
+          "group": "navigation@2"
+        },
         {
           "command": "nbreview.submitReview",
           "when": "view == nbreview.files && nbreview.active",
@@ -175,14 +207,9 @@
           "group": "navigation@2"
         },
         {
-          "command": "nbreview.openPr",
-          "when": "view == nbreview.files",
-          "group": "navigation@3"
-        },
-        {
           "command": "nbreview.openOnGitHub",
           "when": "view == nbreview.files && nbreview.active",
-          "group": "more@1"
+          "group": "navigation@3"
         },
         {
           "command": "nbreview.close",
@@ -191,6 +218,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "nbreview.openPrOnGitHub",
+          "when": "view == nbreview.prs && viewItem == pr",
+          "group": "inline@1"
+        },
         {
           "command": "nbreview.openVisual",
           "when": "view == nbreview.files && viewItem == notebook",
@@ -275,6 +307,10 @@
         },
         {
           "command": "nbreview.openNotebookDiff",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.openPrOnGitHub",
           "when": "false"
         }
       ]
