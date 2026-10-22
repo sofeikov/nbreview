@@ -110,6 +110,7 @@ export type WebviewMessage =
   | { type: 'editDraft'; key: string; text: string }
   | { type: 'deleteDraft'; key: string }
   | { type: 'discardReview' }
+  | { type: 'nextFile' }
   | { type: 'plan'; anchor: Anchor; requestId: number }
   | { type: 'submitReview'; event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'; body: string }
   | { type: 'setViewed'; viewed: boolean }

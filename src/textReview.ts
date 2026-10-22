@@ -3,10 +3,10 @@
 import * as vscode from 'vscode';
 import { mkdir, writeFile } from 'node:fs/promises';
 import type { GhThread } from './github.ts';
-import type { NotebookEntry, PlacedThread } from './session.ts';
+import type { NotebookEntry } from './session.ts';
 import { parseBody, type Side } from './core/anchor.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
-import type { ReviewState } from './state.ts';
+import type { NewComment, NewFileComment, ReviewState } from './state.ts';
 import { basename } from './paths.ts';
 
 export const SCHEME = 'nbreview';
@@ -22,13 +22,17 @@ class NbComment implements vscode.Comment {
     public contextValue?: string,
     public draftKey?: string,
     public parent?: vscode.CommentThread,
+    /** The saved text of a pending comment, to go back to when an edit is cancelled. */
+    public savedText?: string,
   ) {}
 }
 
 export class TextReview implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly controller: vscode.CommentController;
-  private readonly ghThreads = new Map<string, vscode.CommentThread>(); // GitHub thread id → UI thread
+  /** The comment threads shown, with the GitHub thread each one is. */
+  private shown: vscode.CommentThread[] = [];
+  private readonly ghIds = new WeakMap<vscode.CommentThread, string>();
   private readonly contentChanged = new vscode.EventEmitter<vscode.Uri>();
   private readonly headerDeco: vscode.TextEditorDecorationType;
   private readonly outputDeco: vscode.TextEditorDecorationType;
@@ -39,12 +43,12 @@ export class TextReview implements vscode.Disposable {
   ) {
     this.controller = vscode.comments.createCommentController('nbreview', 'Notebook Review');
     this.controller.options = {
-      prompt: 'Comment on this notebook line',
+      prompt: 'Comment on this line',
       placeHolder: 'Review comment (Markdown; ```suggestion blocks become GitHub suggestions)',
     };
     this.controller.commentingRangeProvider = {
       provideCommentingRanges: document => {
-        if (!this.docFor(document.uri) || document.lineCount === 0) {
+        if ((!this.docFor(document.uri) && !this.rawFor(document.uri)) || document.lineCount === 0) {
           return [];
         }
         return [new vscode.Range(0, 0, document.lineCount - 1, 0)];
@@ -135,46 +139,72 @@ export class TextReview implements vscode.Disposable {
     );
   }
 
+  /** A changed ordinary file at one side of the pull request, as opened in its diff. */
+  rawUri(path: string, side: Side): vscode.Uri {
+    return vscode.Uri.from({ scheme: RAW_SCHEME, path: `/${path}`, query: `side=${side}&pr=${this.state.prKey()}` });
+  }
+
+  rawFor(uri: vscode.Uri): { path: string; side: Side } | undefined {
+    if (uri.scheme !== RAW_SCHEME || !this.state.session) {
+      return undefined;
+    }
+    const path = uri.path.slice(1);
+    if (!this.state.session.others.some(o => o.file.filename === path)) {
+      return undefined;
+    }
+    return { path, side: new URLSearchParams(uri.query).get('side') === 'LEFT' ? 'LEFT' : 'RIGHT' };
+  }
+
   async openFileDiff(path: string): Promise<void> {
     const s = this.state.session;
     if (!s) {
       return;
     }
-    const raw = (side: Side) => vscode.Uri.from({ scheme: RAW_SCHEME, path: `/${path}`, query: `side=${side}&pr=${this.state.prKey()}` });
-    await vscode.commands.executeCommand('vscode.diff', raw('LEFT'), raw('RIGHT'), `${basename(path)} (#${s.pr.number})`, { preview: true });
+    await vscode.commands.executeCommand('vscode.diff', this.rawUri(path, 'LEFT'), this.rawUri(path, 'RIGHT'), `${basename(path)} (#${s.pr.number})`, {
+      preview: false,
+    });
   }
 
   // --- Comment threads ------------------------------------------------------------------------
 
   private renderThreads(): void {
-    for (const t of this.ghThreads.values()) {
+    for (const t of this.shown) {
       t.dispose();
     }
-    this.ghThreads.clear();
+    this.shown = [];
     const s = this.state.session;
     if (!s) {
       return;
     }
     for (const p of s.placed) {
-      const range = new vscode.Range(p.startDocLine ?? p.docLine, 0, p.docLine, 0);
-      const thread = this.controller.createCommentThread(this.reviewUri(p.nbPath, p.side), range, []);
-      thread.comments = p.gh.comments.map(c => (c.pending ? this.draftComment(c, thread) : ghComment(c)));
-      // A thread of only pending comments is the reviewer's own, not yet on the pull request.
-      const ownPending = p.gh.comments.every(c => c.pending);
-      thread.label = ownPending ? this.state.describe(p) : threadLabel(p);
-      thread.contextValue = ownPending ? 'draft' : 'github';
-      thread.canReply = true;
-      thread.state = p.gh.isResolved ? vscode.CommentThreadState.Resolved : vscode.CommentThreadState.Unresolved;
-      thread.collapsibleState = !ownPending && (p.gh.isResolved || p.gh.isOutdated)
-        ? vscode.CommentThreadCollapsibleState.Collapsed
-        : vscode.CommentThreadCollapsibleState.Expanded;
-      this.ghThreads.set(p.gh.id, thread);
+      this.showThread(p.gh, this.reviewUri(p.nbPath, p.side), p.startDocLine ?? p.docLine, p.docLine, p);
     }
+    for (const list of s.fileThreads.values()) {
+      for (const f of list) {
+        this.showThread(f.gh, this.rawUri(f.path, f.side), f.startDocLine ?? f.docLine, f.docLine, f);
+      }
+    }
+  }
+
+  private showThread(gh: GhThread, uri: vscode.Uri, start: number, end: number, where: { note?: string; movedFrom?: string }): void {
+    const thread = this.controller.createCommentThread(uri, new vscode.Range(start, 0, end, 0), []);
+    thread.comments = gh.comments.map(c => (c.pending ? this.draftComment(c, thread) : ghComment(c)));
+    // A thread of only pending comments is the reviewer's own, not yet on the pull request.
+    const ownPending = gh.comments.every(c => c.pending);
+    thread.label = ownPending ? this.state.describe(gh) : threadLabel(gh, where);
+    thread.contextValue = ownPending ? 'draft' : 'github';
+    thread.canReply = true;
+    thread.state = gh.isResolved ? vscode.CommentThreadState.Resolved : vscode.CommentThreadState.Unresolved;
+    thread.collapsibleState = !ownPending && (gh.isResolved || gh.isOutdated)
+      ? vscode.CommentThreadCollapsibleState.Collapsed
+      : vscode.CommentThreadCollapsibleState.Expanded;
+    this.shown.push(thread);
+    this.ghIds.set(thread, gh.id);
   }
 
   private draftComment(c: GhThread['comments'][number], parent: vscode.CommentThread): NbComment {
     const { text } = parseBody(c.body);
-    return new NbComment(new vscode.MarkdownString(text), { name: 'You' }, new Date(c.createdAt), 'Pending', 'draft', c.id, parent);
+    return new NbComment(new vscode.MarkdownString(text), { name: 'You' }, new Date(c.createdAt), 'Pending', 'draft', c.id, parent, text);
   }
 
   /** Runs a GitHub change with progress in the status bar; failures are shown, and reported as false. */
@@ -188,13 +218,20 @@ export class TextReview implements vscode.Disposable {
     }
   }
 
-  private commentFromReply(reply: vscode.CommentReply) {
-    const target = this.docFor(reply.thread.uri);
-    if (!target || !reply.text.trim()) {
+  private commentFromReply(reply: vscode.CommentReply): NewComment | NewFileComment | undefined {
+    if (!reply.text.trim()) {
       return undefined;
     }
-    const replyTo = [...this.ghThreads.entries()].find(([, t]) => t === reply.thread)?.[0];
+    const replyTo = this.ghIds.get(reply.thread);
     const range = reply.thread.range ?? lineRange(0);
+    const raw = this.rawFor(reply.thread.uri);
+    if (raw) {
+      return { ...raw, startLine: range.start.line + 1, endLine: range.end.line + 1, text: reply.text, replyTo };
+    }
+    const target = this.docFor(reply.thread.uri);
+    if (!target) {
+      return undefined;
+    }
     return {
       nbPath: target.entry.path,
       side: target.side,
@@ -228,8 +265,7 @@ export class TextReview implements vscode.Disposable {
       return;
     }
     if (!editing) {
-      const d = this.state.drafts().find(x => x.key === comment.draftKey);
-      comment.body = new vscode.MarkdownString(d?.text ?? '');
+      comment.body = new vscode.MarkdownString(comment.savedText ?? '');
     }
     comment.mode = editing ? vscode.CommentMode.Editing : vscode.CommentMode.Preview;
     thread.comments = [...thread.comments];
@@ -288,13 +324,13 @@ function ghComment(c: GhThread['comments'][number]): NbComment {
   );
 }
 
-function threadLabel(p: PlacedThread): string {
-  const bits = [p.gh.isResolved ? 'Resolved' : 'GitHub'];
-  if (p.movedFrom) {
-    bits.push(`from ${p.movedFrom}`);
+function threadLabel(gh: GhThread, where: { note?: string; movedFrom?: string }): string {
+  const bits = [gh.isResolved ? 'Resolved' : 'GitHub'];
+  if (where.movedFrom) {
+    bits.push(`from ${where.movedFrom}`);
   }
-  if (p.note) {
-    bits.push(p.note);
+  if (where.note) {
+    bits.push(where.note);
   }
   return bits.join(' · ');
 }

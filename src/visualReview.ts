@@ -158,8 +158,11 @@ export class VisualReview implements vscode.Disposable {
         await this.text.openDiff(nbPath, line === undefined ? undefined : { side: 'RIGHT', docLine: line });
         return;
       }
+      case 'nextFile':
+        await vscode.commands.executeCommand('nbreview.nextFile', nbPath);
+        return;
       case 'openExternal':
-        if (/^https:\/\//.test(msg.url)) {
+        if (/^https?:\/\//.test(msg.url)) {
           await vscode.env.openExternal(vscode.Uri.parse(msg.url));
         }
         return;
@@ -179,7 +182,7 @@ export class VisualReview implements vscode.Disposable {
       this.post(panel, { type: 'model', model: vm.buildViewModel(entry, { number: s.pr.number, title: s.pr.title, url: s.pr.url }) });
     }
     if (what.threads) {
-      const threads = s && entry ? vm.buildThreads(entry, s.threadsFor(nbPath), p => this.state.describe(p)) : [];
+      const threads = s && entry ? vm.buildThreads(entry, s.threadsFor(nbPath), p => this.state.describe(p.gh)) : [];
       this.post(panel, { type: 'threads', threads });
     }
     this.post(panel, this.stateMessage(nbPath));

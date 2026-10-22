@@ -154,3 +154,27 @@ test('editing a comment keeps its cell header and marker', () => {
   assert.deepEqual(parseBody(edited).marker, parseBody(plan.body).marker);
   assert.equal(replaceBodyText('a plain reply', 'changed'), 'changed');
 });
+
+import { locateFileThread, planFileComment } from '../src/core/fileComments.ts';
+
+test('comments on ordinary files: line comments in the diff, file comments outside it', () => {
+  const commentable = { left: new Set([3, 4]), right: new Set([10, 11, 12]) };
+  const line = planFileComment({ path: 'src/a.py', side: 'RIGHT', startLine: 11, endLine: 11, commentable, text: 'x' });
+  assert.deepEqual([line.subjectType, line.line, line.startLine, line.body], ['LINE', 11, undefined, 'x']);
+  const range = planFileComment({ path: 'src/a.py', side: 'RIGHT', startLine: 10, endLine: 12, commentable, text: 'x' });
+  assert.deepEqual([range.line, range.startLine], [12, 10]);
+  const partly = planFileComment({ path: 'src/a.py', side: 'RIGHT', startLine: 8, endLine: 11, commentable, text: 'x' });
+  assert.deepEqual([partly.subjectType, partly.line, partly.startLine], ['LINE', 11, undefined]);
+  const outside = planFileComment({ path: 'src/a.py', side: 'RIGHT', startLine: 40, endLine: 40, commentable, text: 'x' });
+  assert.equal(outside.subjectType, 'FILE');
+  const old = planFileComment({ path: 'src/a.py', side: 'LEFT', startLine: 4, endLine: 4, commentable, text: 'x' });
+  assert.deepEqual([old.subjectType, old.side, old.line], ['LINE', 'LEFT', 4]);
+});
+
+test('threads on ordinary files go on their own line', () => {
+  const base = { startLine: null, originalLine: 7, diffSide: 'RIGHT' as const, subjectType: 'LINE', isOutdated: false };
+  assert.deepEqual(locateFileThread({ ...base, line: 7 }), { side: 'RIGHT', docLine: 6 });
+  assert.deepEqual(locateFileThread({ ...base, line: 9, startLine: 7 }), { side: 'RIGHT', docLine: 8, startDocLine: 6 });
+  assert.deepEqual(locateFileThread({ ...base, line: null, isOutdated: true }), { side: 'RIGHT', docLine: 6, note: 'outdated' });
+  assert.deepEqual(locateFileThread({ ...base, line: null, subjectType: 'FILE' }), { side: 'RIGHT', docLine: 0, note: 'file comment' });
+});

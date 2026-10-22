@@ -6,8 +6,10 @@
 // computer: they survive restarts and other machines, and github.com can add to or submit the
 // same review.
 import * as vscode from 'vscode';
-import type { ReviewSession, NotebookEntry, PlacedThread } from './session.ts';
+import type { ReviewSession, NotebookEntry } from './session.ts';
 import { parseBody, planComment, replaceBodyText, type GhThreadTarget, type Side } from './core/anchor.ts';
+import { planFileComment } from './core/fileComments.ts';
+import type { GhThread } from './github.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
 
 /** A comment in the pending review, where it sits in the review documents. */
@@ -24,8 +26,23 @@ export interface Draft {
   replyTo?: string;
 }
 
-/** What a new pending comment or single comment is about. */
+/** A new comment on a notebook. */
 export type NewComment = Omit<Draft, 'key'>;
+
+/** A new comment on an ordinary file, on 1-based lines of one side of its diff. */
+export interface NewFileComment {
+  path: string;
+  side: Side;
+  startLine: number;
+  endLine: number;
+  text: string;
+  /** Thread id when this is a reply. */
+  replyTo?: string;
+}
+
+function isFileComment(c: NewComment | NewFileComment): c is NewFileComment {
+  return 'path' in c;
+}
 
 export interface ChangeEvent {
   session?: boolean;
@@ -100,30 +117,31 @@ export class ReviewState {
   }
 
   /** Adds a comment or reply to the pending review on GitHub, starting the review if needed. */
-  async addDraft(d: NewComment): Promise<void> {
+  async addDraft(d: NewComment | NewFileComment): Promise<void> {
     const s = this.requireSession();
     const reviewId = s.pendingReviewId ?? (s.pendingReviewId = await s.gh.startPendingReview(s.pr));
     if (d.replyTo) {
       await s.gh.addPendingReply(reviewId, d.replyTo, d.text);
     } else {
-      const plan = this.plan(d);
-      if (!plan) {
-        throw new Error('That notebook is no longer in the pull request.');
-      }
-      await s.gh.addPendingThread(reviewId, plan);
+      await s.gh.addPendingThread(reviewId, this.target(d));
     }
     await this.reloadThreads();
   }
 
   async updateDraft(key: string, text: string): Promise<void> {
     const s = this.requireSession();
-    const d = this.drafts().find(x => x.key === key);
-    const comment = s.placed.flatMap(p => p.gh.comments).find(c => c.id === key);
-    if (!d || !comment) {
+    const thread = s.allThreads().find(t => t.comments.some(c => c.id === key));
+    const comment = thread?.comments.find(c => c.id === key);
+    if (!thread || !comment) {
       throw new Error('That pending comment is no longer on GitHub.');
     }
-    // The first comment of a thread carries the cell header; suggestions are re-encoded again.
-    const body = d.replyTo ? text : this.plan({ ...d, text })?.body ?? replaceBodyText(comment.body, text);
+    // The first comment of a notebook thread carries the cell header; suggestions are re-encoded.
+    let body = text;
+    const placed = s.placed.find(p => p.gh.id === thread.id);
+    if (placed && thread.comments[0] === comment) {
+      const d = this.drafts().find(x => x.key === key);
+      body = (d && this.plan({ ...d, text })?.body) ?? replaceBodyText(comment.body, text);
+    }
     await s.gh.updatePendingComment(key, body);
     await this.reloadThreads();
   }
@@ -164,35 +182,43 @@ export class ReviewState {
     });
   }
 
+  /** Where a new comment lands on GitHub, with its body. */
+  private target(d: NewComment | NewFileComment): GhThreadTarget {
+    const s = this.requireSession();
+    if (isFileComment(d)) {
+      return planFileComment({ ...d, commentable: s.commentable(d.path) });
+    }
+    const plan = this.plan(d);
+    if (!plan) {
+      throw new Error('That notebook is no longer in the pull request.');
+    }
+    return plan;
+  }
+
   /**
    * Posts a comment or a reply to GitHub straight away, outside any review, then reloads the
    * threads so it shows like any other GitHub comment.
    */
-  async postSingle(d: NewComment): Promise<void> {
+  async postSingle(d: NewComment | NewFileComment): Promise<void> {
     const s = this.requireSession();
     if (s.pendingReviewId) {
       throw new Error('You have a pending review. Submit or discard it to post single comments, as on GitHub.');
     }
     if (d.replyTo) {
-      const thread = s.placed.find(p => p.gh.id === d.replyTo)?.gh;
+      const thread = s.allThreads().find(t => t.id === d.replyTo);
       const first = thread?.comments.find(c => c.databaseId !== undefined && !c.pending);
       if (!first?.databaseId) {
         throw new Error('That thread is no longer on the pull request.');
       }
       await s.gh.postSingleReply(s.pr, first.databaseId, d.text);
     } else {
-      const plan = this.plan(d);
-      if (!plan) {
-        throw new Error('That notebook is no longer in the pull request.');
-      }
-      await s.gh.postSingleComment(s.pr, plan);
+      await s.gh.postSingleComment(s.pr, this.target(d));
     }
     await this.reloadThreads();
   }
 
   /** The label of a thread made of pending comments: where it is on GitHub. */
-  describe(p: PlacedThread): string {
-    const t = p.gh;
+  describe(t: GhThread): string {
     if (t.comments.some(c => !c.pending)) {
       return 'Pending reply';
     }
@@ -231,7 +257,7 @@ export class ReviewState {
       return;
     }
     const all = new Set(paths);
-    if (vscode.workspace.getConfiguration('nbreview').get<boolean>('markGeneratedFilesViewed', true)) {
+    if (vscode.workspace.getConfiguration('nbreview').get<boolean>('markGeneratedFilesViewed', false)) {
       for (const p of paths) {
         for (const generated of s.generatedFrom(p)) {
           all.add(generated);

@@ -5,7 +5,7 @@ import { ReviewSession } from './session.ts';
 import { ReviewState } from './state.ts';
 import { TextReview } from './textReview.ts';
 import { VisualReview } from './visualReview.ts';
-import { FilesTree, nodePath, type Node } from './tree.ts';
+import { FilesTree, nodePath, reviewOrder, type Node } from './tree.ts';
 import { PrBadges, PrList, pickPullRequest, type RepoRef } from './prList.ts';
 
 let ctx: vscode.ExtensionContext;
@@ -97,6 +97,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nbreview.openOnGitHub', () => state.session && vscode.env.openExternal(vscode.Uri.parse(state.session.pr.url))),
     vscode.commands.registerCommand('nbreview.submitReview', (request?: SubmitRequest) =>
       request?.event ? submit(request) : submitInteractive().catch(showError)),
+    vscode.commands.registerCommand('nbreview.markViewed', (arg?: vscode.Uri | string) => setActiveViewed(arg, true)),
+    vscode.commands.registerCommand('nbreview.markNotViewed', (arg?: vscode.Uri | string) => setActiveViewed(arg, false)),
+    vscode.commands.registerCommand('nbreview.nextFile', (arg?: vscode.Uri | string) => nextFile(arg).catch(showError)),
+    vscode.window.onDidChangeActiveTextEditor(updateActiveContext),
+    state.onDidChange(updateActiveContext),
     vscode.commands.registerCommand('nbreview.discardReview', async () => {
       const n = state.pendingCount();
       if (!state.hasPendingReview()) {
@@ -170,6 +175,43 @@ function watchBranch(context: vscode.ExtensionContext): void {
   }
   const activate = git.isActive ? Promise.resolve(git.exports) : git.activate();
   activate.then(exports => hook(exports.getAPI(1)), () => undefined);
+}
+
+/** The changed file shown in an editor (a notebook's text diff or another file's diff), by path. */
+function reviewPath(arg?: vscode.Uri | string): string | undefined {
+  if (typeof arg === 'string') {
+    return arg;
+  }
+  const uri = arg ?? vscode.window.activeTextEditor?.document.uri;
+  return uri && (text.docFor(uri)?.entry.path ?? text.rawFor(uri)?.path);
+}
+
+/** Lets the editor title show "Mark as viewed" or "Viewed" for the file in the active diff. */
+function updateActiveContext(): void {
+  const path = reviewPath();
+  void vscode.commands.executeCommand('setContext', 'nbreview.activeViewed', !!path && state.isViewed(path));
+}
+
+function setActiveViewed(arg: vscode.Uri | string | undefined, viewed: boolean): Promise<void> | undefined {
+  const path = reviewPath(arg);
+  return path ? state.setViewed([path], viewed).catch(showError) : undefined;
+}
+
+/** Opens the next file not marked viewed, in the panel's order, after the given one. */
+async function nextFile(arg?: vscode.Uri | string): Promise<void> {
+  const order = reviewOrder(state);
+  const current = reviewPath(arg);
+  const from = current ? order.indexOf(current) : -1;
+  const rest = [...order.slice(from + 1), ...order.slice(0, from + 1)].filter(p => p !== current);
+  const next = rest.find(p => !state.isViewed(p));
+  if (!next) {
+    const choice = await vscode.window.showInformationMessage('Every file is marked viewed.', 'Submit review');
+    if (choice) {
+      await vscode.commands.executeCommand('nbreview.submitReview');
+    }
+    return;
+  }
+  await (state.session?.notebooks.has(next) ? vscode.commands.executeCommand('nbreview.openNotebook', next) : text.openFileDiff(next));
 }
 
 function showError(e: unknown): void {

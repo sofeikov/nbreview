@@ -181,7 +181,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
       icon('notebook'),
       h('span', { class: 'dir', text: slash >= 0 ? m.path.slice(0, slash + 1) : '' }),
       h('span', { class: 'file', text: m.path.slice(slash + 1) }),
-      h('a', { class: 'pr', href: m.pr.url, title: m.pr.title, text: `#${m.pr.number}`, onclick: (e: Event) => { e.preventDefault(); post({ type: 'openExternal', url: m.pr.url }); } }),
+      h('a', { class: 'pr', href: m.pr.url, title: `${m.pr.title} (open on GitHub)`, text: `#${m.pr.number}` }),
       ...chips,
       h('span', { class: 'summary', text: describe.join(' · ') || 'no cell changes' }),
     ),
@@ -204,6 +204,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
         title: 'Next comment (c)',
       }),
       button([icon('diff'), 'Text diff'], () => post({ type: 'openTextDiff' }), { class: 'ghost', title: 'Open the line-by-line text diff' }),
+      button([icon('arrow-right'), 'Next file'], () => post({ type: 'nextFile' }), { class: 'ghost', title: 'Open the next file not marked viewed' }),
       h('label', { class: 'viewed', title: 'Mark this notebook as viewed on GitHub' },
         h('input', { type: 'checkbox', checked: panel.viewed, onchange: (e: Event) => post({ type: 'setViewed', viewed: (e.target as HTMLInputElement).checked }) }),
         'Viewed'),
@@ -798,7 +799,6 @@ function renderComment(c: CommentVM): HTMLElement {
       button(edit.saving ? 'Saving…' : 'Save', save, { class: 'primary', disabled: !!edit.saving })));
   } else {
     body = h('div', { class: 'body markdown', html: c.html });
-    wireLinks(body);
   }
   return h('div', { class: 'comment' }, avatar, h('div', { class: 'content' }, meta, body));
 }
@@ -952,17 +952,6 @@ function openComposer(anchor: Anchor): void {
 
 const planRequests = new Map<number, string>();
 
-function wireLinks(root: HTMLElement): void {
-  for (const a of root.querySelectorAll('a')) {
-    a.addEventListener('click', e => {
-      e.preventDefault();
-      const href = a.getAttribute('href');
-      if (href) {
-        post({ type: 'openExternal', url: href });
-      }
-    });
-  }
-}
 
 // --- Navigation --------------------------------------------------------------------------------
 
@@ -1002,6 +991,21 @@ function reveal(el: HTMLElement): void {
   void el.offsetWidth;
   el.classList.add('flash');
 }
+
+// Every link opens once, in the browser. Without this, VS Code also follows the link itself, and
+// other extensions (such as GitHub Pull Requests) can open github.com links inside VS Code too.
+window.addEventListener('click', e => {
+  const link = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+  if (!link) {
+    return;
+  }
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const href = link.getAttribute('href') ?? '';
+  if (/^https?:\/\//.test(href)) {
+    post({ type: 'openExternal', url: href });
+  }
+}, true);
 
 window.addEventListener('mousedown', e => {
   if (submitBox.open && !submitBox.sending && !(e.target as HTMLElement).closest('.submit-wrap')) {
