@@ -1,6 +1,6 @@
 // Everything known about the pull request under review: its notebooks as review documents, the
 // other changed files, and where each existing GitHub thread belongs. No VS Code APIs in here.
-import type { GhThread, GitHub, PrFile, PrInfo } from './github.ts';
+import type { GhThread, GitHub, LastReview, PrFile, PrInfo } from './github.ts';
 import { emptyNotebook, parseNotebook } from './core/notebook.ts';
 import { buildReviewDoc, docLineForSource, type ReviewDoc } from './core/reviewDoc.ts';
 import { parsePatch, type CommentableLines } from './core/patch.ts';
@@ -64,6 +64,17 @@ export class ReviewSession {
   pendingCount = 0;
   /** GitHub "Viewed" state per file path. */
   viewed = new Map<string, boolean>();
+  /** Files GitHub unchecked because they changed after the viewer marked them viewed. */
+  viewedDismissed = new Set<string>();
+  /** The viewer's last submitted review, if they have reviewed this pull request before. */
+  lastReview?: LastReview;
+  /**
+   * Paths changed since that review. Undefined when there is no review, or when GitHub can't
+   * compare the two commits (see sinceReviewProblem).
+   */
+  changedSinceReview?: Set<string>;
+  sinceReviewProblem?: string;
+  private readonly sinceDocs = new Map<string, Promise<ReviewDoc>>();
   private readonly contents = new Map<string, Promise<string | undefined>>();
   private readonly commentables = new Map<string, CommentableLines>();
 
@@ -76,18 +87,61 @@ export class ReviewSession {
   static async load(gh: GitHub, owner: string, repo: string, number: number, progress?: (msg: string) => void): Promise<ReviewSession> {
     progress?.('Fetching pull request…');
     // Everything that only needs the pull request number is requested at once.
-    const [pr, files, found, viewed] = await Promise.all([
+    const [pr, files, found, viewed, lastReview] = await Promise.all([
       gh.getPr(owner, repo, number),
       gh.listFiles(owner, repo, number),
       gh.getThreads(owner, repo, number),
-      gh.getViewed(owner, repo, number).catch(() => new Map<string, boolean>()),
+      gh.getViewed(owner, repo, number).catch(() => ({ viewed: new Map<string, boolean>(), dismissed: new Set<string>() })),
+      gh.lastReview(owner, repo, number).catch(() => undefined),
     ]);
     const session = new ReviewSession(gh, pr, files);
-    session.viewed = viewed;
+    session.viewed = viewed.viewed;
+    session.viewedDismissed = viewed.dismissed;
+    session.lastReview = lastReview;
     progress?.(`Loading ${files.filter(isNotebook).length} notebooks…`);
-    await session.loadFiles();
+    await Promise.all([session.loadFiles(), session.loadChangesSinceReview()]);
     await session.placeThreads(found.threads, found.pendingReviewId);
     return session;
+  }
+
+  /** Works out which files changed after the viewer's last review. */
+  private async loadChangesSinceReview(): Promise<void> {
+    const last = this.lastReview;
+    if (!last) {
+      return;
+    }
+    if (last.sha === this.pr.headSha) {
+      this.changedSinceReview = new Set();
+      return;
+    }
+    const changed = await this.gh.changedBetween(this.pr.owner, this.pr.repo, last.sha, this.pr.headSha).catch(() => undefined);
+    if (changed) {
+      this.changedSinceReview = new Set(changed);
+    } else {
+      this.sinceReviewProblem = `GitHub can't compare the commit of your last review (${last.sha.slice(0, 7)}) with the pull request, perhaps after a force push.`;
+    }
+  }
+
+  /** Whether a file changed after the viewer's last review. */
+  changedSince(path: string): boolean {
+    return this.changedSinceReview?.has(path) ?? false;
+  }
+
+  /** A notebook as it was at the viewer's last review (empty if it didn't exist then). */
+  sinceReviewDoc(nbPath: string): Promise<ReviewDoc> | undefined {
+    const last = this.lastReview;
+    const entry = this.notebooks.get(nbPath);
+    if (!last || !entry) {
+      return undefined;
+    }
+    let doc = this.sinceDocs.get(nbPath);
+    if (!doc) {
+      doc = this.contentAt(nbPath, last.sha)
+        .then(text => (text === undefined && entry.file.previousFilename ? this.contentAt(entry.file.previousFilename, last.sha) : text))
+        .then(text => buildReviewDoc(text === undefined ? emptyNotebook() : parseNotebook(text)));
+      this.sinceDocs.set(nbPath, doc);
+    }
+    return doc;
   }
 
   /** Cached raw content of a changed file on one side of the PR. */
@@ -98,10 +152,15 @@ export class ReviewSession {
     if ((side === 'LEFT' && file?.status === 'added') || (side === 'RIGHT' && file?.status === 'removed')) {
       return Promise.resolve(undefined);
     }
-    const key = `${ref}:${at}`;
+    return this.contentAt(at, ref);
+  }
+
+  /** Cached raw content of a file at a commit. */
+  contentAt(path: string, ref: string): Promise<string | undefined> {
+    const key = `${ref}:${path}`;
     let p = this.contents.get(key);
     if (!p) {
-      p = this.gh.getContent(this.pr.owner, this.pr.repo, at, ref);
+      p = this.gh.getContent(this.pr.owner, this.pr.repo, path, ref);
       this.contents.set(key, p);
     }
     return p;

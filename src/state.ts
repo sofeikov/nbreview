@@ -9,7 +9,7 @@ import * as vscode from 'vscode';
 import type { ReviewSession, NotebookEntry } from './session.ts';
 import { parseBody, planComment, replaceBodyText, type GhThreadTarget, type Side } from './core/anchor.ts';
 import { planFileComment } from './core/fileComments.ts';
-import type { GhThread } from './github.ts';
+import type { GhThread, ReactionContent } from './github.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
 
 /** A comment in the pending review, where it sits in the review documents. */
@@ -128,32 +128,56 @@ export class ReviewState {
     await this.reloadThreads();
   }
 
-  async updateDraft(key: string, text: string): Promise<void> {
+  /** Changes the text of one of the viewer's comments, pending or published. */
+  async editComment(id: string, text: string): Promise<void> {
     const s = this.requireSession();
-    const thread = s.allThreads().find(t => t.comments.some(c => c.id === key));
-    const comment = thread?.comments.find(c => c.id === key);
+    const thread = s.allThreads().find(t => t.comments.some(c => c.id === id));
+    const comment = thread?.comments.find(c => c.id === id);
     if (!thread || !comment) {
-      throw new Error('That pending comment is no longer on GitHub.');
+      throw new Error('That comment is no longer on GitHub.');
     }
-    // The first comment of a notebook thread carries the cell header; suggestions are re-encoded.
     let body = text;
-    const placed = s.placed.find(p => p.gh.id === thread.id);
-    if (placed && thread.comments[0] === comment) {
-      const d = this.drafts().find(x => x.key === key);
-      body = (d && this.plan({ ...d, text })?.body) ?? replaceBodyText(comment.body, text);
+    if (thread.comments[0] === comment) {
+      // The first comment of a notebook thread made here carries the cell header and marker, and
+      // a suggestion in it is written as notebook JSON lines, so it is planned again. An outdated
+      // thread's place is only a guess, and one on a generated module isn't a notebook comment:
+      // for those only the text changes.
+      const placed = s.placed.find(p => p.gh.id === thread.id);
+      const replan = placed && !placed.movedFrom && !thread.isOutdated && parseBody(comment.body).marker;
+      const plan = replan
+        ? this.plan({ nbPath: placed.nbPath, side: placed.side, startDocLine: placed.startDocLine ?? placed.docLine, endDocLine: placed.docLine, text })
+        : undefined;
+      body = plan?.body ?? replaceBodyText(comment.body, text);
     }
-    await s.gh.updatePendingComment(key, body);
+    await s.gh.updateComment(id, body);
     await this.reloadThreads();
   }
 
-  /** Deletes a pending comment; deleting the last one also discards the then empty review. */
-  async removeDraft(key: string): Promise<void> {
+  /**
+   * Deletes one of the viewer's comments. Deleting the last pending one also discards the then
+   * empty review.
+   */
+  async deleteComment(id: string): Promise<void> {
     const s = this.requireSession();
-    await s.gh.deletePendingComment(key);
+    const pending = s.allThreads().some(t => t.comments.some(c => c.id === id && c.pending));
+    await s.gh.deleteComment(id);
     await this.reloadThreads();
-    if (s.pendingReviewId && s.pendingCount === 0) {
+    if (pending && s.pendingReviewId && s.pendingCount === 0) {
       await this.discardReview();
     }
+  }
+
+  async setResolved(threadId: string, resolved: boolean): Promise<void> {
+    const s = this.requireSession();
+    await s.gh.setResolved(threadId, resolved);
+    await this.reloadThreads();
+  }
+
+  /** Adds or removes the viewer's reaction to a published comment. */
+  async react(commentId: string, content: ReactionContent, add: boolean): Promise<void> {
+    const s = this.requireSession();
+    await s.gh.react(commentId, content, add);
+    await this.reloadThreads();
   }
 
   /** Discards the pending review and all its comments. */

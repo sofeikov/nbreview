@@ -394,6 +394,32 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .body img { max-width: 100%; }
 .body picture img, .body img[alt*="severity" i] { height: 16px; width: auto; vertical-align: text-bottom; }
 
+/* Reactions under a comment, and the picker behind the smiley button, as on github.com. */
+.reactions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+button.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; height: 22px; border: 1px solid var(--border); border-radius: 11px; font-size: 12px; }
+button.reaction.mine { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.reaction .emoji { font-size: 13px; line-height: 1; }
+.reaction-wrap { position: relative; display: inline-flex; }
+.reaction-picker {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--vscode-widget-border, var(--border));
+  border-radius: var(--radius);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
+}
+.reaction-picker button { font-size: 16px; padding: 2px 5px; line-height: 1.2; }
+.reaction-picker button.mine { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+
+.thread-actions { display: flex; justify-content: flex-end; padding: 0 12px 10px; }
+.reply + .thread-actions { padding-top: 0; }
+
 .reply { padding: 6px 12px 10px 48px; border-top: 1px solid var(--border); }
 .reply-stub {
   padding: 4px 8px;

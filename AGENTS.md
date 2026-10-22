@@ -10,6 +10,7 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
 | `npm run typecheck` | `tsc` over `src`, `test` and `scripts`. Nothing is emitted. |
 | `npm test` | esbuild bundles each `test/*.test.ts` into `out/test/` and runs them with `node --test`. Node can't run the `.ts` sources directly. |
 | `npm run smoke` | The pre-release check of the packaged extension in a real VS Code. See [Testing](#testing). |
+| `npm run e2e -- --repo owner/name [--keep]` | Drives the extension's session and state code (with a stand-in for the `vscode` module) against real GitHub, on a throwaway branch and draft PR it opens, then closes and deletes. It leaves visible comments on the closed PR: use `sofeikov/nbreview` or another repository where that is fine. Never use a company repository. |
 | `npm run package` | Builds `nbreview.vsix`. `.vscodeignore` excludes everything by default and lists only what ships. |
 | `npm run bench -- …` | Compares the speed of a git ref with the working tree, with a 95% bootstrap confidence interval. Use it before claiming a speed-up. |
 | `npm run demo` | Writes `out/demo/index.html`, the review page for `docs/demo/` outside VS Code. The README screenshots come from it. |
@@ -38,6 +39,7 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
 ## Decisions to keep
 
 - **Pending comments live on GitHub, in the viewer's pending review,** as on github.com. Nothing is kept locally. "Add single comment" posts at once and is hidden while a review is pending.
+- **Comments made here carry a hidden marker** (`<!-- nbreview:{…} -->`) and a cell header. Editing the first comment of such a thread plans it again (`state.editComment`), so the header stays and a suggestion is encoded once. `parseBody` gives the reviewer's text with the suggestion decoded back to code. Replies and comments from github.com have no marker and are only text.
 - **Commands must not write settings.** Right after an in-place update with Restart Extensions, VS Code runs the new code before it has registered the new settings, so writing one fails with "not a registered configuration". This shipped in 0.8.1. Keep UI choices in `globalState`, and treat settings as defaults that are only read (see `fileLayout` in `tree.ts`).
 - **The extension is generic, not nbdev-first.** The nbdev mapping (`# %% path.ipynb #cellid` in the generated `.py`) is a passive extra. Generated files are listed and commented on like any other file.
 - **Only Python notebooks get syntax highlighting.** Don't add other kernels' languages.
@@ -62,6 +64,8 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
 - Put a time limit on every DevTools call. A crashed window never answers.
 - Close the window from inside it (Command Palette → Close Window), then check that the debug port has gone.
 - Never `pkill -f <pattern>`: the pattern is also in your own shell's command line. Kill exact PIDs only.
+
+**`npm run e2e`** covers what must be checked against GitHub: posted comments edited (marker kept, suggestion re-encoded) and deleted, reactions, resolving, and changes since the last review. Run it, and check those flows by hand in the packaged build, when changing `github.ts`, `state.ts` or how comments are written. `--keep` leaves the PR open for that check; close it and delete its branch afterwards.
 
 **End-to-end tests against real pull requests:**
 - Pending-review traces (start, comment, discard) are fine.

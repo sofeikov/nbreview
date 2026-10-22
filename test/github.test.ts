@@ -27,8 +27,8 @@ test('pending review: start it, add threads and replies, edit, delete, discard',
     await gh.addPendingThread('PRR_1', { path: 'nbs/x.ipynb', body: 'line', side: 'RIGHT', subjectType: 'LINE', line: 20, startLine: 18 });
     await gh.addPendingThread('PRR_1', { path: 'nbs/x.ipynb', body: 'file', side: 'RIGHT', subjectType: 'FILE' });
     await gh.addPendingReply('PRR_1', 'PRRT_9', 'reply');
-    await gh.updatePendingComment('PRRC_5', 'edited');
-    await gh.deletePendingComment('PRRC_5');
+    await gh.updateComment('PRRC_5', 'edited');
+    await gh.deleteComment('PRRC_5');
     await gh.deleteReview('PRR_1');
     const v = fake.calls.map(c => c.variables);
     assert.deepEqual(v[0], { pr: 'PR_1', sha: pr.headSha });
@@ -69,8 +69,17 @@ test('threads include the viewer\'s pending comments and the pending review id',
       reviews: { nodes: [{ id: 'PRR_other', viewerDidAuthor: false }, { id: 'PRR_mine', viewerDidAuthor: true }] },
       reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{
         id: 'T1', path: 'a.ipynb', line: 3, startLine: null, originalLine: 3, diffSide: 'RIGHT', subjectType: 'LINE', isResolved: false, isOutdated: false,
+        viewerCanResolve: true, viewerCanUnresolve: false,
         comments: { nodes: [
-          { id: 'C1', databaseId: 1, body: 'published', createdAt: 'x', url: 'u', author: { login: 'maria' }, pullRequestReview: { state: 'COMMENTED' } },
+          {
+            id: 'C1', databaseId: 1, body: 'published', createdAt: 'x', url: 'u', author: { login: 'maria' }, pullRequestReview: { state: 'COMMENTED' },
+            viewerCanUpdate: false, viewerCanDelete: false,
+            reactionGroups: [
+              { content: 'THUMBS_UP', viewerHasReacted: true, reactors: { totalCount: 2 } },
+              { content: 'HEART', viewerHasReacted: false, reactors: { totalCount: 0 } },
+              { content: 'ROCKET', viewerHasReacted: false, reactors: { totalCount: 1 } },
+            ],
+          },
           { id: 'C2', databaseId: 2, body: 'my draft reply', createdAt: 'x', url: 'u', author: { login: 'me' }, pullRequestReview: { state: 'PENDING' } },
           { id: 'C3', databaseId: 3, body: 'left over from a discarded review', createdAt: 'x', url: 'u', author: { login: 'me' }, pullRequestReview: null },
         ] },
@@ -81,6 +90,15 @@ test('threads include the viewer\'s pending comments and the pending review id',
     const { threads, pendingReviewId } = await new GitHub('t').getThreads('o', 'r', 1);
     assert.equal(pendingReviewId, 'PRR_mine');
     assert.deepEqual(threads[0].comments.map(c => [c.id, c.pending]), [['C1', false], ['C2', true]]);
+    assert.equal(threads[0].viewerCanResolve, true);
+    assert.equal(threads[0].viewerCanUnresolve, false);
+    // Reactions nobody gave are left out; the viewer's own are flagged.
+    assert.deepEqual(threads[0].comments[0].reactions, [
+      { content: 'THUMBS_UP', count: 2, viewerHasReacted: true },
+      { content: 'ROCKET', count: 1, viewerHasReacted: false },
+    ]);
+    assert.equal(threads[0].comments[0].viewerCanUpdate, false);
+    assert.deepEqual(threads[0].comments[1].reactions, []);
   } finally {
     fake.restore();
   }
@@ -124,5 +142,91 @@ test('a rejected single comment reports GitHub\'s reason', async () => {
     );
   } finally {
     globalThis.fetch = realFetch;
+  }
+});
+
+test('resolving, reacting, and editing or deleting a published comment', async () => {
+  const fake = fakeGraphql(() => ({}));
+  try {
+    const gh = new GitHub('t');
+    await gh.setResolved('PRRT_1', true);
+    await gh.setResolved('PRRT_1', false);
+    await gh.react('PRRC_2', 'HOORAY', true);
+    await gh.react('PRRC_2', 'HOORAY', false);
+    await gh.updateComment('PRRC_2', 'better wording');
+    await gh.deleteComment('PRRC_2');
+    const [resolve, unresolve, add, remove, update, del] = fake.calls;
+    assert.match(resolve.query, /resolveReviewThread\(/);
+    assert.doesNotMatch(resolve.query, /unresolveReviewThread/);
+    assert.match(unresolve.query, /unresolveReviewThread\(/);
+    assert.deepEqual(resolve.variables.input, { threadId: 'PRRT_1' });
+    assert.match(add.query, /addReaction\(/);
+    assert.match(remove.query, /removeReaction\(/);
+    assert.deepEqual(add.variables.input, { subjectId: 'PRRC_2', content: 'HOORAY' });
+    assert.match(update.query, /updatePullRequestReviewComment/);
+    assert.deepEqual(update.variables.input, { pullRequestReviewCommentId: 'PRRC_2', body: 'better wording' });
+    assert.deepEqual(del.variables.input, { id: 'PRRC_2' });
+  } finally {
+    fake.restore();
+  }
+});
+
+test('the last review is the viewer\'s latest submitted one', async () => {
+  const fake = fakeGraphql(() => ({
+    repository: { pullRequest: { reviews: { nodes: [
+      { viewerDidAuthor: true, state: 'COMMENTED', submittedAt: '2026-10-01T10:00:00Z', commit: { oid: 'a'.repeat(40) } },
+      { viewerDidAuthor: true, state: 'CHANGES_REQUESTED', submittedAt: '2026-10-02T10:00:00Z', commit: { oid: 'b'.repeat(40) } },
+      { viewerDidAuthor: false, state: 'APPROVED', submittedAt: '2026-10-03T10:00:00Z', commit: { oid: 'c'.repeat(40) } },
+      { viewerDidAuthor: true, state: 'PENDING', submittedAt: null, commit: { oid: 'd'.repeat(40) } },
+    ] } } },
+  }));
+  try {
+    assert.deepEqual(await new GitHub('t').lastReview('o', 'r', 1), { sha: 'b'.repeat(40), submittedAt: '2026-10-02T10:00:00Z' });
+  } finally {
+    fake.restore();
+  }
+  const none = fakeGraphql(() => ({ repository: { pullRequest: { reviews: { nodes: [] } } } }));
+  try {
+    assert.equal(await new GitHub('t').lastReview('o', 'r', 1), undefined);
+  } finally {
+    none.restore();
+  }
+});
+
+test('files changed between two commits, with renames, and no answer when GitHub can\'t compare', async () => {
+  const realFetch = globalThis.fetch;
+  const urls: string[] = [];
+  let status = 200;
+  globalThis.fetch = (async (url: string) => {
+    urls.push(url);
+    return status === 200
+      ? new Response(JSON.stringify({ files: [{ filename: 'nbs/a.ipynb' }, { filename: 'new.py', previous_filename: 'old.py' }] }), { status })
+      : new Response('{}', { status });
+  }) as typeof fetch;
+  try {
+    const gh = new GitHub('t');
+    assert.deepEqual(await gh.changedBetween('o', 'r', 'aaa', 'bbb'), ['nbs/a.ipynb', 'new.py', 'old.py']);
+    assert.match(urls[0], /\/repos\/o\/r\/compare\/aaa\.\.\.bbb/);
+    status = 404;
+    assert.equal(await gh.changedBetween('o', 'r', 'gone', 'bbb'), undefined);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('viewed flags, and the files GitHub unchecked because they changed', async () => {
+  const fake = fakeGraphql(() => ({
+    repository: { pullRequest: { files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [
+      { path: 'a.ipynb', viewerViewedState: 'VIEWED' },
+      { path: 'b.py', viewerViewedState: 'DISMISSED' },
+      { path: 'c.py', viewerViewedState: 'UNVIEWED' },
+    ] } } },
+  }));
+  try {
+    const { viewed, dismissed } = await new GitHub('t').getViewed('o', 'r', 1);
+    assert.deepEqual([...viewed], [['a.ipynb', true], ['b.py', false], ['c.py', false]]);
+    assert.deepEqual([...dismissed], ['b.py']);
+  } finally {
+    fake.restore();
   }
 });

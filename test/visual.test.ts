@@ -101,13 +101,16 @@ test('view model: changed cells, outputs and pending threads', () => {
   const startDocLine = docLineForSource(e.head, 'loss-def', 1)!;
   const placed = [{
     nbPath: e.path, side: 'RIGHT', docLine: startDocLine + 1, startDocLine,
-    gh: { id: 'T1', isResolved: false, isOutdated: false, comments: [{ id: 'C1', pending: true, body: 'hi **there**', createdAt: 'x', url: '', author: 'me' }] },
+    gh: { id: 'T1', isResolved: false, isOutdated: false, viewerCanResolve: false, viewerCanUnresolve: false, comments: [{ id: 'C1', pending: true, body: 'hi **there**', createdAt: 'x', url: '', author: 'me', viewerCanUpdate: true, viewerCanDelete: true, reactions: [] }] },
   }] as any;
   const threads = buildThreads(e, placed, () => 'Pending · x');
   assert.equal(threads.length, 1);
   assert.equal(threads[0].draft, true);
   assert.equal(threads[0].label, 'Pending · x');
-  assert.equal(threads[0].comments[0].draftKey, 'C1');
+  assert.equal(threads[0].comments[0].id, 'C1');
+  assert.equal(threads[0].comments[0].canEdit, true);
+  assert.equal(threads[0].comments[0].reactions, undefined, 'no reactions on pending comments');
+  assert.equal(threads[0].canResolve, false, "a thread of pending comments can't be resolved");
   assert.deepEqual(threads[0].anchor, { side: 'RIGHT', cellId: 'loss-def', kind: 'source', start: 1, end: 2 });
   assert.match(threads[0].comments[0].html, /<strong>there<\/strong>/);
 });
@@ -173,4 +176,41 @@ test('markdown diff works inside list items and on display maths', () => {
   assert.match(head, /<li[^>]*class="md-changed"[^>]*>second item <span class="x-ins">there<\/span>/);
   assert.match(base, /<span class="x-del">here<\/span>/);
   assert.match(head, /<div data-src="3-3" class="md-changed">/);
+});
+
+test('compared with the last review: only what changed since, and no comments on the old side', () => {
+  const e = entry(fx('small.base.ipynb'), fx('small.head.ipynb'), fx('small.patch'));
+  // At the last review the notebook was already as it is now, except for one line of loss-def.
+  const reviewed = JSON.parse(fx('small.head.ipynb'));
+  const lossDef = reviewed.cells.find((c: any) => c.id === 'loss-def');
+  lossDef.source[0] = '# reviewed version\n';
+  const since = { base: buildReviewDoc(parseNotebook(JSON.stringify(reviewed))), label: 'your review on 1 Oct (abc1234)' };
+  const vm = buildViewModel(e, { number: 1, title: 't', url: 'u' }, since);
+  assert.deepEqual(vm.since, { label: 'your review on 1 Oct (abc1234)' });
+  assert.deepEqual(vm.cells.filter(c => c.status !== 'unchanged').map(c => c.key), ['loss-def']);
+  assert.deepEqual([vm.stats.additions, vm.stats.deletions], [1, 1], 'the source lines changed since the review');
+  // The whole pull request, for comparison.
+  assert.equal(buildViewModel(e, { number: 1, title: 't', url: 'u' }).since, undefined);
+});
+
+test('published threads: resolve flags, reactions, and editing only the viewer\'s own comments', () => {
+  const e = entry(fx('small.base.ipynb'), fx('small.head.ipynb'), fx('small.patch'));
+  const docLine = docLineForSource(e.head, 'loss-def', 0)!;
+  const comment = (id: string, mine: boolean) => ({
+    id, pending: false, body: `text ${id}`, createdAt: 'x', url: `u/${id}`, author: mine ? 'me' : 'maria',
+    viewerCanUpdate: mine, viewerCanDelete: mine, reactions: mine ? [] : [{ content: 'HEART', count: 1, viewerHasReacted: true }],
+  });
+  const placed = [{
+    nbPath: e.path, side: 'RIGHT', docLine,
+    gh: { id: 'T2', isResolved: true, isOutdated: false, viewerCanResolve: false, viewerCanUnresolve: true, comments: [comment('C1', false), comment('C2', true)] },
+  }] as any;
+  const [t] = buildThreads(e, placed, () => '');
+  assert.equal(t.resolved, true);
+  assert.equal(t.canUnresolve, true);
+  assert.equal(t.canResolve, false);
+  assert.match(t.label, /^Resolved/);
+  const [theirs, mine] = t.comments;
+  assert.deepEqual([theirs.canEdit, theirs.canDelete, theirs.text], [false, false, undefined]);
+  assert.deepEqual(theirs.reactions, [{ content: 'HEART', count: 1, mine: true }]);
+  assert.deepEqual([mine.canEdit, mine.canDelete, mine.text], [true, true, 'text C2']);
 });

@@ -2,7 +2,8 @@
 // comment threads, cell header decorations, outline/sticky scroll, folding and hovers.
 import * as vscode from 'vscode';
 import { mkdir, writeFile } from 'node:fs/promises';
-import type { GhThread } from './github.ts';
+import type { GhComment, GhThread } from './github.ts';
+import { REACTIONS, reactionLabel, type ReactionContent } from './core/reactions.ts';
 import type { NotebookEntry } from './session.ts';
 import { parseBody, type Side } from './core/anchor.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
@@ -14,16 +15,22 @@ export const RAW_SCHEME = 'nbreview-raw';
 
 class NbComment implements vscode.Comment {
   mode = vscode.CommentMode.Preview;
+  reactions?: vscode.CommentReaction[];
+  /** The body shown before an edit started, to go back to when it is cancelled. */
+  preview?: vscode.MarkdownString | string;
   constructor(
     public body: vscode.MarkdownString | string,
     public author: vscode.CommentAuthorInformation,
     public timestamp?: Date,
     public label?: string,
+    /** `draft` (pending), `mine` (published, the viewer's own) or `github`; the comment menus use it. */
     public contextValue?: string,
-    public draftKey?: string,
+    /** GitHub id. */
+    public ghId?: string,
     public parent?: vscode.CommentThread,
-    /** The saved text of a pending comment, to go back to when an edit is cancelled. */
+    /** The saved text of the viewer's comment, to go back to when an edit is cancelled. */
     public savedText?: string,
+    public pending = false,
   ) {}
 }
 
@@ -46,6 +53,7 @@ export class TextReview implements vscode.Disposable {
       prompt: 'Comment on this line',
       placeHolder: 'Review comment (Markdown; ```suggestion blocks become GitHub suggestions)',
     };
+    this.controller.reactionHandler = (comment, reaction) => this.react(comment as NbComment, reaction);
     this.controller.commentingRangeProvider = {
       provideCommentingRanges: document => {
         if ((!this.docFor(document.uri) && !this.rawFor(document.uri)) || document.lineCount === 0) {
@@ -69,8 +77,12 @@ export class TextReview implements vscode.Disposable {
       onDidChange: this.contentChanged.event,
       provideTextDocumentContent: async uri => {
         if (uri.scheme === RAW_SCHEME) {
-          const side = new URLSearchParams(uri.query).get('side') === 'LEFT' ? 'LEFT' : 'RIGHT';
-          return (await this.state.session?.content(uri.path.slice(1), side)) ?? '';
+          const side = new URLSearchParams(uri.query).get('side');
+          const s = this.state.session;
+          if (side === 'SINCE') {
+            return (s?.lastReview && (await s.contentAt(uri.path.slice(1), s.lastReview.sha))) ?? '';
+          }
+          return (await s?.content(uri.path.slice(1), side === 'LEFT' ? 'LEFT' : 'RIGHT')) ?? '';
         }
         return this.docFor(uri)?.doc.text ?? '';
       },
@@ -88,7 +100,9 @@ export class TextReview implements vscode.Disposable {
       vscode.window.onDidChangeVisibleTextEditors(editors => this.decorate(editors)),
       vscode.commands.registerCommand('nbreview.addComment', (reply: vscode.CommentReply) => this.addFromReply(reply)),
       vscode.commands.registerCommand('nbreview.addSingleComment', (reply: vscode.CommentReply) => this.postFromReply(reply)),
-      vscode.commands.registerCommand('nbreview.deleteDraft', (c: NbComment) => c.draftKey && this.withGitHub('Deleting the comment', () => this.state.removeDraft(c.draftKey!))),
+      vscode.commands.registerCommand('nbreview.deleteDraft', (c: NbComment) => this.delete(c)),
+      vscode.commands.registerCommand('nbreview.resolveThread', (arg: vscode.CommentThread | vscode.CommentReply) => this.resolve(arg, true)),
+      vscode.commands.registerCommand('nbreview.unresolveThread', (arg: vscode.CommentThread | vscode.CommentReply) => this.resolve(arg, false)),
       vscode.commands.registerCommand('nbreview.editDraft', (c: NbComment) => this.setEditing(c, true)),
       vscode.commands.registerCommand('nbreview.cancelEditDraft', (c: NbComment) => this.setEditing(c, false)),
       vscode.commands.registerCommand('nbreview.saveDraft', (c: NbComment) => this.saveEdit(c)),
@@ -139,8 +153,11 @@ export class TextReview implements vscode.Disposable {
     );
   }
 
-  /** A changed ordinary file at one side of the pull request, as opened in its diff. */
-  rawUri(path: string, side: Side): vscode.Uri {
+  /**
+   * A changed ordinary file at one side of the pull request, as opened in its diff, or (`SINCE`)
+   * as it was at the viewer's last review.
+   */
+  rawUri(path: string, side: Side | 'SINCE'): vscode.Uri {
     return vscode.Uri.from({ scheme: RAW_SCHEME, path: `/${path}`, query: `side=${side}&pr=${this.state.prKey()}` });
   }
 
@@ -149,10 +166,12 @@ export class TextReview implements vscode.Disposable {
       return undefined;
     }
     const path = uri.path.slice(1);
-    if (!this.state.session.others.some(o => o.file.filename === path)) {
+    const side = new URLSearchParams(uri.query).get('side');
+    // The version at the last review isn't part of the pull request, so it takes no comments.
+    if (side === 'SINCE' || !this.state.session.others.some(o => o.file.filename === path)) {
       return undefined;
     }
-    return { path, side: new URLSearchParams(uri.query).get('side') === 'LEFT' ? 'LEFT' : 'RIGHT' };
+    return { path, side: side === 'LEFT' ? 'LEFT' : 'RIGHT' };
   }
 
   async openFileDiff(path: string): Promise<void> {
@@ -161,6 +180,17 @@ export class TextReview implements vscode.Disposable {
       return;
     }
     await vscode.commands.executeCommand('vscode.diff', this.rawUri(path, 'LEFT'), this.rawUri(path, 'RIGHT'), `${basename(path)} (#${s.pr.number})`, {
+      preview: false,
+    });
+  }
+
+  /** The file as it was at the viewer's last review, against the pull request's version. */
+  async openSinceReviewDiff(path: string): Promise<void> {
+    const s = this.state.session;
+    if (!s?.lastReview) {
+      return;
+    }
+    await vscode.commands.executeCommand('vscode.diff', this.rawUri(path, 'SINCE'), this.rawUri(path, 'RIGHT'), `${basename(path)} (since your review, #${s.pr.number})`, {
       preview: false,
     });
   }
@@ -188,11 +218,16 @@ export class TextReview implements vscode.Disposable {
 
   private showThread(gh: GhThread, uri: vscode.Uri, start: number, end: number, where: { note?: string; movedFrom?: string }): void {
     const thread = this.controller.createCommentThread(uri, new vscode.Range(start, 0, end, 0), []);
-    thread.comments = gh.comments.map(c => (c.pending ? this.draftComment(c, thread) : ghComment(c)));
+    thread.comments = gh.comments.map(c => (c.pending ? this.draftComment(c, thread) : this.ghComment(c, thread)));
     // A thread of only pending comments is the reviewer's own, not yet on the pull request.
     const ownPending = gh.comments.every(c => c.pending);
     thread.label = ownPending ? this.state.describe(gh) : threadLabel(gh, where);
-    thread.contextValue = ownPending ? 'draft' : 'github';
+    // The thread menus look for `canResolve` and `canUnresolve` in this.
+    thread.contextValue = [
+      ownPending ? 'draft' : 'github',
+      !ownPending && gh.viewerCanResolve ? 'canResolve' : '',
+      !ownPending && gh.viewerCanUnresolve ? 'canUnresolve' : '',
+    ].filter(Boolean).join(' ');
     thread.canReply = true;
     thread.state = gh.isResolved ? vscode.CommentThreadState.Resolved : vscode.CommentThreadState.Unresolved;
     thread.collapsibleState = !ownPending && (gh.isResolved || gh.isOutdated)
@@ -202,9 +237,64 @@ export class TextReview implements vscode.Disposable {
     this.ghIds.set(thread, gh.id);
   }
 
-  private draftComment(c: GhThread['comments'][number], parent: vscode.CommentThread): NbComment {
+  private draftComment(c: GhComment, parent: vscode.CommentThread): NbComment {
     const { text } = parseBody(c.body);
-    return new NbComment(new vscode.MarkdownString(text), { name: 'You' }, new Date(c.createdAt), 'Pending', 'draft', c.id, parent, text);
+    return new NbComment(new vscode.MarkdownString(text), { name: 'You' }, new Date(c.createdAt), 'Pending', 'draft', c.id, parent, text, true);
+  }
+
+  private ghComment(c: GhComment, parent: vscode.CommentThread): NbComment {
+    const { text } = parseBody(c.body);
+    const md = new vscode.MarkdownString(`${text}\n\n[View on GitHub](${c.url})`);
+    md.supportHtml = true;
+    const comment = new NbComment(
+      md,
+      { name: c.author, iconPath: c.avatarUrl ? vscode.Uri.parse(c.avatarUrl) : undefined },
+      new Date(c.createdAt),
+      undefined,
+      c.viewerCanUpdate ? 'mine' : 'github',
+      c.id,
+      parent,
+      text,
+    );
+    // Every reaction is listed, so VS Code's picker offers them all; those with no count aren't shown.
+    comment.reactions = (Object.keys(REACTIONS) as ReactionContent[]).map(content => {
+      const r = c.reactions.find(x => x.content === content);
+      return {
+        label: reactionLabel(content),
+        iconPath: vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'reactions', `${content}.svg`),
+        count: r?.count ?? 0,
+        authorHasReacted: r?.viewerHasReacted ?? false,
+      };
+    });
+    return comment;
+  }
+
+  private async react(comment: NbComment, reaction: vscode.CommentReaction): Promise<void> {
+    const content = (Object.keys(REACTIONS) as ReactionContent[]).find(c => reactionLabel(c) === reaction.label);
+    if (comment.ghId && content) {
+      await this.withGitHub('Reacting', () => this.state.react(comment.ghId!, content, !reaction.authorHasReacted));
+    }
+  }
+
+  private async resolve(arg: vscode.CommentThread | vscode.CommentReply, resolved: boolean): Promise<void> {
+    const id = this.ghIds.get('thread' in arg ? arg.thread : arg);
+    if (id) {
+      await this.withGitHub(resolved ? 'Resolving the conversation' : 'Unresolving the conversation', () => this.state.setResolved(id, resolved));
+    }
+  }
+
+  /** Deletes the viewer's comment; a published one only after they confirm. */
+  private async delete(comment: NbComment): Promise<void> {
+    if (!comment.ghId) {
+      return;
+    }
+    if (!comment.pending) {
+      const choice = await vscode.window.showWarningMessage('Delete this comment from the pull request on GitHub?', { modal: true }, 'Delete');
+      if (!choice) {
+        return;
+      }
+    }
+    await this.withGitHub('Deleting the comment', () => this.state.deleteComment(comment.ghId!));
   }
 
   /** Runs a GitHub change with progress in the status bar; failures are shown, and reported as false. */
@@ -264,19 +354,23 @@ export class TextReview implements vscode.Disposable {
     if (!thread) {
       return;
     }
-    if (!editing) {
-      comment.body = new vscode.MarkdownString(comment.savedText ?? '');
+    if (editing) {
+      // The text alone: a published comment's body also has its "View on GitHub" link.
+      comment.preview = comment.body;
+      comment.body = comment.savedText ?? '';
+    } else {
+      comment.body = comment.preview ?? new vscode.MarkdownString(comment.savedText ?? '');
     }
     comment.mode = editing ? vscode.CommentMode.Editing : vscode.CommentMode.Preview;
     thread.comments = [...thread.comments];
   }
 
   private async saveEdit(comment: NbComment): Promise<void> {
-    if (!comment.draftKey) {
+    if (!comment.ghId) {
       return;
     }
     const text = typeof comment.body === 'string' ? comment.body : comment.body.value;
-    if (await this.withGitHub('Saving the comment', () => this.state.updateDraft(comment.draftKey!, text))) {
+    if (await this.withGitHub('Saving the comment', () => this.state.editComment(comment.ghId!, text))) {
       return; // redrawn from GitHub
     }
     // Keep the edit open with the text so nothing is lost.
@@ -309,19 +403,6 @@ export class TextReview implements vscode.Disposable {
       editor.setDecorations(this.outputDeco, outputs);
     }
   }
-}
-
-function ghComment(c: GhThread['comments'][number]): NbComment {
-  const { text } = parseBody(c.body);
-  const md = new vscode.MarkdownString(`${text}\n\n[View on GitHub](${c.url})`);
-  md.supportHtml = true;
-  return new NbComment(
-    md,
-    { name: c.author, iconPath: c.avatarUrl ? vscode.Uri.parse(c.avatarUrl) : undefined },
-    new Date(c.createdAt),
-    undefined,
-    'github',
-  );
 }
 
 function threadLabel(gh: GhThread, where: { note?: string; movedFrom?: string }): string {

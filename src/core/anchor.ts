@@ -168,7 +168,8 @@ export function parseBody(body: string): { marker?: Marker; text: string } {
   }
   const endAt = body.indexOf(HEADER_END);
   const text = endAt >= 0 ? body.slice(endAt + HEADER_END.length).trim() : body.replace(MARKER_RE, '').trim();
-  return { marker, text };
+  // A suggestion made here is stored as notebook JSON lines; the reviewer wrote, and edits, code.
+  return { marker, text: decodeSuggestion(text) };
 }
 
 /** Replaces the reviewer's text in a comment body, keeping the cell header and the marker. */
@@ -212,6 +213,25 @@ function convertSuggestion(text: string, doc: ReviewDoc, cell: NbCell, start: nu
         return indent + JSON.stringify(last ? line : line + '\n') + (last ? '' : ',');
       });
   return text.replace(SUGGESTION_RE, '```suggestion\n' + encoded.join('\n') + (encoded.length ? '\n' : '') + '```');
+}
+
+/** Turns a suggestion stored as notebook JSON lines back into the code it replaces the lines with. */
+function decodeSuggestion(text: string): string {
+  const m = SUGGESTION_RE.exec(text);
+  if (!m || m[1] === '') {
+    return text;
+  }
+  const lines = m[1].replace(/\n$/, '').split('\n');
+  const JSON_LINE = /^\s*("(?:[^"\\]|\\.)*"),?$/;
+  if (!lines.every(l => JSON_LINE.test(l))) {
+    return text;
+  }
+  try {
+    const code = lines.map(l => (JSON.parse(JSON_LINE.exec(l)![1]) as string).replace(/\n$/, ''));
+    return text.replace(SUGGESTION_RE, '```suggestion\n' + code.join('\n') + '\n```');
+  } catch {
+    return text;
+  }
 }
 
 function defuseSuggestion(text: string): string {

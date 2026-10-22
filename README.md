@@ -25,6 +25,9 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 - **Reviews saved on GitHub.** "Start a review" adds comments to your pending review on GitHub, the same one github.com uses: private to you until you submit it, kept across restarts and machines, and you can add to it or submit it from VS Code or from github.com. Submit all your comments together as one review: comment, approve or request changes.
 - **Single comments, like on GitHub.** "Add single comment" posts a comment or reply straight away. As on github.com, it is available while you have no pending review.
 - **Existing review threads.** Comments already on the pull request show on the cell they belong to, with replies, resolved and outdated states.
+- **Resolve conversations.** Resolve a thread when it's dealt with, or unresolve it, from the review page or the text diff, synced with GitHub. The comment counter shows the unresolved threads, and resolved ones can be hidden.
+- **Edit, delete and react.** Edit or delete your own comments after they are posted, not only pending ones, and react to any comment with GitHub's 👍 👎 😄 🎉 😕 ❤️ 🚀 👀.
+- **Changes since your last review.** When the author pushes after you reviewed, files changed since your review are marked *new*. The review page's **Since your review** switch, or the history button next to a file, shows only what changed since then, not the whole pull request again.
 - **The whole pull request, not just notebooks.** Every other changed file opens in VS Code's diff editor with its own syntax highlighting, the review threads already on it, and the same comment widgets: line comments, single comments, replies, all in the same review.
 - **"Viewed" checkboxes and "Next file".** Mark files as viewed, synced with GitHub's own "Viewed" flags, and step to the next file you haven't viewed.
 - **Text diff too.** A line-by-line text view of the notebook in VS Code's diff editor, with VS Code's comment widgets, cell headers, outline, sticky scroll and folding. Both views share the same comments.
@@ -69,8 +72,9 @@ code --install-extension nbreview.vsix
 
    The badge on each pull request is the number of notebooks it changes, and its tooltip lists them. Click a pull request to review it. To find one that isn't listed, use the search button (or **Notebook Review: Open Pull Request…**): type to search by title, number, author or branch, or paste a number, `owner/repo#123` or a pull request URL.
 2. Click a notebook to open its visual review (the diff icon next to it opens the text diff instead), or any other file to open its diff. Every diff has **Mark as viewed**, **Next file** and **Submit review** buttons in its title bar (the visual review has them in its toolbar), so you can go through the whole pull request file by file. The **Review** panel shows the files grouped into folders; its **View as List** button (next to Collapse All) switches to a flat list, and **View as Tree** switches back.
-3. Comment with `+` or the comment buttons, then choose **Start a review** (`Ctrl+Enter`) to add it to your pending review on GitHub, or **Add single comment** to post it now. Pending comments can be edited and deleted; deleting the last one discards the empty review. Replies to existing threads work the same way.
-4. Click **Submit review** (in the page, the panel title or the status bar), write an optional summary and choose **Comment**, **Approve** or **Request changes**. **Discard review** (in the same box, or **Notebook Review: Discard Pending Review…**) deletes the pending review and its comments.
+3. Comment with `+` or the comment buttons, then choose **Start a review** (`Ctrl+Enter`) to add it to your pending review on GitHub, or **Add single comment** to post it now. Your comments can be edited and deleted, pending or posted; deleting the last pending one discards the empty review. Replies to existing threads work the same way. **Resolve conversation** under a thread marks it resolved on GitHub, and the smiley button adds a reaction.
+4. Back on a pull request you have reviewed before, files changed since your review are marked *new* in the Review panel. Click the history button next to one, or **Since your review** in the review page, to see only those changes. Comments go on the new side; the old side shows your last review, which is not part of the pull request.
+5. Click **Submit review** (in the page, the panel title or the status bar), write an optional summary and choose **Comment**, **Approve** or **Request changes**. **Discard review** (in the same box, or **Notebook Review: Discard Pending Review…**) deletes the pending review and its comments.
 
 Sign-in uses the GitHub CLI (`gh auth login`) when it is installed, otherwise VS Code's built-in GitHub sign-in.
 
@@ -111,6 +115,7 @@ GitHub anchors review comments to lines of the raw `.ipynb` file. Notebook Revie
 | `npm run package` | Build `nbreview.vsix`. |
 | `npm run bench -- [--before REF] [--runs N] TASK ARGS` | Compare the speed of a git ref (default `HEAD`) with the working tree, in alternating fresh processes, and print the mean difference with a 95% bootstrap confidence interval. Tasks: `viewModel BASE.ipynb HEAD.ipynb PATCH …` (building the review page), `activate` (loading the extension), and `openPr owner/repo#123` with `GH_TOKEN` set (opening a pull request; read-only). |
 | `npm run smoke -- [--from REV]` | Check the packaged extension in a real VS Code (downloaded into `.vscode-test/`): **A**, a fresh install; **B**, an update in place from the previous release (or `REV`) with **Restart Extensions** and no window reload. In both, every command must be registered and the ones that work without a pull request are run; it fails on any error from them, any Notebook Review error notification or extension host error, and, in A, on any setting that can't be written. Takes about a minute. On Linux, VS Code runs on a virtual display when Xvfb is installed (`sudo apt install xvfb`), so no window opens; `--visible` shows them. |
+| `npm run e2e -- --repo owner/name [--keep]` | Check against real GitHub what can't be faked: posted comments edited and deleted, reactions, resolving, and changes since the last review. It opens a draft pull request on a throwaway branch in that repository, and closes it and deletes the branch at the end (`--keep` leaves it open to look at). The comments stay on the closed pull request, so use a repository where that is fine. |
 | `npm run demo` | Write `out/demo/index.html`: the review page for the notebooks in `docs/demo/`, outside VS Code. Serve `out/demo` over HTTP to open it. The README screenshots are taken from it. |
 
 Before publishing a release: `npm run typecheck`, `npm test`, `npm run smoke`, then try the new feature by hand in the packaged extension, both freshly installed and updated in place. New commands go in `RUN` or `SKIP` in `scripts/smoke.mjs`; the smoke test fails until they do. Commands must not write settings: right after an update, VS Code hasn't registered the new ones yet.
@@ -130,6 +135,13 @@ The core does not use the VS Code API and is in `src/core/`:
 - Images with relative paths in Markdown cells do not show.
 
 ## Changelog
+
+### 0.9.0
+- **Resolve and unresolve conversations** from the review page (button under each thread) and the text diff (thread title bar). The comment counter shows unresolved threads, a filter hides resolved ones, and the Review panel's 💬 counts unresolved threads.
+- **Edit and delete your posted comments**, not only pending ones. A comment's cell header and marker are kept, and a suggestion in it is encoded again for the notebook.
+- **Reactions**: add or take back GitHub's eight reactions on any posted comment, in the review page and the text diff.
+- **Changes since your last review**: files changed since you last reviewed (or since you marked them viewed) are marked *new*; the review page's **Since your review** switch and the history button next to a file show only those changes.
+- Suggestions made here show as code again when read back or edited, instead of as notebook JSON lines.
 
 ### 0.8.2
 - `npm run smoke`: a check of the packaged extension, freshly installed and updated in place, run before each release.

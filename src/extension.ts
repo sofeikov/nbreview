@@ -98,6 +98,13 @@ export function activate(context: vscode.ExtensionContext): void {
       return path && text.openDiff(path);
     }),
     vscode.commands.registerCommand('nbreview.openFileDiff', (path: string) => text.openFileDiff(path)),
+    vscode.commands.registerCommand('nbreview.openChangesSinceReview', (arg?: Node | vscode.Uri | string) => {
+      const path = pathFromArg(arg);
+      if (!path || !state.session?.lastReview) {
+        return;
+      }
+      return state.session.notebooks.has(path) ? visual.open(path, undefined, { since: true }) : text.openSinceReviewDiff(path);
+    }),
     vscode.commands.registerCommand('nbreview.openOnGitHub', () => state.session && vscode.env.openExternal(vscode.Uri.parse(state.session.pr.url))),
     vscode.commands.registerCommand('nbreview.submitReview', (request?: SubmitRequest) =>
       request?.event ? submit(request) : submitInteractive().catch(showError)),

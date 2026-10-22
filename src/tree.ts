@@ -3,6 +3,7 @@
 import * as vscode from 'vscode';
 import type { NotebookEntry, OtherFile } from './session.ts';
 import type { ReviewState } from './state.ts';
+import type { GhThread } from './github.ts';
 import { basename, buildFolderTree, dirname, shortPath, treeOrder, type FolderNode } from './paths.ts';
 
 export type Node =
@@ -91,7 +92,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
       case 'pr': {
         const item = new vscode.TreeItem(`#${s.pr.number} ${s.pr.title}`);
         item.description = `${s.pr.headRef} → ${s.pr.baseRef}`;
-        item.tooltip = new vscode.MarkdownString(`**${s.pr.title}**\n\n${s.pr.owner}/${s.pr.repo}#${s.pr.number} by @${s.pr.author}\n\n\`${s.pr.headRef}\` → \`${s.pr.baseRef}\``);
+        item.tooltip = new vscode.MarkdownString(`**${s.pr.title}**\n\n${s.pr.owner}/${s.pr.repo}#${s.pr.number} by @${s.pr.author}\n\n\`${s.pr.headRef}\` → \`${s.pr.baseRef}\`${sinceReviewNote(this.state)}`);
         item.iconPath = new vscode.ThemeIcon('git-pull-request');
         item.contextValue = 'pr';
         item.command = { command: 'nbreview.openOnGitHub', title: 'Open on GitHub' };
@@ -121,15 +122,16 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
       }
       case 'notebook': {
         const { entry } = node;
-        const threads = s.threadsFor(entry.path).length;
+        const threads = s.threadsFor(entry.path).map(p => p.gh);
         const drafts = this.state.draftsFor(entry.path).length;
+        const fresh = freshness(this.state, entry.path);
         const item = new vscode.TreeItem(fileLayout() === 'tree' ? basename(entry.path) : shortPath(entry.path, [...s.notebooks.keys()]));
-        item.description = [threads ? `💬${threads}` : '', drafts ? `✎${drafts}` : '', `+${entry.file.additions} −${entry.file.deletions}`]
+        item.description = [fresh && 'new', unresolved(threads), drafts ? `✎${drafts}` : '', `+${entry.file.additions} −${entry.file.deletions}`]
           .filter(Boolean)
           .join(' ');
-        item.tooltip = `${entry.path}\n${entry.file.status}${entry.error ? `\n⚠ ${entry.error}` : ''}`;
+        item.tooltip = [entry.path, entry.file.status, fresh, threadSummary(threads), entry.error && `⚠ ${entry.error}`].filter(Boolean).join('\n');
         item.iconPath = new vscode.ThemeIcon('notebook', statusColor(entry.file.status));
-        item.contextValue = 'notebook';
+        item.contextValue = s.changedSince(entry.path) ? 'notebook since' : 'notebook';
         item.checkboxState = this.checkbox(entry.path);
         item.command = { command: 'nbreview.openNotebook', title: 'Review notebook', arguments: [entry.path] };
         return item;
@@ -137,18 +139,19 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
       case 'file': {
         const { other } = node;
         const item = new vscode.TreeItem(basename(other.file.filename));
-        const threads = s.fileThreads.get(other.file.filename) ?? [];
-        const pending = threads.reduce((n, f) => n + f.gh.comments.filter(c => c.pending).length, 0);
-        const published = threads.filter(f => f.gh.comments.some(c => !c.pending)).length;
+        const threads = (s.fileThreads.get(other.file.filename) ?? []).map(f => f.gh);
+        const pending = threads.reduce((n, t) => n + t.comments.filter(c => c.pending).length, 0);
+        const fresh = freshness(this.state, other.file.filename);
         item.description = [
-          published ? `💬${published}` : '',
+          fresh && 'new',
+          unresolved(threads),
           pending ? `✎${pending}` : '',
           `+${other.file.additions} −${other.file.deletions}`,
           fileLayout() === 'list' ? dirname(other.file.filename) : '',
         ].filter(Boolean).join(' ');
-        item.tooltip = other.file.filename;
+        item.tooltip = [other.file.filename, fresh, threadSummary(threads)].filter(Boolean).join('\n');
         item.iconPath = new vscode.ThemeIcon('file', statusColor(other.file.status));
-        item.contextValue = 'file';
+        item.contextValue = s.changedSince(other.file.filename) ? 'file since' : 'file';
         item.checkboxState = this.checkbox(other.file.filename);
         item.command = { command: 'nbreview.openFileDiff', title: 'Open diff', arguments: [other.file.filename] };
         return item;
@@ -183,6 +186,44 @@ export function reviewOrder(state: ReviewState): string[] {
 
 export function nodePath(node: Node): string | undefined {
   return node.kind === 'notebook' ? node.entry.path : node.kind === 'file' ? node.other.file.filename : undefined;
+}
+
+/** "💬2": the threads on GitHub still waiting to be resolved. */
+function unresolved(threads: GhThread[]): string {
+  const n = threads.filter(t => !t.isResolved && t.comments.some(c => !c.pending)).length;
+  return n ? `💬${n}` : '';
+}
+
+function threadSummary(threads: GhThread[]): string {
+  const published = threads.filter(t => t.comments.some(c => !c.pending));
+  const resolved = published.filter(t => t.isResolved).length;
+  return published.length ? `${published.length - resolved} unresolved, ${resolved} resolved conversation${published.length === 1 ? '' : 's'}` : '';
+}
+
+/** Why a file is marked new: it changed after the viewer's last review, or after they marked it viewed. */
+function freshness(state: ReviewState, path: string): string {
+  const s = state.session!;
+  if (s.changedSince(path)) {
+    return `Changed since ${reviewLabel(s)}`;
+  }
+  return s.viewedDismissed.has(path) ? 'Changed since you marked it viewed' : '';
+}
+
+function reviewLabel(s: NonNullable<ReviewState['session']>): string {
+  const last = s.lastReview!;
+  return `your review on ${new Date(last.submittedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} (${last.sha.slice(0, 7)})`;
+}
+
+function sinceReviewNote(state: ReviewState): string {
+  const s = state.session!;
+  if (!s.lastReview) {
+    return '';
+  }
+  if (s.sinceReviewProblem) {
+    return `\n\n${s.sinceReviewProblem}`;
+  }
+  const n = s.files.filter(f => s.changedSince(f.filename)).length;
+  return `\n\n${n ? `${n} file${n === 1 ? '' : 's'} changed` : 'Nothing changed'} since ${reviewLabel(s)}`;
 }
 
 function statusColor(status: string): vscode.ThemeColor {

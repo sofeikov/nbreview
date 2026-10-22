@@ -88,6 +88,16 @@ test('suggestions are re-encoded as notebook JSON lines', () => {
   });
   assert.equal(plan.subjectType, 'LINE');
   assert.match(plan.body, /```suggestion\n {4}"    d = x - y\\n",\n {4}"    return d \* d \+ eps"\n```/);
+  // Read back, the reviewer sees and edits the code they wrote, and editing encodes it only once.
+  const text = parseBody(plan.body).text;
+  assert.equal(text, 'Use a clamp:\n```suggestion\n    d = x - y\n    return d * d + eps\n```');
+  const again = planComment({ doc: headDoc, path: PATH, side: 'RIGHT', startDocLine: docLine, endDocLine: docLine, commentable, text });
+  assert.equal(again.body, plan.body);
+});
+
+test('a suggestion without the marker (a reply, or a comment from github.com) is left as written', () => {
+  const body = 'Like this:\n```suggestion\n"just a string",\n```';
+  assert.equal(parseBody(body).text, body);
 });
 
 test('suggestion on a middle line keeps newline and comma', () => {

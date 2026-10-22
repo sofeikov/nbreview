@@ -2,7 +2,7 @@
   "name": "nbreview",
   "displayName": "Notebook Review for GitHub Pull Requests (Jupyter .ipynb)",
   "description": "Review Jupyter notebooks (.ipynb) in GitHub pull requests inside VS Code: rendered cell-by-cell diffs of code, Markdown, LaTeX and outputs, with line comments on any cell that post to GitHub as a normal PR review.",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "publisher": "KonstantinSofeikov",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -154,13 +154,19 @@
         "category": "Notebook Review"
       },
       {
+        "command": "nbreview.openChangesSinceReview",
+        "title": "Open Changes Since Your Review",
+        "category": "Notebook Review",
+        "icon": "$(history)"
+      },
+      {
         "command": "nbreview.addComment",
         "title": "Add Review Comment",
         "category": "Notebook Review"
       },
       {
         "command": "nbreview.editDraft",
-        "title": "Edit Pending Comment",
+        "title": "Edit Comment",
         "category": "Notebook Review",
         "icon": "$(edit)"
       },
@@ -176,9 +182,21 @@
       },
       {
         "command": "nbreview.deleteDraft",
-        "title": "Delete Pending Comment",
+        "title": "Delete Comment",
         "category": "Notebook Review",
         "icon": "$(trash)"
+      },
+      {
+        "command": "nbreview.resolveThread",
+        "title": "Resolve Conversation",
+        "category": "Notebook Review",
+        "icon": "$(check)"
+      },
+      {
+        "command": "nbreview.unresolveThread",
+        "title": "Unresolve Conversation",
+        "category": "Notebook Review",
+        "icon": "$(issue-reopened)"
       },
       {
         "command": "nbreview.refreshPrs",
@@ -286,13 +304,18 @@
           "group": "inline@1"
         },
         {
+          "command": "nbreview.openChangesSinceReview",
+          "when": "view == nbreview.files && viewItem =~ /\\bsince\\b/",
+          "group": "inline@0"
+        },
+        {
           "command": "nbreview.openVisual",
-          "when": "view == nbreview.files && viewItem == notebook",
+          "when": "view == nbreview.files && viewItem =~ /^notebook/",
           "group": "inline@1"
         },
         {
           "command": "nbreview.openNotebookDiff",
-          "when": "view == nbreview.files && viewItem == notebook",
+          "when": "view == nbreview.files && viewItem =~ /^notebook/",
           "group": "inline@2"
         }
       ],
@@ -338,24 +361,24 @@
       "comments/comment/title": [
         {
           "command": "nbreview.editDraft",
-          "when": "commentController == nbreview && comment == draft",
+          "when": "commentController == nbreview && comment =~ /^(draft|mine)$/",
           "group": "inline@1"
         },
         {
           "command": "nbreview.deleteDraft",
-          "when": "commentController == nbreview && comment == draft",
+          "when": "commentController == nbreview && comment =~ /^(draft|mine)$/",
           "group": "inline@2"
         }
       ],
       "comments/comment/context": [
         {
           "command": "nbreview.saveDraft",
-          "when": "commentController == nbreview && comment == draft",
+          "when": "commentController == nbreview && comment =~ /^(draft|mine)$/",
           "group": "inline@1"
         },
         {
           "command": "nbreview.cancelEditDraft",
-          "when": "commentController == nbreview && comment == draft",
+          "when": "commentController == nbreview && comment =~ /^(draft|mine)$/",
           "group": "inline@2"
         }
       ],
@@ -403,6 +426,30 @@
         {
           "command": "nbreview.addSingleComment",
           "when": "false"
+        },
+        {
+          "command": "nbreview.resolveThread",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.unresolveThread",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.openChangesSinceReview",
+          "when": "false"
+        }
+      ],
+      "comments/commentThread/title": [
+        {
+          "command": "nbreview.resolveThread",
+          "when": "commentController == nbreview && commentThread =~ /\\bcanResolve\\b/",
+          "group": "inline@1"
+        },
+        {
+          "command": "nbreview.unresolveThread",
+          "when": "commentController == nbreview && commentThread =~ /\\bcanUnresolve\\b/",
+          "group": "inline@1"
         }
       ]
     },
@@ -496,7 +543,8 @@
     "package": "npm run build && vsce package --no-dependencies -o nbreview.vsix",
     "demo": "npm run build && esbuild scripts/demo.ts --bundle --platform=node --format=esm --main-fields=module,main --outfile=out/demo.mjs --log-level=warning && node out/demo.mjs",
     "bench": "node scripts/bench.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "e2e": "esbuild scripts/e2e.ts --bundle --platform=node --format=esm --main-fields=module,main --alias:vscode=./scripts/e2e/vscode-stub.ts --outfile=out/e2e.mjs --log-level=warning && node out/e2e.mjs"
   },
   "dependencies": {
     "@vscode/markdown-it-katex": "^1.1.2",

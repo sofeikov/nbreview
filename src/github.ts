@@ -1,6 +1,9 @@
 // Minimal GitHub client: the REST calls for PR files and contents, GraphQL for review threads
 // and for posting a review (GraphQL is the only API that can add file-level threads to a review).
 import type { Side } from './core/anchor.ts';
+import { REACTIONS, type ReactionContent } from './core/reactions.ts';
+
+export type { ReactionContent };
 
 export interface PrInfo {
   owner: string;
@@ -36,6 +39,24 @@ export interface GhComment {
   url: string;
   author: string;
   avatarUrl?: string;
+  /** The viewer wrote it (or may otherwise change it), so it can be edited or deleted. */
+  viewerCanUpdate: boolean;
+  viewerCanDelete: boolean;
+  /** Reactions given so far (none on pending comments: GitHub doesn't allow them). */
+  reactions: GhReaction[];
+}
+
+export interface GhReaction {
+  content: ReactionContent;
+  count: number;
+  viewerHasReacted: boolean;
+}
+
+/** The viewer's last submitted review of a pull request. */
+export interface LastReview {
+  /** The commit the review was made on. */
+  sha: string;
+  submittedAt: string;
 }
 
 export interface GhThread {
@@ -48,6 +69,8 @@ export interface GhThread {
   subjectType: 'LINE' | 'FILE';
   isResolved: boolean;
   isOutdated: boolean;
+  viewerCanResolve: boolean;
+  viewerCanUnresolve: boolean;
   comments: GhComment[];
 }
 
@@ -185,8 +208,9 @@ export class GitHub {
         `query($o:String!,$r:String!,$n:Int!,$after:String){repository(owner:$o,name:$r){pullRequest(number:$n){
           reviews(states:PENDING, first:10){nodes{id viewerDidAuthor}}
           reviewThreads(first:100, after:$after){pageInfo{hasNextPage endCursor} nodes{
-            id path line startLine originalLine diffSide subjectType isResolved isOutdated
-            comments(first:100){nodes{id databaseId body createdAt url author{login avatarUrl} pullRequestReview{state}}}}}}}}`,
+            id path line startLine originalLine diffSide subjectType isResolved isOutdated viewerCanResolve viewerCanUnresolve
+            comments(first:100){nodes{id databaseId body createdAt url author{login avatarUrl} pullRequestReview{state}
+              viewerCanUpdate viewerCanDelete reactionGroups{content viewerHasReacted reactors{totalCount}}}}}}}}}`,
         { o: owner, r: repo, n: number, after },
       );
       const pr = data.repository.pullRequest;
@@ -203,6 +227,8 @@ export class GitHub {
           subjectType: t.subjectType,
           isResolved: t.isResolved,
           isOutdated: t.isOutdated,
+          viewerCanResolve: !!t.viewerCanResolve,
+          viewerCanUnresolve: !!t.viewerCanUnresolve,
           comments: t.comments.nodes
             // Every posted review comment belongs to a review. Right after a pending review is
             // discarded, GitHub can briefly return its comments with no review; they are gone.
@@ -216,6 +242,11 @@ export class GitHub {
             url: c.url,
             author: c.author?.login ?? 'ghost',
             avatarUrl: c.author?.avatarUrl,
+            viewerCanUpdate: !!c.viewerCanUpdate,
+            viewerCanDelete: !!c.viewerCanDelete,
+            reactions: (c.reactionGroups ?? [])
+              .filter((g: any) => g.content in REACTIONS && (g.reactors?.totalCount > 0 || g.viewerHasReacted))
+              .map((g: any) => ({ content: g.content, count: g.reactors?.totalCount ?? 0, viewerHasReacted: !!g.viewerHasReacted })),
           })),
         });
       }
@@ -270,9 +301,13 @@ export class GitHub {
     return out;
   }
 
-  /** GitHub's per-file "Viewed" checkboxes for the signed-in user. */
-  async getViewed(owner: string, repo: string, number: number): Promise<Map<string, boolean>> {
+  /**
+   * GitHub's per-file "Viewed" checkboxes for the signed-in user, and the files GitHub unchecked
+   * because they changed after being marked viewed.
+   */
+  async getViewed(owner: string, repo: string, number: number): Promise<{ viewed: Map<string, boolean>; dismissed: Set<string> }> {
     const viewed = new Map<string, boolean>();
+    const dismissed = new Set<string>();
     let after: string | null = null;
     for (;;) {
       const data: any = await this.graphql(
@@ -283,13 +318,45 @@ export class GitHub {
       const page = data.repository.pullRequest.files;
       for (const f of page.nodes) {
         viewed.set(f.path, f.viewerViewedState === 'VIEWED');
+        if (f.viewerViewedState === 'DISMISSED') {
+          dismissed.add(f.path);
+        }
       }
       if (!page.pageInfo.hasNextPage) {
         break;
       }
       after = page.pageInfo.endCursor;
     }
-    return viewed;
+    return { viewed, dismissed };
+  }
+
+  /** The viewer's last submitted review of the pull request, if any. */
+  async lastReview(owner: string, repo: string, number: number): Promise<LastReview | undefined> {
+    const data: any = await this.graphql(
+      `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
+        reviews(last:100){nodes{viewerDidAuthor state submittedAt commit{oid}}}}}}`,
+      { o: owner, r: repo, n: number },
+    );
+    const mine = (data.repository.pullRequest.reviews.nodes as any[])
+      .filter(r => r.viewerDidAuthor && r.state !== 'PENDING' && r.submittedAt && r.commit?.oid);
+    const last = mine[mine.length - 1];
+    return last && { sha: last.commit.oid, submittedAt: last.submittedAt };
+  }
+
+  /**
+   * Paths changed between two commits, or undefined when GitHub can't compare them (for example
+   * when the older one was rewritten away by a force push).
+   */
+  async changedBetween(owner: string, repo: string, from: string, to: string): Promise<string[] | undefined> {
+    const res = await this.request(`/repos/${owner}/${repo}/compare/${from}...${to}?per_page=300`);
+    if (res.status === 404 || res.status === 422) {
+      return undefined;
+    }
+    if (!res.ok) {
+      throw new Error(`GitHub ${res.status} comparing ${from.slice(0, 7)}...${to.slice(0, 7)}`);
+    }
+    const files = ((await res.json()) as any).files ?? [];
+    return files.flatMap((f: any) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]);
   }
 
   async setViewed(prNodeId: string, path: string, viewed: boolean): Promise<void> {
@@ -370,20 +437,6 @@ export class GitHub {
     );
   }
 
-  async updatePendingComment(commentId: string, body: string): Promise<void> {
-    await this.graphql(
-      `mutation($input:UpdatePullRequestReviewCommentInput!){updatePullRequestReviewComment(input:$input){pullRequestReviewComment{id}}}`,
-      { input: { pullRequestReviewCommentId: commentId, body } },
-    );
-  }
-
-  async deletePendingComment(commentId: string): Promise<void> {
-    await this.graphql(
-      `mutation($input:DeletePullRequestReviewCommentInput!){deletePullRequestReviewComment(input:$input){clientMutationId}}`,
-      { input: { id: commentId } },
-    );
-  }
-
   /** Discards a pending review and all its comments. */
   async deleteReview(reviewId: string): Promise<void> {
     await this.graphql(
@@ -409,5 +462,35 @@ export class GitHub {
       { pr: pr.nodeId, sha: pr.headSha, event, body: body || null },
     );
     return data.addPullRequestReview.pullRequestReview.url;
+  }
+
+  // --- Comments and threads, pending or published ---------------------------------------------
+
+  /** Changes the text of a comment: a pending one, or a published one the viewer wrote. */
+  async updateComment(commentId: string, body: string): Promise<void> {
+    await this.graphql(
+      `mutation($input:UpdatePullRequestReviewCommentInput!){updatePullRequestReviewComment(input:$input){pullRequestReviewComment{id}}}`,
+      { input: { pullRequestReviewCommentId: commentId, body } },
+    );
+  }
+
+  /** Deletes a comment: a pending one, or a published one the viewer wrote. */
+  async deleteComment(commentId: string): Promise<void> {
+    await this.graphql(
+      `mutation($input:DeletePullRequestReviewCommentInput!){deletePullRequestReviewComment(input:$input){clientMutationId}}`,
+      { input: { id: commentId } },
+    );
+  }
+
+  async setResolved(threadId: string, resolved: boolean): Promise<void> {
+    const mutation = resolved ? 'resolveReviewThread' : 'unresolveReviewThread';
+    const input = resolved ? 'ResolveReviewThreadInput' : 'UnresolveReviewThreadInput';
+    await this.graphql(`mutation($input:${input}!){${mutation}(input:$input){thread{id isResolved}}}`, { input: { threadId } });
+  }
+
+  async react(subjectId: string, content: ReactionContent, add: boolean): Promise<void> {
+    const mutation = add ? 'addReaction' : 'removeReaction';
+    const input = add ? 'AddReactionInput' : 'RemoveReactionInput';
+    await this.graphql(`mutation($input:${input}!){${mutation}(input:$input){reaction{content}}}`, { input: { subjectId, content } });
   }
 }

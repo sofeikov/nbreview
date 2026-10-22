@@ -4,11 +4,13 @@ import * as vscode from 'vscode';
 import type { ReviewState } from './state.ts';
 import type { TextReview } from './textReview.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
-import type { HostMessage, WebviewMessage } from './webview/protocol.ts';
+import type { HostMessage, SinceState, WebviewMessage } from './webview/protocol.ts';
 import { basename } from './paths.ts';
 
 export class VisualReview implements vscode.Disposable {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
+  /** Notebooks shown compared with the viewer's last review instead of the pull request's base. */
+  private readonly sinceOn = new Set<string>();
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -42,10 +44,16 @@ export class VisualReview implements vscode.Disposable {
     vscode.Disposable.from(...this.disposables).dispose();
   }
 
-  open(nbPath: string, revealCellId?: string): void {
+  open(nbPath: string, revealCellId?: string, options: { since?: boolean } = {}): void {
+    if (options.since !== undefined) {
+      this.setSince(nbPath, options.since);
+    }
     const existing = this.panels.get(nbPath);
     if (existing) {
       existing.reveal();
+      if (options.since !== undefined) {
+        void this.sync(existing, nbPath, { model: true, threads: true });
+      }
       if (revealCellId) {
         this.post(existing, { type: 'reveal', cellKey: revealCellId });
       }
@@ -114,6 +122,9 @@ export class VisualReview implements vscode.Disposable {
         return;
       }
       case 'addComment': {
+        if (msg.anchor.side === 'LEFT' && this.since(nbPath)?.on) {
+          throw new Error('The old side shows your last review, which is not part of the pull request: comment on the new side.');
+        }
         const doc = this.state.doc(nbPath, msg.anchor.side);
         const lines = doc && docLinesForAnchor(doc, msg.anchor);
         if (!lines) {
@@ -132,11 +143,21 @@ export class VisualReview implements vscode.Disposable {
         await (msg.mode === 'single' ? this.state.postSingle(draft) : this.state.addDraft(draft));
         return;
       }
-      case 'editDraft':
-        await this.state.updateDraft(msg.key, msg.text);
+      case 'editComment':
+        await this.state.editComment(msg.id, msg.text);
         return;
-      case 'deleteDraft':
-        await this.state.removeDraft(msg.key);
+      case 'deleteComment':
+        await this.state.deleteComment(msg.id);
+        return;
+      case 'resolve':
+        await this.state.setResolved(msg.threadId, msg.resolved);
+        return;
+      case 'react':
+        await this.state.react(msg.commentId, msg.content, msg.add);
+        return;
+      case 'setSince':
+        this.setSince(nbPath, msg.on);
+        await this.sync(panel, nbPath, { model: true, threads: true });
         return;
       case 'discardReview':
         await this.state.discardReview();
@@ -173,23 +194,65 @@ export class VisualReview implements vscode.Disposable {
   // notebook is opened in the visual review, so the extension itself starts quickly.
   private viewModel?: Promise<typeof import('./viewModel.ts')>;
 
+  private setSince(nbPath: string, on: boolean): void {
+    if (on) {
+      this.sinceOn.add(nbPath);
+    } else {
+      this.sinceOn.delete(nbPath);
+    }
+  }
+
   /** Sends the page what changed, in order: the notebook, then its threads, then the toolbar state. */
   private async sync(panel: vscode.WebviewPanel, nbPath: string, what: { model?: boolean; threads?: boolean }): Promise<void> {
     const vm = await (this.viewModel ??= import('./viewModel.ts'));
     const s = this.state.session;
     const entry = this.state.entry(nbPath);
+    const since = this.since(nbPath);
     if (s && entry && what.model) {
-      this.post(panel, { type: 'model', model: vm.buildViewModel(entry, { number: s.pr.number, title: s.pr.title, url: s.pr.url }) });
+      const base = since?.on ? await s.sinceReviewDoc(nbPath) : undefined;
+      const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
+      this.post(panel, { type: 'model', model: vm.buildViewModel(entry, pr, base && since ? { base, label: since.label } : undefined) });
     }
     if (what.threads) {
-      const threads = s && entry ? vm.buildThreads(entry, s.threadsFor(nbPath), p => this.state.describe(p.gh)) : [];
+      // Compared with the last review, the old side isn't the pull request's: its threads are left out.
+      const placed = s ? s.threadsFor(nbPath).filter(p => !since?.on || p.side === 'RIGHT') : [];
+      const threads = s && entry ? vm.buildThreads(entry, placed, p => this.state.describe(p.gh)) : [];
       this.post(panel, { type: 'threads', threads });
     }
     this.post(panel, this.stateMessage(nbPath));
   }
 
+  /** Whether the notebook can be, and is, compared with the viewer's last review. */
+  private since(nbPath: string): SinceState | undefined {
+    const s = this.state.session;
+    const last = s?.lastReview;
+    if (!s || !last) {
+      return undefined;
+    }
+    const date = new Date(last.submittedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    const label = `your review on ${date} (${last.sha.slice(0, 7)})`;
+    if (s.sinceReviewProblem) {
+      return { available: false, on: false, label, problem: s.sinceReviewProblem };
+    }
+    const available = s.changedSince(nbPath);
+    return {
+      available,
+      on: available && this.sinceOn.has(nbPath),
+      label,
+      ...(available ? {} : { problem: `No changes to this notebook since ${label}.` }),
+    };
+  }
+
   private stateMessage(nbPath: string): HostMessage {
-    return { type: 'state', state: { viewed: this.state.isViewed(nbPath), pending: this.state.pendingCount(), pendingReview: this.state.hasPendingReview() } };
+    return {
+      type: 'state',
+      state: {
+        viewed: this.state.isViewed(nbPath),
+        pending: this.state.pendingCount(),
+        pendingReview: this.state.hasPendingReview(),
+        since: this.since(nbPath),
+      },
+    };
   }
 
   private post(panel: vscode.WebviewPanel, msg: HostMessage): void {

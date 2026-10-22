@@ -1,7 +1,8 @@
 // The visual review page. Renders the notebook pair as cell cards (rendered markdown, highlighted
 // code diffs, outputs) and the review threads, and sends comment actions back to the extension.
 import DOMPurify from 'dompurify';
-import type { Anchor, CellVM, CommentVM, HostMessage, OutputVM, PanelState, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
+import type { Anchor, CellVM, CommentVM, HostMessage, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
+import { REACTIONS, REACTION_NAMES, type ReactionContent } from '../core/reactions.ts';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: WebviewMessage): void;
@@ -19,6 +20,8 @@ interface UiState {
   expanded: Record<string, boolean>;
   /** Threads opened or closed by hand (resolved ones start closed). */
   threadOpen: Record<string, boolean>;
+  /** Leave resolved threads out of the page. */
+  hideResolved?: boolean;
   scrollY?: number;
 }
 
@@ -34,12 +37,16 @@ const saved = (vscode.getState() ?? {}) as Partial<UiState>;
 const ui: UiState = { showAll: false, mdSource: {}, expanded: {}, threadOpen: {}, ...saved };
 let model: ViewModel | undefined;
 let threads: ThreadVM[] = [];
+/** The threads on the page: all of them, or the unresolved ones. */
+let shown: ThreadVM[] = [];
 let panel: PanelState = { viewed: false, pending: 0, pendingReview: false };
 let requestSeq = 0;
 const composers = new Map<string, Composer>();
 const replies = new Map<string, { text: string; saving?: number; savingMode?: 'review' | 'single' }>();
-/** Pending comments being edited: their text, and whether the edit is being saved to GitHub. */
+/** The viewer's comments being edited, by id: their text, and whether the edit is being saved to GitHub. */
 const edits = new Map<string, { text: string; saving?: boolean }>();
+/** The comment whose reaction picker is open. */
+let reactingTo: string | undefined;
 let focusKey: string | undefined;
 let restoredScroll = false;
 
@@ -141,6 +148,7 @@ function render(): void {
   focusKey = active?.dataset.focusKey;
   const caret = active instanceof HTMLTextAreaElement ? active.selectionStart : undefined;
 
+  shown = ui.hideResolved ? threads.filter(t => !t.resolved) : threads;
   app.replaceChildren(renderToolbar(model), renderCells(model), h('div', { class: 'toast', id: 'toast' }));
   if (!restoredScroll) {
     restoredScroll = true;
@@ -183,11 +191,18 @@ function renderToolbar(m: ViewModel): HTMLElement {
       h('span', { class: 'file', text: m.path.slice(slash + 1) }),
       h('a', { class: 'pr', href: m.pr.url, title: `${m.pr.title} (open on GitHub)`, text: `#${m.pr.number}` }),
       ...chips,
-      h('span', { class: 'summary', text: describe.join(' · ') || 'no cell changes' }),
+      h('span', { class: 'summary', text: (describe.join(' · ') || 'no cell changes') + (m.since ? ` since ${m.since.label}` : '') }),
     ),
     h(
       'div',
       { class: 'controls' },
+      panel.since && h('div', { class: 'segmented' },
+        button('Whole PR', () => post({ type: 'setSince', on: false }), { class: panel.since.on ? '' : 'on', title: 'Compare with the base of the pull request' }),
+        button([icon('history'), 'Since your review'], () => post({ type: 'setSince', on: true }), {
+          class: panel.since.on ? 'on' : '',
+          disabled: !panel.since.available,
+          title: panel.since.problem ?? `Only what changed after ${panel.since.label}`,
+        })),
       segmented([
         ['Changes', 'Show changed cells; fold the rest', !ui.showAll, () => { ui.showAll = false; persist(); render(); }],
         ['All cells', 'Show every cell', ui.showAll, () => { ui.showAll = true; persist(); render(); }],
@@ -199,10 +214,15 @@ function renderToolbar(m: ViewModel): HTMLElement {
       h('div', { class: 'segmented' },
         button(icon('arrow-up'), () => jump(-1), { title: 'Previous change (p)' }),
         button(icon('arrow-down'), () => jump(1), { title: 'Next change (n)' })),
-      threads.length > 0 && button([icon('comment-discussion'), String(threads.length)], () => jumpThread(1), {
-        class: 'ghost',
-        title: 'Next comment (c)',
-      }),
+      threads.length > 0 && h('div', { class: 'segmented' },
+        button([icon('comment-discussion'), threadCount()], () => jumpThread(1), {
+          title: 'Next comment (c). The count is of unresolved threads, out of all of them.',
+        }),
+        threads.some(t => t.resolved) && button(icon(ui.hideResolved ? 'filter-filled' : 'filter'), () => { ui.hideResolved = !ui.hideResolved; persist(); render(); }, {
+          class: ui.hideResolved ? 'on' : '',
+          title: ui.hideResolved ? 'Show resolved threads' : 'Hide resolved threads',
+          'aria-pressed': ui.hideResolved ? 'true' : 'false',
+        })),
       button([icon('diff'), 'Text diff'], () => post({ type: 'openTextDiff' }), { class: 'ghost', title: 'Open the line-by-line text diff' }),
       button([icon('arrow-right'), 'Next file'], () => post({ type: 'nextFile' }), { class: 'ghost', title: 'Open the next file not marked viewed' }),
       h('label', { class: 'viewed', title: 'Mark this notebook as viewed on GitHub' },
@@ -217,6 +237,17 @@ function renderToolbar(m: ViewModel): HTMLElement {
         submitBox.open && renderSubmitBox()),
     ),
   );
+}
+
+/** "3" when every thread is open, "2/5" when some are resolved. */
+function threadCount(): string {
+  const open = threads.filter(t => !t.resolved).length;
+  return open === threads.length ? String(open) : `${open}/${threads.length}`;
+}
+
+/** Comments can't be made on the old side when it shows the last review: it isn't part of the pull request. */
+function commentable(side: Side): boolean {
+  return !(model?.since && side === 'LEFT');
 }
 
 // "Finish your review", like on GitHub: a summary, how to submit, and the pending count.
@@ -304,11 +335,11 @@ function updateSubmitState(): void {
 }
 
 function threadsFor(pred: (t: ThreadVM) => boolean): ThreadVM[] {
-  return threads.filter(pred);
+  return shown.filter(pred);
 }
 
 function cellHasThreads(c: CellVM): boolean {
-  return threads.some(t => (t.anchor.side === 'LEFT' ? t.anchor.cellId === c.baseId : t.anchor.cellId === c.headId))
+  return shown.some(t => (t.anchor.side === 'LEFT' ? t.anchor.cellId === c.baseId : t.anchor.cellId === c.headId))
     || [...composers.values()].some(x => (x.anchor.side === 'LEFT' ? x.anchor.cellId === c.baseId : x.anchor.cellId === c.headId));
 }
 
@@ -368,7 +399,7 @@ function renderCell(c: CellVM): HTMLElement {
     isMd && h('div', { class: 'segmented small' },
       button('Rendered', () => { delete ui.mdSource[c.key]; persist(); render(); }, { class: rendered ? 'on' : '' }),
       button('Source', () => { ui.mdSource[c.key] = true; persist(); render(); }, { class: rendered ? '' : 'on' })),
-    button(icon('comment'), () => openComposer(cellAnchor()), { class: 'icon-btn', title: 'Comment on this cell' }),
+    commentable(cellAnchor().side) && button(icon('comment'), () => openComposer(cellAnchor()), { class: 'icon-btn', title: 'Comment on this cell' }),
     c.headId && button(icon('diff'), () => post({ type: 'openTextDiff', cellId: c.headId }), { class: 'icon-btn', title: 'Show in text diff' }),
   );
   const card = h('section', { class: `cell ${c.status}${c.moved ? ' moved' : ''}`, data: { key: c.key, head: c.headId, base: c.baseId } }, head);
@@ -456,7 +487,7 @@ function sourceThreads(c: CellVM, half: Half | undefined): ThreadVM[] {
     return [];
   }
   const id = half.side === 'LEFT' ? c.baseId : c.headId;
-  return threads.filter(t => t.anchor.kind === 'source' && t.anchor.side === half.side && t.anchor.cellId === id && (t.anchor.end ?? t.anchor.start) === half.line);
+  return shown.filter(t => t.anchor.kind === 'source' && t.anchor.side === half.side && t.anchor.cellId === id && (t.anchor.end ?? t.anchor.start) === half.line);
 }
 
 function sourceComposers(c: CellVM, half: Half | undefined): Composer[] {
@@ -559,6 +590,10 @@ function appendRow(body: HTMLElement, c: CellVM, r: Row): void {
 function halfCells(c: CellVM, half: Half, split: boolean): HTMLElement {
   const cellId = half.side === 'LEFT' ? c.baseId : c.headId;
   const code = h('div', { class: `code ${half.kind}${split ? ` side-${half.side}` : ''}`, data: { side: half.side, line: half.line, cell: cellId } });
+  if (!commentable(half.side)) {
+    code.append(h('span', { class: 'text', html: half.html || '&#8203;' }));
+    return code;
+  }
   const add = h('button', {
     type: 'button',
     class: 'add-comment',
@@ -657,7 +692,7 @@ function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string)
   const blocks = [...col.children].filter((el): el is HTMLElement => el instanceof HTMLElement && !el.classList.contains('col-label'));
   const placed = new Set<ThreadVM | Composer>();
   const items = [
-    ...threads.filter(t => t.anchor.kind === 'source' && t.anchor.side === side && t.anchor.cellId === cellId),
+    ...shown.filter(t => t.anchor.kind === 'source' && t.anchor.side === side && t.anchor.cellId === cellId),
     ...[...composers.values()].filter(x => x.anchor.kind === 'source' && x.anchor.side === side && x.anchor.cellId === cellId),
   ];
   for (const block of blocks) {
@@ -670,12 +705,13 @@ function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string)
     if (block.matches('.md-changed, .md-added, .md-removed') || block.querySelector('.md-changed, .md-added, .md-removed')) {
       block.classList.add(side === 'LEFT' ? 'changed-del' : 'changed-add');
     }
-    const add = button('+', () => openComposer({ side, cellId, kind: 'source', start: range[0], end: range[1] }), {
-      class: 'add-comment block',
-      title: 'Comment on this paragraph',
-      'aria-label': 'Add comment',
-    });
-    block.prepend(add);
+    if (commentable(side)) {
+      block.prepend(button('+', () => openComposer({ side, cellId, kind: 'source', start: range[0], end: range[1] }), {
+        class: 'add-comment block',
+        title: 'Comment on this paragraph',
+        'aria-label': 'Add comment',
+      }));
+    }
     const here = items.filter(x => {
       const line = x.anchor.end ?? x.anchor.start ?? -1;
       return line >= range[0] && line <= range[1] && !placed.has(x);
@@ -727,13 +763,13 @@ function renderOutput(c: CellVM, side: Side, o: OutputVM): HTMLElement {
   } else {
     content = h('div', { class: 'none', text: o.label });
   }
-  const ts = threads.filter(t => t.anchor.kind === 'output' && t.anchor.side === side && t.anchor.cellId === cellId && t.anchor.outputIndex === o.index);
+  const ts = shown.filter(t => t.anchor.kind === 'output' && t.anchor.side === side && t.anchor.cellId === cellId && t.anchor.outputIndex === o.index);
   const cs = [...composers.values()].filter(x => x.anchor.kind === 'output' && x.anchor.side === side && x.anchor.cellId === cellId && x.anchor.outputIndex === o.index);
   return h('div', { class: `output ${o.kind}` },
     h('div', { class: 'output-head' },
       h('span', { text: o.label }),
       h('span', { class: 'spacer' }),
-      button(icon('comment'), () => openComposer(anchor), { class: 'icon-btn', title: 'Comment on this output' })),
+      commentable(side) && button(icon('comment'), () => openComposer(anchor), { class: 'icon-btn', title: 'Comment on this output' })),
     h('div', { class: 'output-body' }, content),
     ...ts.map(renderThread),
     ...cs.map(renderComposer));
@@ -760,8 +796,24 @@ function renderThread(t: ThreadVM): HTMLElement {
   if (t.canReply) {
     el.append(renderReply(t));
   }
+  if (t.canResolve || t.canUnresolve) {
+    const busy = resolving.has(t.id);
+    el.append(h('div', { class: 'thread-actions' },
+      button(
+        [icon(t.canResolve ? 'check' : 'issue-reopened'), busy ? (t.canResolve ? 'Resolving…' : 'Unresolving…') : t.canResolve ? 'Resolve conversation' : 'Unresolve conversation'],
+        () => {
+          resolving.add(t.id);
+          post({ type: 'resolve', threadId: t.id, resolved: t.canResolve });
+          render();
+        },
+        { class: 'ghost', disabled: busy, title: t.canResolve ? 'Mark this thread resolved on GitHub' : 'Open this thread again on GitHub' },
+      )));
+  }
   return el;
 }
+
+/** Threads being resolved or unresolved on GitHub. */
+const resolving = new Set<string>();
 
 function stripTags(html: string): string {
   const div = document.createElement('div');
@@ -770,43 +822,80 @@ function stripTags(html: string): string {
 }
 
 function renderComment(c: CommentVM): HTMLElement {
-  const editing = c.draftKey !== undefined && edits.has(c.draftKey);
+  const editing = edits.has(c.id);
   const avatar = c.avatarUrl ? h('img', { class: 'avatar', src: c.avatarUrl, alt: '' }) : h('span', { class: 'avatar me', text: c.author.slice(0, 1) });
   const meta = h('div', { class: 'meta' },
     h('b', { text: c.author }),
     c.createdAt && h('span', { class: 'time', title: new Date(c.createdAt).toLocaleString(), text: timeAgo(c.createdAt) }),
     c.pending && h('span', { class: 'pill pending', text: 'Pending' }),
     h('span', { class: 'spacer' }),
+    c.reactions && !editing && reactionPicker(c, c.reactions),
     c.url && button(icon('link-external'), () => post({ type: 'openExternal', url: c.url! }), { class: 'icon-btn', title: 'View on GitHub' }),
-    c.pending && !editing && button(icon('edit'), () => { edits.set(c.draftKey!, { text: c.text ?? '' }); focusKey = `edit:${c.draftKey}`; render(); focus(`edit:${c.draftKey}`); }, { class: 'icon-btn', title: 'Edit' }),
-    c.pending && !editing && deleteButton(c.draftKey!));
+    c.canEdit && !editing && button(icon('edit'), () => { edits.set(c.id, { text: c.text ?? '' }); focusKey = `edit:${c.id}`; render(); focus(`edit:${c.id}`); }, { class: 'icon-btn', title: 'Edit' }),
+    c.canDelete && !editing && deleteButton(c));
   let body: HTMLElement;
   if (editing) {
-    const key = c.draftKey!;
-    const edit = edits.get(key)!;
-    const area = textarea(`edit:${key}`, edit.text, v => (edit.text = v), () => save(), () => cancel());
+    const edit = edits.get(c.id)!;
+    const area = textarea(`edit:${c.id}`, edit.text, v => (edit.text = v), () => save(), () => cancel());
     // The editor stays open until GitHub has the new text; if saving fails, the text is still here.
     const save = () => {
       if (!edit.saving && area.value.trim()) {
         edit.saving = true;
-        post({ type: 'editDraft', key, text: area.value });
+        post({ type: 'editComment', id: c.id, text: area.value });
         render();
       }
     };
-    const cancel = () => { edits.delete(key); render(); };
+    const cancel = () => { edits.delete(c.id); render(); };
     body = h('div', { class: 'editor' }, area, h('div', { class: 'actions' },
       button('Cancel', cancel),
       button(edit.saving ? 'Saving…' : 'Save', save, { class: 'primary', disabled: !!edit.saving })));
   } else {
     body = h('div', { class: 'body markdown', html: c.html });
   }
-  return h('div', { class: 'comment' }, avatar, h('div', { class: 'content' }, meta, body));
+  const given = c.reactions?.filter(r => r.count > 0) ?? [];
+  return h('div', { class: 'comment' }, avatar, h('div', { class: 'content' }, meta, body,
+    !editing && given.length > 0 && h('div', { class: 'reactions' },
+      ...given.map(r => button([h('span', { class: 'emoji', text: REACTIONS[r.content] }), String(r.count)], () => react(c, c.reactions!, r.content), {
+        class: `reaction${r.mine ? ' mine' : ''}`,
+        title: `${REACTION_NAMES[r.content]}: ${r.mine ? 'click to take back your reaction' : 'click to react too'}`,
+      })))));
 }
 
-function deleteButton(key: string): HTMLButtonElement {
+/** Adds or takes back the viewer's reaction. Shown at once; GitHub's answer replaces it when the threads come back. */
+function react(c: CommentVM, reactions: ReactionVM[], content: ReactionContent): void {
+  reactingTo = undefined;
+  const r = reactions.find(x => x.content === content);
+  const add = !r?.mine;
+  if (r) {
+    r.mine = add;
+    r.count += add ? 1 : -1;
+  } else {
+    reactions.push({ content, count: 1, mine: true });
+  }
+  post({ type: 'react', commentId: c.id, content, add });
+  render();
+}
+
+/** The smiley button among the comment's icons, and the eight reactions it offers, as on github.com. */
+function reactionPicker(c: CommentVM, reactions: ReactionVM[]): HTMLElement {
+  return h('span', { class: 'reaction-wrap' },
+    button(icon('reactions'), () => { reactingTo = reactingTo === c.id ? undefined : c.id; render(); }, {
+      class: 'icon-btn',
+      title: 'Add a reaction',
+      'aria-expanded': reactingTo === c.id ? 'true' : 'false',
+    }),
+    reactingTo === c.id && h('div', { class: 'reaction-picker', role: 'menu' },
+      ...(Object.keys(REACTIONS) as ReactionContent[]).map(content => button(REACTIONS[content], () => react(c, reactions, content), {
+        class: reactions.some(r => r.content === content && r.mine) ? 'mine' : '',
+        title: REACTION_NAMES[content],
+        role: 'menuitem',
+      }))));
+}
+
+function deleteButton(c: CommentVM): HTMLButtonElement {
   const btn = button(icon('trash'), () => {
     if (btn.dataset.armed) {
-      post({ type: 'deleteDraft', key });
+      post({ type: 'deleteComment', id: c.id });
     } else {
       btn.dataset.armed = '1';
       btn.classList.add('armed');
@@ -814,7 +903,7 @@ function deleteButton(key: string): HTMLButtonElement {
       btn.append(' Delete?');
       setTimeout(() => { delete btn.dataset.armed; btn.classList.remove('armed'); btn.lastChild?.remove(); }, 3000);
     }
-  }, { class: 'icon-btn', title: 'Delete pending comment' });
+  }, { class: 'icon-btn', title: c.pending ? 'Delete pending comment' : 'Delete this comment from GitHub' });
   return btn;
 }
 
@@ -939,6 +1028,9 @@ function focus(key: string): void {
 }
 
 function openComposer(anchor: Anchor): void {
+  if (!commentable(anchor.side)) {
+    return;
+  }
   const key = anchorKey(anchor);
   if (!composers.has(key)) {
     const requestId = ++requestSeq;
@@ -1081,6 +1173,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
           edits.delete(key);
         }
       }
+      resolving.clear();
       render();
       break;
     case 'state':
@@ -1130,6 +1223,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       for (const e of edits.values()) {
         e.saving = undefined;
       }
+      resolving.clear();
       render();
       toast(msg.message);
       break;

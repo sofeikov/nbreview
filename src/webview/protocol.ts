@@ -1,10 +1,16 @@
 // Messages and data shared by the extension host and the visual review page.
+import type { ReactionContent } from '../core/reactions.ts';
 
 export type Side = 'LEFT' | 'RIGHT';
 
 export interface ViewModel {
   pr: { number: number; title: string; url: string };
   path: string;
+  /**
+   * Set when the old side is the notebook as it was at the viewer's last review rather than the
+   * pull request's base. Comments can't be made on that side: it isn't part of the pull request.
+   */
+  since?: { label: string };
   stats: { additions: number; deletions: number; modified: number; added: number; removed: number; moved: number };
   cells: CellVM[];
 }
@@ -62,15 +68,26 @@ export interface Anchor {
 }
 
 export interface CommentVM {
+  /** GitHub id. */
+  id: string;
   author: string;
   avatarUrl?: string;
   html: string;
   createdAt?: string;
   url?: string;
   pending: boolean;
-  draftKey?: string;
-  /** Raw markdown of a pending comment, for editing. */
+  canEdit: boolean;
+  canDelete: boolean;
+  /** The viewer's own text (without the cell header), for editing. */
   text?: string;
+  /** Reactions given so far; undefined on pending comments, which GitHub doesn't take reactions on. */
+  reactions?: ReactionVM[];
+}
+
+export interface ReactionVM {
+  content: ReactionContent;
+  count: number;
+  mine: boolean;
 }
 
 export interface ThreadVM {
@@ -82,6 +99,8 @@ export interface ThreadVM {
   outdated: boolean;
   draft: boolean;
   canReply: boolean;
+  canResolve: boolean;
+  canUnresolve: boolean;
   comments: CommentVM[];
 }
 
@@ -91,6 +110,18 @@ export interface PanelState {
   pending: number;
   /** The viewer has a pending review; GitHub doesn't take single comments next to one. */
   pendingReview: boolean;
+  /** Comparing with the viewer's last review: possible for this notebook, and switched on. */
+  since?: SinceState;
+}
+
+export interface SinceState {
+  /** Whether "Since your review" can be chosen: there is a review and this notebook changed after it. */
+  available: boolean;
+  on: boolean;
+  /** For example "your review on 22 Oct (abc1234)". */
+  label: string;
+  /** Why it isn't available, when there is a review. */
+  problem?: string;
 }
 
 export type HostMessage =
@@ -107,8 +138,11 @@ export type WebviewMessage =
   /** `single` posts to GitHub straight away; `review` adds a pending comment to the review. */
   | { type: 'addComment'; anchor: Anchor; text: string; requestId: number; mode: 'review' | 'single' }
   | { type: 'reply'; threadId: string; text: string; requestId: number; mode: 'review' | 'single' }
-  | { type: 'editDraft'; key: string; text: string }
-  | { type: 'deleteDraft'; key: string }
+  | { type: 'editComment'; id: string; text: string }
+  | { type: 'deleteComment'; id: string }
+  | { type: 'resolve'; threadId: string; resolved: boolean }
+  | { type: 'react'; commentId: string; content: ReactionContent; add: boolean }
+  | { type: 'setSince'; on: boolean }
   | { type: 'discardReview' }
   | { type: 'nextFile' }
   | { type: 'plan'; anchor: Anchor; requestId: number }

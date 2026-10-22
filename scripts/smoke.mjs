@@ -39,6 +39,7 @@ const RUN = [
   { command: 'nbreview.openVisual' },
   { command: 'nbreview.openNotebookDiff' },
   { command: 'nbreview.openFileDiff', args: ['README.md'] },
+  { command: 'nbreview.openChangesSinceReview', args: ['README.md'] },
   { command: 'nbreview.openOnGitHub' },
   { command: 'nbreview.markViewed' },
   { command: 'nbreview.markNotViewed' },
@@ -60,6 +61,8 @@ const SKIP = {
   'nbreview.saveDraft': 'needs a comment widget',
   'nbreview.cancelEditDraft': 'needs a comment widget',
   'nbreview.deleteDraft': 'needs a comment widget',
+  'nbreview.resolveThread': 'needs a comment thread',
+  'nbreview.unresolveThread': 'needs a comment thread',
 };
 
 const repo = resolve('.');

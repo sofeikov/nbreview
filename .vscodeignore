@@ -1,6 +1,7 @@
 **
 !dist/**
 !media/icon.svg
+!media/reactions/**
 !images/icon.png
 !syntaxes/**
 !language-configuration.json

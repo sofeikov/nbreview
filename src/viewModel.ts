@@ -6,9 +6,18 @@ import { anchorForDocLines, type ReviewDoc } from './core/reviewDoc.ts';
 import { parseBody } from './core/anchor.ts';
 import { highlightLines, renderCommentBody, renderMarkdownCell } from './render.ts';
 import { renderMarkdownDiff } from './mdDiff.ts';
-import type { CellVM, OutputVM, ThreadVM, ViewModel } from './webview/protocol.ts';
+import type { CellVM, CommentVM, OutputVM, ThreadVM, ViewModel } from './webview/protocol.ts';
 
-export function buildViewModel(entry: NotebookEntry, pr: { number: number; title: string; url: string }): ViewModel {
+/**
+ * The page's data for a notebook. With `since`, the old side is the notebook as it was at the
+ * viewer's last review instead of the pull request's base.
+ */
+export function buildViewModel(
+  prEntry: NotebookEntry,
+  pr: { number: number; title: string; url: string },
+  since?: { base: ReviewDoc; label: string },
+): ViewModel {
+  const entry = since ? { ...prEntry, base: since.base } : prEntry;
   const language = entry.head.notebook.language || entry.base.notebook.language || 'python';
   const pairs = diffCells(entry.base.notebook.cells, entry.head.notebook.cells);
   const cells: CellVM[] = pairs.map(p => {
@@ -39,12 +48,15 @@ export function buildViewModel(entry: NotebookEntry, pr: { number: number; title
     };
   });
   const count = (s: CellVM['status']) => cells.filter(c => c.status === s).length;
+  // The file's own counts are for the whole pull request; since a review, the changed source lines are counted.
+  const lines = (op: 'add' | 'del') => cells.reduce((n, c) => n + c.ops.filter(o => o.op === op).length, 0);
   return {
     pr,
     path: entry.path,
+    ...(since ? { since: { label: since.label } } : {}),
     stats: {
-      additions: entry.file.additions,
-      deletions: entry.file.deletions,
+      additions: since ? lines('add') : entry.file.additions,
+      deletions: since ? lines('del') : entry.file.deletions,
       modified: count('modified'),
       added: count('added'),
       removed: count('removed'),
@@ -114,11 +126,27 @@ export function buildThreads(entry: NotebookEntry, placed: PlacedThread[], descr
       outdated: p.gh.isOutdated && !ownPending,
       draft: ownPending,
       canReply: true,
-      comments: p.gh.comments.map(c => {
+      canResolve: p.gh.viewerCanResolve && !ownPending,
+      canUnresolve: p.gh.viewerCanUnresolve && !ownPending,
+      comments: p.gh.comments.map((c): CommentVM => {
         const text = parseBody(c.body).text;
+        const canEdit = c.pending || c.viewerCanUpdate;
+        const canDelete = c.pending || c.viewerCanDelete;
         return c.pending
-          ? { author: 'You', html: renderCommentBody(text), createdAt: c.createdAt, pending: true, draftKey: c.id, text }
-          : { author: c.author, avatarUrl: c.avatarUrl, html: renderCommentBody(text), createdAt: c.createdAt, url: c.url, pending: false };
+          ? { id: c.id, author: 'You', html: renderCommentBody(text), createdAt: c.createdAt, pending: true, canEdit, canDelete, text }
+          : {
+            id: c.id,
+            author: c.author,
+            avatarUrl: c.avatarUrl,
+            html: renderCommentBody(text),
+            createdAt: c.createdAt,
+            url: c.url,
+            pending: false,
+            canEdit,
+            canDelete,
+            ...(canEdit ? { text } : {}),
+            reactions: c.reactions.map(r => ({ content: r.content, count: r.count, mine: r.viewerHasReacted })),
+          };
       }),
     });
   }
