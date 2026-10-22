@@ -1,0 +1,48 @@
+{
+  "scopeName": "source.nbreview",
+  "name": "Notebook Review",
+  "patterns": [
+    { "include": "#code-cell" },
+    { "include": "#markdown-cell" },
+    { "include": "#raw-cell" }
+  ],
+  "repository": {
+    "header": {
+      "match": "^━━━ (code|markdown|raw) · (\\S+) ━+$",
+      "name": "markup.heading.nbreview",
+      "captures": { "1": { "name": "keyword.other.cell-type.nbreview" }, "2": { "name": "variable.other.cell-id.nbreview" } }
+    },
+    "output": {
+      "match": "^  (▸ out: .*|│ .*)$",
+      "name": "comment.line.output.nbreview"
+    },
+    "code-cell": {
+      "begin": "^(━━━ )(code)( · )(\\S+)( ━+)$",
+      "beginCaptures": {
+        "0": { "name": "markup.heading.nbreview" },
+        "2": { "name": "keyword.other.cell-type.nbreview" },
+        "4": { "name": "variable.other.cell-id.nbreview" }
+      },
+      "end": "(?=^━━━ (code|markdown|raw) · )",
+      "contentName": "meta.embedded.block.python",
+      "patterns": [{ "include": "#output" }, { "include": "source.python" }]
+    },
+    "markdown-cell": {
+      "begin": "^(━━━ )(markdown)( · )(\\S+)( ━+)$",
+      "beginCaptures": {
+        "0": { "name": "markup.heading.nbreview" },
+        "2": { "name": "keyword.other.cell-type.nbreview" },
+        "4": { "name": "variable.other.cell-id.nbreview" }
+      },
+      "end": "(?=^━━━ (code|markdown|raw) · )",
+      "contentName": "meta.embedded.block.markdown",
+      "patterns": [{ "include": "text.html.markdown" }]
+    },
+    "raw-cell": {
+      "begin": "^(━━━ )(raw)( · )(\\S+)( ━+)$",
+      "beginCaptures": { "0": { "name": "markup.heading.nbreview" } },
+      "end": "(?=^━━━ (code|markdown|raw) · )",
+      "contentName": "string.unquoted.raw.nbreview"
+    }
+  }
+}

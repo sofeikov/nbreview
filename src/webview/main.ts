@@ -1,0 +1,1062 @@
+// The visual review page. Renders the notebook pair as cell cards (rendered markdown, highlighted
+// code diffs, outputs) and the review threads, and sends comment actions back to the extension.
+import DOMPurify from 'dompurify';
+import type { Anchor, CellVM, CommentVM, HostMessage, OutputVM, PanelState, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
+
+declare function acquireVsCodeApi(): {
+  postMessage(msg: WebviewMessage): void;
+  getState(): unknown;
+  setState(state: unknown): void;
+};
+const vscode = acquireVsCodeApi();
+
+interface UiState {
+  layout?: 'split' | 'unified';
+  showAll: boolean;
+  /** Markdown cells switched to their source diff. */
+  mdSource: Record<string, boolean>;
+  /** Expanded folds (unchanged cell groups and unchanged line runs). */
+  expanded: Record<string, boolean>;
+  /** Threads opened or closed by hand (resolved ones start closed). */
+  threadOpen: Record<string, boolean>;
+  scrollY?: number;
+}
+
+interface Composer {
+  anchor: Anchor;
+  text: string;
+  describe?: string;
+  saving?: number;
+}
+
+const saved = (vscode.getState() ?? {}) as Partial<UiState>;
+const ui: UiState = { showAll: false, mdSource: {}, expanded: {}, threadOpen: {}, ...saved };
+let model: ViewModel | undefined;
+let threads: ThreadVM[] = [];
+let panel: PanelState = { viewed: false, pending: 0 };
+let requestSeq = 0;
+const composers = new Map<string, Composer>();
+const replies = new Map<string, { text: string; saving?: number }>();
+const edits = new Map<string, string>();
+let focusKey: string | undefined;
+let restoredScroll = false;
+
+const app = document.getElementById('app')!;
+
+function post(msg: WebviewMessage): void {
+  vscode.postMessage(msg);
+}
+
+function persist(): void {
+  // `path` lets the extension reopen this tab after VS Code reloads.
+  vscode.setState({ ...ui, scrollY: window.scrollY, path: document.body.dataset.path });
+}
+
+// --- DOM helpers -------------------------------------------------------------------------------
+
+type Child = Node | string | null | undefined | false;
+
+function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...kids: Child[]): HTMLElementTagNameMap[K] {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (v === undefined || v === null || v === false) {
+      continue;
+    }
+    if (k === 'class') {
+      el.className = String(v);
+    } else if (k === 'html') {
+      el.innerHTML = sanitize(String(v));
+    } else if (k === 'text') {
+      el.textContent = String(v);
+    } else if (k.startsWith('on') && typeof v === 'function') {
+      el.addEventListener(k.slice(2), v as EventListener);
+    } else if (k === 'data') {
+      for (const [dk, dv] of Object.entries(v as Record<string, unknown>)) {
+        if (dv !== undefined) {
+          el.dataset[dk] = String(dv);
+        }
+      }
+    } else {
+      el.setAttribute(k, v === true ? '' : String(v));
+    }
+  }
+  for (const kid of kids) {
+    if (kid !== null && kid !== undefined && kid !== false) {
+      el.append(kid);
+    }
+  }
+  return el;
+}
+
+function sanitize(html: string): string {
+  return DOMPurify.sanitize(html, { ADD_ATTR: ['target'], FORBID_TAGS: ['style', 'form', 'input', 'button'] });
+}
+
+function icon(name: string): HTMLElement {
+  return h('span', { class: `codicon codicon-${name}`, 'aria-hidden': 'true' });
+}
+
+function button(label: Child | Child[], onclick: (e: MouseEvent) => void, props: Record<string, unknown> = {}): HTMLButtonElement {
+  return h('button', { type: 'button', ...props, onclick }, ...(Array.isArray(label) ? label : [label]));
+}
+
+function timeAgo(iso?: string): string {
+  if (!iso) {
+    return '';
+  }
+  const seconds = (new Date(iso).getTime() - Date.now()) / 1000;
+  const fmt = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600], ['minute', 60]];
+  for (const [unit, size] of units) {
+    if (Math.abs(seconds) >= size) {
+      return fmt.format(Math.round(seconds / size), unit);
+    }
+  }
+  return 'just now';
+}
+
+function layout(): 'split' | 'unified' {
+  return ui.layout ?? (window.innerWidth >= 960 ? 'split' : 'unified');
+}
+
+function anchorKey(a: Anchor): string {
+  return [a.side, a.cellId, a.kind, a.start ?? '', a.end ?? '', a.outputIndex ?? ''].join('|');
+}
+
+// --- Rendering ---------------------------------------------------------------------------------
+
+function render(): void {
+  if (!model) {
+    return;
+  }
+  const scroll = window.scrollY;
+  const active = document.activeElement as HTMLElement | null;
+  focusKey = active?.dataset.focusKey;
+  const caret = active instanceof HTMLTextAreaElement ? active.selectionStart : undefined;
+
+  app.replaceChildren(renderToolbar(model), renderCells(model), h('div', { class: 'toast', id: 'toast' }));
+  if (!restoredScroll) {
+    restoredScroll = true;
+    window.scrollTo(0, ui.scrollY ?? 0);
+  } else {
+    window.scrollTo(0, scroll);
+  }
+  if (focusKey) {
+    const el = app.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(focusKey)}"]`);
+    if (el) {
+      el.focus({ preventScroll: true });
+      if (el instanceof HTMLTextAreaElement && caret !== undefined && caret !== null) {
+        el.setSelectionRange(caret, caret);
+      }
+    }
+  }
+}
+
+function renderToolbar(m: ViewModel): HTMLElement {
+  const slash = m.path.lastIndexOf('/');
+  const chips: Child[] = [
+    h('span', { class: 'chip add', text: `+${m.stats.additions}` }),
+    h('span', { class: 'chip del', text: `−${m.stats.deletions}` }),
+  ];
+  const describe: string[] = [];
+  if (m.stats.modified) describe.push(`${m.stats.modified} modified`);
+  if (m.stats.added) describe.push(`${m.stats.added} added`);
+  if (m.stats.removed) describe.push(`${m.stats.removed} removed`);
+  if (m.stats.moved) describe.push(`${m.stats.moved} moved`);
+  const segmented = (options: [string, string, boolean, () => void][]) =>
+    h('div', { class: 'segmented' }, ...options.map(([label, title, on, act]) => button(label, act, { class: on ? 'on' : '', title })));
+  return h(
+    'header',
+    { class: 'toolbar' },
+    h(
+      'div',
+      { class: 'title' },
+      icon('notebook'),
+      h('span', { class: 'dir', text: slash >= 0 ? m.path.slice(0, slash + 1) : '' }),
+      h('span', { class: 'file', text: m.path.slice(slash + 1) }),
+      h('a', { class: 'pr', href: m.pr.url, title: m.pr.title, text: `#${m.pr.number}`, onclick: (e: Event) => { e.preventDefault(); post({ type: 'openExternal', url: m.pr.url }); } }),
+      ...chips,
+      h('span', { class: 'summary', text: describe.join(' · ') || 'no cell changes' }),
+    ),
+    h(
+      'div',
+      { class: 'controls' },
+      segmented([
+        ['Changes', 'Show changed cells; fold the rest', !ui.showAll, () => { ui.showAll = false; persist(); render(); }],
+        ['All cells', 'Show every cell', ui.showAll, () => { ui.showAll = true; persist(); render(); }],
+      ]),
+      segmented([
+        ['Split', 'Old and new side by side', layout() === 'split', () => { ui.layout = 'split'; persist(); render(); }],
+        ['Unified', 'One column', layout() === 'unified', () => { ui.layout = 'unified'; persist(); render(); }],
+      ]),
+      h('div', { class: 'segmented' },
+        button(icon('arrow-up'), () => jump(-1), { title: 'Previous change (p)' }),
+        button(icon('arrow-down'), () => jump(1), { title: 'Next change (n)' })),
+      threads.length > 0 && button([icon('comment-discussion'), String(threads.length)], () => jumpThread(1), {
+        class: 'ghost',
+        title: 'Next comment (c)',
+      }),
+      button([icon('diff'), 'Text diff'], () => post({ type: 'openTextDiff' }), { class: 'ghost', title: 'Open the line-by-line text diff' }),
+      h('label', { class: 'viewed', title: 'Mark this notebook as viewed on GitHub' },
+        h('input', { type: 'checkbox', checked: panel.viewed, onchange: (e: Event) => post({ type: 'setViewed', viewed: (e.target as HTMLInputElement).checked }) }),
+        'Viewed'),
+      h('div', { class: 'submit-wrap' },
+        button(
+          h('span', {}, 'Submit review', panel.pending ? h('span', { class: 'count', text: String(panel.pending) }) : null, icon('chevron-down')),
+          () => { submitBox.open = !submitBox.open; render(); if (submitBox.open) { focus('submit-summary'); } },
+          { class: 'primary', title: 'Send your pending comments as one review', 'aria-expanded': submitBox.open ? 'true' : 'false' },
+        ),
+        submitBox.open && renderSubmitBox()),
+    ),
+  );
+}
+
+// "Finish your review", like on GitHub: a summary, how to submit, and the pending count.
+const submitBox: { open: boolean; text: string; event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'; sending: boolean; error?: string } = {
+  open: false,
+  text: '',
+  event: 'COMMENT',
+  sending: false,
+};
+
+function submitProblem(): string | undefined {
+  if (submitBox.event === 'REQUEST_CHANGES' && !panel.pending && !submitBox.text.trim()) {
+    return 'Write a summary or add a comment to request changes.';
+  }
+  if (submitBox.event === 'COMMENT' && !panel.pending && !submitBox.text.trim()) {
+    return 'Add a comment or write a summary first.';
+  }
+  return undefined;
+}
+
+function renderSubmitBox(): HTMLElement {
+  const send = () => {
+    if (submitBox.sending || submitProblem()) {
+      return;
+    }
+    submitBox.sending = true;
+    submitBox.error = undefined;
+    post({ type: 'submitReview', event: submitBox.event, body: submitBox.text.trim() });
+    render();
+  };
+  const close = () => { submitBox.open = false; render(); };
+  const area = textarea('submit-summary', submitBox.text, v => { submitBox.text = v; updateSubmitState(); }, send, close);
+  area.placeholder = 'Leave a summary (optional)';
+  const options: [typeof submitBox.event, string, string][] = [
+    ['COMMENT', 'Comment', 'Send feedback without approving.'],
+    ['APPROVE', 'Approve', 'Approve the pull request.'],
+    ['REQUEST_CHANGES', 'Request changes', 'Ask for changes before merging.'],
+  ];
+  const n = panel.pending;
+  const problem = submitProblem();
+  return h('div', { class: 'submit-box', role: 'dialog', 'aria-label': 'Finish your review' },
+    h('div', { class: 'submit-head' }, h('b', { text: 'Finish your review' }), h('span', { class: 'spacer' }),
+      h('span', { class: 'muted', text: n ? `${n} pending comment${n === 1 ? '' : 's'}` : 'no pending comments' })),
+    area,
+    h('div', { class: 'submit-options' }, ...options.map(([value, label, hint]) =>
+      h('label', { class: `option${submitBox.event === value ? ' on' : ''}` },
+        h('input', { type: 'radio', name: 'event', value, checked: submitBox.event === value, onchange: () => { submitBox.event = value; render(); focus('submit-summary'); } }),
+        h('span', {}, h('b', { text: label }), h('span', { class: 'muted', text: hint }))))),
+    submitBox.error && h('div', { class: 'submit-error', text: submitBox.error }),
+    h('div', { class: 'actions' },
+      h('span', { class: 'hint', id: 'submit-hint', text: problem ?? 'Ctrl+Enter to submit' }),
+      button('Cancel', close),
+      button(submitBox.sending ? 'Submitting…' : 'Submit review', send, { class: 'primary', id: 'submit-send', disabled: submitBox.sending || !!problem })));
+}
+
+/** Updates the hint and button while typing, without re-rendering the text box. */
+function updateSubmitState(): void {
+  const problem = submitProblem();
+  const hint = document.getElementById('submit-hint');
+  const sendButton = document.getElementById('submit-send') as HTMLButtonElement | null;
+  if (hint) {
+    hint.textContent = problem ?? 'Ctrl+Enter to submit';
+  }
+  if (sendButton) {
+    sendButton.disabled = submitBox.sending || !!problem;
+  }
+}
+
+function threadsFor(pred: (t: ThreadVM) => boolean): ThreadVM[] {
+  return threads.filter(pred);
+}
+
+function cellHasThreads(c: CellVM): boolean {
+  return threads.some(t => (t.anchor.side === 'LEFT' ? t.anchor.cellId === c.baseId : t.anchor.cellId === c.headId))
+    || [...composers.values()].some(x => (x.anchor.side === 'LEFT' ? x.anchor.cellId === c.baseId : x.anchor.cellId === c.headId));
+}
+
+function renderCells(m: ViewModel): HTMLElement {
+  const root = h('main', { class: `cells ${layout()}` });
+  let group: CellVM[] = [];
+  const flush = () => {
+    if (!group.length) {
+      return;
+    }
+    const key = `group:${group[0].key}`;
+    if (ui.expanded[key]) {
+      group.forEach(c => root.append(renderCell(c)));
+    } else {
+      const cells = group;
+      const titles = cells.map(c => c.title).filter(Boolean).slice(0, 3).join(' · ');
+      root.append(
+        h('div', { class: 'fold-cells', role: 'button', tabindex: '0', title: 'Show these cells', onclick: () => { ui.expanded[key] = true; persist(); render(); } },
+          icon('unfold'),
+          h('span', { class: 'n', text: `${cells.length} unchanged cell${cells.length === 1 ? '' : 's'}` }),
+          h('span', { class: 'titles', text: titles })),
+      );
+    }
+    group = [];
+  };
+  for (const c of m.cells) {
+    if (!ui.showAll && c.status === 'unchanged' && !c.moved && !cellHasThreads(c)) {
+      group.push(c);
+    } else {
+      flush();
+      root.append(renderCell(c));
+    }
+  }
+  flush();
+  if (!m.cells.length) {
+    root.append(h('div', { class: 'empty', text: 'This notebook has no cells.' }));
+  }
+  return root;
+}
+
+function renderCell(c: CellVM): HTMLElement {
+  const isMd = c.type === 'markdown';
+  const rendered = isMd && !ui.mdSource[c.key];
+  const number = c.headNumber ?? c.baseNumber;
+  const renumbered = c.headNumber && c.baseNumber && c.headNumber !== c.baseNumber ? ` (was ${c.baseNumber})` : '';
+  const cellAnchor = (): Anchor => (c.headId ? { side: 'RIGHT', cellId: c.headId, kind: 'cell' } : { side: 'LEFT', cellId: c.baseId!, kind: 'cell' });
+  const head = h(
+    'div',
+    { class: 'cell-head' },
+    h('span', { class: `type ${c.type}`, text: c.type }),
+    h('span', { class: 'num', text: `cell ${number}${renumbered}` }),
+    h('span', { class: 'id', text: c.headId ?? c.baseId }),
+    c.status !== 'unchanged' && h('span', { class: `status ${c.status}`, text: c.status === 'modified' && !c.sourceChanged ? 'outputs changed' : c.status }),
+    c.moved && h('span', { class: 'status moved', text: 'moved' }),
+    c.sourceChanged && c.outputsChanged && c.status === 'modified' && h('span', { class: 'status outputs', text: 'outputs changed' }),
+    h('span', { class: 'spacer' }),
+    isMd && h('div', { class: 'segmented small' },
+      button('Rendered', () => { delete ui.mdSource[c.key]; persist(); render(); }, { class: rendered ? 'on' : '' }),
+      button('Source', () => { ui.mdSource[c.key] = true; persist(); render(); }, { class: rendered ? '' : 'on' })),
+    button(icon('comment'), () => openComposer(cellAnchor()), { class: 'icon-btn', title: 'Comment on this cell' }),
+    c.headId && button(icon('diff'), () => post({ type: 'openTextDiff', cellId: c.headId }), { class: 'icon-btn', title: 'Show in text diff' }),
+  );
+  const card = h('section', { class: `cell ${c.status}${c.moved ? ' moved' : ''}`, data: { key: c.key, head: c.headId, base: c.baseId } }, head);
+  const cellThreads = threadsFor(t => t.anchor.kind === 'cell' && matchesCell(t.anchor, c));
+  const cellComposers = [...composers.values()].filter(x => x.anchor.kind === 'cell' && matchesCell(x.anchor, c));
+  if (cellThreads.length || cellComposers.length) {
+    card.append(h('div', { class: 'cell-threads' }, ...cellThreads.map(renderThread), ...cellComposers.map(renderComposer)));
+  }
+  card.append(rendered ? renderMarkdown(c) : renderSource(c));
+  const outputs = renderOutputs(c);
+  if (outputs) {
+    card.append(outputs);
+  }
+  return card;
+}
+
+function matchesCell(a: Anchor, c: CellVM): boolean {
+  return a.side === 'LEFT' ? a.cellId === c.baseId : a.cellId === c.headId;
+}
+
+// Source diffs ---------------------------------------------------------------------------------
+
+interface Half {
+  side: Side;
+  line: number;
+  number: number;
+  html: string;
+  kind: 'same' | 'del' | 'add';
+}
+
+interface Row {
+  left?: Half;
+  right?: Half;
+  /** Unified layout: old and new line numbers of one line. */
+  kind: 'same' | 'del' | 'add' | 'mod';
+}
+
+/** Cells with one side (added, removed) or two identical sides use the full width. */
+function oneColumn(c: CellVM): boolean {
+  return layout() === 'unified' || c.status === 'added' || c.status === 'removed' || (c.status === 'unchanged' && !c.moved) || (c.status === 'modified' && !c.sourceChanged);
+}
+
+function buildRows(c: CellVM): Row[] {
+  const rows: Row[] = [];
+  const unified = oneColumn(c);
+  let dels: Half[] = [];
+  let adds: Half[] = [];
+  const flush = () => {
+    if (unified) {
+      dels.forEach(d => rows.push({ left: d, kind: 'del' }));
+      adds.forEach(a => rows.push({ right: a, kind: 'add' }));
+    } else {
+      for (let i = 0; i < Math.max(dels.length, adds.length); i++) {
+        rows.push({ left: dels[i], right: adds[i], kind: dels[i] && adds[i] ? 'mod' : dels[i] ? 'del' : 'add' });
+      }
+    }
+    dels = [];
+    adds = [];
+  };
+  for (const op of c.ops) {
+    if (op.op === 'del') {
+      dels.push({ side: 'LEFT', line: op.b, number: op.b + 1, html: c.baseLines[op.b] ?? '', kind: 'del' });
+    } else if (op.op === 'add') {
+      adds.push({ side: 'RIGHT', line: op.h, number: op.h + 1, html: c.headLines[op.h] ?? '', kind: 'add' });
+    } else {
+      flush();
+      rows.push({
+        left: { side: 'LEFT', line: op.b, number: op.b + 1, html: c.baseLines[op.b] ?? '', kind: 'same' },
+        right: { side: 'RIGHT', line: op.h, number: op.h + 1, html: c.headLines[op.h] ?? '', kind: 'same' },
+        kind: 'same',
+      });
+    }
+  }
+  flush();
+  return rows;
+}
+
+function sourceThreads(c: CellVM, half: Half | undefined): ThreadVM[] {
+  if (!half) {
+    return [];
+  }
+  const id = half.side === 'LEFT' ? c.baseId : c.headId;
+  return threads.filter(t => t.anchor.kind === 'source' && t.anchor.side === half.side && t.anchor.cellId === id && (t.anchor.end ?? t.anchor.start) === half.line);
+}
+
+function sourceComposers(c: CellVM, half: Half | undefined): Composer[] {
+  if (!half) {
+    return [];
+  }
+  const id = half.side === 'LEFT' ? c.baseId : c.headId;
+  return [...composers.values()].filter(x => x.anchor.kind === 'source' && x.anchor.side === half.side && x.anchor.cellId === id && (x.anchor.end ?? x.anchor.start) === half.line);
+}
+
+function renderSource(c: CellVM): HTMLElement {
+  const unified = oneColumn(c);
+  const rows = buildRows(c);
+  const body = h('div', { class: `source ${unified ? 'unified' : 'split'}` });
+  if (!rows.length) {
+    body.append(h('div', { class: 'empty-cell', text: 'empty cell' }));
+    return body;
+  }
+  const hasAnchor = (r: Row) =>
+    sourceThreads(c, r.left).length + sourceThreads(c, r.right).length + sourceComposers(c, r.left).length + sourceComposers(c, r.right).length > 0;
+  // Removed code is rarely what a review is about: show its start and fold the rest.
+  const removedKey = `${c.key}:removed`;
+  if (c.status === 'removed' && rows.length > 12 && !ui.expanded[removedKey] && !rows.some(hasAnchor)) {
+    rows.slice(0, 6).forEach(r => appendRow(body, c, r));
+    const more = rows.length - 6;
+    body.append(h('div', { class: 'fold-lines', role: 'button', tabindex: '0', onclick: () => { ui.expanded[removedKey] = true; persist(); render(); } },
+      icon('unfold'), `${more} more removed line${more === 1 ? '' : 's'}`));
+    return body;
+  }
+  // Fold long unchanged runs, keeping three lines of context. Unchanged cells only show up in
+  // "Changes" mode because of a comment, so they fold down to the lines around it.
+  const foldable = c.status !== 'unchanged' || !ui.showAll;
+  let i = 0;
+  while (i < rows.length) {
+    if (foldable && rows[i].kind === 'same') {
+      let j = i;
+      while (j < rows.length && rows[j].kind === 'same' && !hasAnchor(rows[j])) {
+        j++;
+      }
+      const ctxBefore = i === 0 ? 0 : 3;
+      const ctxAfter = j === rows.length ? 0 : 3;
+      const hidden = j - i - ctxBefore - ctxAfter;
+      const key = `${c.key}:${i}`;
+      if (hidden >= 4 && !ui.expanded[key]) {
+        for (let k = i; k < i + ctxBefore; k++) {
+          appendRow(body, c, rows[k]);
+        }
+        body.append(h('div', { class: 'fold-lines', role: 'button', tabindex: '0', onclick: () => { ui.expanded[key] = true; persist(); render(); } },
+          icon('unfold'), `${hidden} unchanged line${hidden === 1 ? '' : 's'}`));
+        for (let k = j - ctxAfter; k < j; k++) {
+          appendRow(body, c, rows[k]);
+        }
+        i = j;
+        continue;
+      }
+      for (let k = i; k < Math.max(j, i + 1); k++) {
+        appendRow(body, c, rows[k]);
+      }
+      i = Math.max(j, i + 1);
+      continue;
+    }
+    appendRow(body, c, rows[i]);
+    i++;
+  }
+  return body;
+}
+
+function appendRow(body: HTMLElement, c: CellVM, r: Row): void {
+  const unified = oneColumn(c);
+  if (unified) {
+    // In one column, unchanged lines take comments on the new version.
+    const half = r.kind === 'del' ? r.left! : r.right!;
+    const old = r.kind === 'add' ? undefined : r.left?.number;
+    const row = h('div', { class: `row ${r.kind}` },
+      h('span', { class: 'ln', text: old ?? '' }),
+      h('span', { class: 'ln', text: r.kind === 'del' ? '' : r.right?.number ?? '' }),
+      halfCells(c, half, false));
+    body.append(row);
+    const ts = [...sourceThreads(c, half), ...(r.kind === 'same' ? sourceThreads(c, r.left) : [])];
+    const cs = sourceComposers(c, half);
+    if (ts.length || cs.length) {
+      body.append(h('div', { class: 'thread-row' }, h('div', { class: 'thread-col full' }, ...ts.map(renderThread), ...cs.map(renderComposer))));
+    }
+    return;
+  }
+  const row = h('div', { class: `row ${r.kind}` },
+    r.left ? h('span', { class: 'ln', text: r.left.number }) : h('span', { class: 'ln blank' }),
+    r.left ? halfCells(c, r.left, true) : h('div', { class: 'code blank' }),
+    r.right ? h('span', { class: 'ln', text: r.right.number }) : h('span', { class: 'ln blank' }),
+    r.right ? halfCells(c, r.right, true) : h('div', { class: 'code blank' }));
+  body.append(row);
+  const left = [...sourceThreads(c, r.left).map(renderThread), ...sourceComposers(c, r.left).map(renderComposer)];
+  const right = [...sourceThreads(c, r.right).map(renderThread), ...sourceComposers(c, r.right).map(renderComposer)];
+  if (left.length || right.length) {
+    body.append(h('div', { class: 'thread-row' }, h('div', { class: 'thread-col' }, ...left), h('div', { class: 'thread-col' }, ...right)));
+  }
+}
+
+function halfCells(c: CellVM, half: Half, split: boolean): HTMLElement {
+  const cellId = half.side === 'LEFT' ? c.baseId : c.headId;
+  const code = h('div', { class: `code ${half.kind}${split ? ` side-${half.side}` : ''}`, data: { side: half.side, line: half.line, cell: cellId } });
+  const add = h('button', {
+    type: 'button',
+    class: 'add-comment',
+    title: 'Comment on this line (drag to select several)',
+    'aria-label': 'Add comment',
+  }, '+');
+  add.addEventListener('mousedown', e => startLineSelection(e, cellId!, half));
+  code.append(add, h('span', { class: 'text', html: half.html || '&#8203;' }));
+  return code;
+}
+
+// Dragging the "+" across lines selects a range, like on GitHub.
+let selection: { cellId: string; side: Side; from: number; to: number } | undefined;
+
+function startLineSelection(e: MouseEvent, cellId: string, half: Half): void {
+  e.preventDefault();
+  selection = { cellId, side: half.side, from: half.line, to: half.line };
+  highlightSelection();
+  const move = (ev: MouseEvent) => {
+    const el = (ev.target as HTMLElement).closest<HTMLElement>('.code[data-line]');
+    if (el && selection && el.dataset.cell === selection.cellId && el.dataset.side === selection.side) {
+      selection.to = Number(el.dataset.line);
+      highlightSelection();
+    }
+  };
+  const up = () => {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+    if (selection) {
+      const { cellId: id, side, from, to } = selection;
+      selection = undefined;
+      highlightSelection();
+      openComposer({ side, cellId: id, kind: 'source', start: Math.min(from, to), end: Math.max(from, to) });
+    }
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+}
+
+function highlightSelection(): void {
+  for (const el of app.querySelectorAll<HTMLElement>('.code.selected')) {
+    el.classList.remove('selected');
+  }
+  if (!selection) {
+    return;
+  }
+  const lo = Math.min(selection.from, selection.to);
+  const hi = Math.max(selection.from, selection.to);
+  for (const el of app.querySelectorAll<HTMLElement>(`.code[data-cell="${CSS.escape(selection.cellId)}"][data-side="${selection.side}"]`)) {
+    const n = Number(el.dataset.line);
+    if (n >= lo && n <= hi) {
+      el.classList.add('selected');
+    }
+  }
+}
+
+// Rendered markdown ----------------------------------------------------------------------------
+
+function renderMarkdown(c: CellVM): HTMLElement {
+  const sides: { side: Side; html: string; cellId: string; changed: Set<number> }[] = [];
+  const changedBase = new Set(c.ops.filter(o => o.op === 'del').map(o => (o as { b: number }).b));
+  const changedHead = new Set(c.ops.filter(o => o.op === 'add').map(o => (o as { h: number }).h));
+  const both = c.baseHtml !== undefined && c.headHtml !== undefined && c.sourceChanged;
+  if (c.baseHtml !== undefined && (both ? layout() === 'split' : c.headHtml === undefined)) {
+    sides.push({ side: 'LEFT', html: c.baseHtml, cellId: c.baseId!, changed: changedBase });
+  }
+  if (c.headHtml !== undefined) {
+    sides.push({ side: 'RIGHT', html: c.headHtml, cellId: c.headId!, changed: changedHead });
+  }
+  const wrap = h('div', { class: `rendered${sides.length === 2 ? ' two' : ''}` });
+  for (const s of sides) {
+    const col = h('div', { class: `md-col side-${s.side} ${c.status}`, html: s.html });
+    if (sides.length === 2) {
+      col.prepend(h('div', { class: 'col-label', text: s.side === 'LEFT' ? 'Before' : 'After' }));
+    }
+    decorateBlocks(col, c, s.side, s.cellId, c.status === 'modified' ? s.changed : new Set());
+    wrap.append(col);
+  }
+  if (!sides.length || !c.headHtml && !c.baseHtml) {
+    wrap.append(h('div', { class: 'empty-cell', text: 'empty cell' }));
+  }
+  return wrap;
+}
+
+function blockRange(el: HTMLElement): [number, number] | undefined {
+  const own = el.dataset.src ?? el.querySelector<HTMLElement>('[data-src]')?.dataset.src;
+  if (!own) {
+    return undefined;
+  }
+  const ranges = [el, ...el.querySelectorAll<HTMLElement>('[data-src]')]
+    .map(x => x.dataset.src)
+    .filter((x): x is string => !!x)
+    .map(x => x.split('-').map(Number) as [number, number]);
+  return [Math.min(...ranges.map(r => r[0])), Math.max(...ranges.map(r => r[1]))];
+}
+
+function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string, changed: Set<number>): void {
+  const blocks = [...col.children].filter((el): el is HTMLElement => el instanceof HTMLElement && !el.classList.contains('col-label'));
+  const placed = new Set<ThreadVM | Composer>();
+  const items = [
+    ...threads.filter(t => t.anchor.kind === 'source' && t.anchor.side === side && t.anchor.cellId === cellId),
+    ...[...composers.values()].filter(x => x.anchor.kind === 'source' && x.anchor.side === side && x.anchor.cellId === cellId),
+  ];
+  for (const block of blocks) {
+    const range = blockRange(block);
+    if (!range) {
+      continue;
+    }
+    block.classList.add('md-block');
+    for (let l = range[0]; l <= range[1]; l++) {
+      if (changed.has(l)) {
+        block.classList.add(side === 'LEFT' ? 'changed-del' : 'changed-add');
+        break;
+      }
+    }
+    const add = button('+', () => openComposer({ side, cellId, kind: 'source', start: range[0], end: range[1] }), {
+      class: 'add-comment block',
+      title: 'Comment on this paragraph',
+      'aria-label': 'Add comment',
+    });
+    block.prepend(add);
+    const here = items.filter(x => {
+      const line = x.anchor.end ?? x.anchor.start ?? -1;
+      return line >= range[0] && line <= range[1] && !placed.has(x);
+    });
+    if (here.length) {
+      here.forEach(x => placed.add(x));
+      block.after(h('div', { class: 'md-threads' }, ...here.map(x => ('comments' in x ? renderThread(x) : renderComposer(x)))));
+    }
+  }
+  const rest = items.filter(x => !placed.has(x));
+  if (rest.length) {
+    col.append(h('div', { class: 'md-threads' }, ...rest.map(x => ('comments' in x ? renderThread(x) : renderComposer(x)))));
+  }
+  void c;
+}
+
+// Outputs --------------------------------------------------------------------------------------
+
+function renderOutputs(c: CellVM): HTMLElement | undefined {
+  if (!c.baseOutputs.length && !c.headOutputs.length) {
+    return undefined;
+  }
+  const wrap = h('div', { class: 'outputs' });
+  const changed = c.outputsChanged && c.status !== 'added' && c.status !== 'removed';
+  if (!changed) {
+    const side: Side = c.headId ? 'RIGHT' : 'LEFT';
+    const list = side === 'RIGHT' ? c.headOutputs : c.baseOutputs;
+    wrap.append(h('div', { class: 'outputs-col' }, ...list.map(o => renderOutput(c, side, o))));
+    return wrap;
+  }
+  wrap.classList.add(layout() === 'split' ? 'two' : 'stacked');
+  wrap.append(
+    h('div', { class: 'outputs-col before' }, h('div', { class: 'col-label', text: 'Before' }), ...(c.baseOutputs.length ? c.baseOutputs.map(o => renderOutput(c, 'LEFT', o)) : [h('div', { class: 'none', text: 'no output' })])),
+    h('div', { class: 'outputs-col after' }, h('div', { class: 'col-label', text: 'After' }), ...(c.headOutputs.length ? c.headOutputs.map(o => renderOutput(c, 'RIGHT', o)) : [h('div', { class: 'none', text: 'no output' })])),
+  );
+  return wrap;
+}
+
+function renderOutput(c: CellVM, side: Side, o: OutputVM): HTMLElement {
+  const cellId = (side === 'LEFT' ? c.baseId : c.headId)!;
+  const anchor: Anchor = { side, cellId, kind: 'output', outputIndex: o.index };
+  let content: HTMLElement;
+  if (o.imageSrc) {
+    content = h('img', { src: o.imageSrc, alt: o.label, loading: 'lazy' });
+  } else if (o.html) {
+    content = h('div', { class: 'html-output', html: o.html });
+  } else if (o.text !== undefined) {
+    content = h('pre', { class: o.kind === 'error' ? 'error' : '', text: o.text });
+  } else {
+    content = h('div', { class: 'none', text: o.label });
+  }
+  const ts = threads.filter(t => t.anchor.kind === 'output' && t.anchor.side === side && t.anchor.cellId === cellId && t.anchor.outputIndex === o.index);
+  const cs = [...composers.values()].filter(x => x.anchor.kind === 'output' && x.anchor.side === side && x.anchor.cellId === cellId && x.anchor.outputIndex === o.index);
+  return h('div', { class: `output ${o.kind}` },
+    h('div', { class: 'output-head' },
+      h('span', { text: o.label }),
+      h('span', { class: 'spacer' }),
+      button(icon('comment'), () => openComposer(anchor), { class: 'icon-btn', title: 'Comment on this output' })),
+    h('div', { class: 'output-body' }, content),
+    ...ts.map(renderThread),
+    ...cs.map(renderComposer));
+}
+
+// Threads and composers ------------------------------------------------------------------------
+
+function renderThread(t: ThreadVM): HTMLElement {
+  const open = ui.threadOpen[t.id] ?? !(t.resolved || t.outdated);
+  const el = h('div', { class: `thread${t.resolved ? ' resolved' : ''}${t.draft ? ' draft' : ''}${open ? '' : ' closed'}`, data: { thread: t.id } });
+  el.append(h('div', { class: 'thread-head', role: 'button', tabindex: '0', onclick: () => { ui.threadOpen[t.id] = !open; persist(); render(); } },
+    icon(open ? 'chevron-down' : 'chevron-right'),
+    icon(t.draft ? 'edit' : 'comment'),
+    h('span', { class: 'label', text: t.label }),
+    t.resolved && h('span', { class: 'pill', text: 'resolved' }),
+    t.outdated && h('span', { class: 'pill', text: 'outdated' }),
+    !open && h('span', { class: 'preview', text: `${t.comments[0]?.author ?? ''}: ${stripTags(t.comments[0]?.html ?? '')}` })));
+  if (!open) {
+    return el;
+  }
+  for (const c of t.comments) {
+    el.append(renderComment(c));
+  }
+  if (t.canReply) {
+    el.append(renderReply(t));
+  }
+  return el;
+}
+
+function stripTags(html: string): string {
+  const div = document.createElement('div');
+  div.innerHTML = sanitize(html);
+  return (div.textContent ?? '').replace(/\s+/g, ' ').slice(0, 120);
+}
+
+function renderComment(c: CommentVM): HTMLElement {
+  const editing = c.draftKey !== undefined && edits.has(c.draftKey);
+  const avatar = c.avatarUrl ? h('img', { class: 'avatar', src: c.avatarUrl, alt: '' }) : h('span', { class: 'avatar me', text: c.author.slice(0, 1) });
+  const meta = h('div', { class: 'meta' },
+    h('b', { text: c.author }),
+    c.createdAt && h('span', { class: 'time', title: new Date(c.createdAt).toLocaleString(), text: timeAgo(c.createdAt) }),
+    c.pending && h('span', { class: 'pill pending', text: 'Pending' }),
+    h('span', { class: 'spacer' }),
+    c.url && button(icon('link-external'), () => post({ type: 'openExternal', url: c.url! }), { class: 'icon-btn', title: 'View on GitHub' }),
+    c.pending && !editing && button(icon('edit'), () => { edits.set(c.draftKey!, c.text ?? ''); focusKey = `edit:${c.draftKey}`; render(); focus(`edit:${c.draftKey}`); }, { class: 'icon-btn', title: 'Edit' }),
+    c.pending && !editing && deleteButton(c.draftKey!));
+  let body: HTMLElement;
+  if (editing) {
+    const key = c.draftKey!;
+    const area = textarea(`edit:${key}`, edits.get(key) ?? '', v => edits.set(key, v), () => save(), () => cancel());
+    const save = () => { post({ type: 'editDraft', key, text: area.value }); edits.delete(key); render(); };
+    const cancel = () => { edits.delete(key); render(); };
+    body = h('div', { class: 'editor' }, area, h('div', { class: 'actions' }, button('Cancel', cancel), button('Save', save, { class: 'primary' })));
+  } else {
+    body = h('div', { class: 'body markdown', html: c.html });
+    wireLinks(body);
+  }
+  return h('div', { class: 'comment' }, avatar, h('div', { class: 'content' }, meta, body));
+}
+
+function deleteButton(key: string): HTMLButtonElement {
+  const btn = button(icon('trash'), () => {
+    if (btn.dataset.armed) {
+      post({ type: 'deleteDraft', key });
+    } else {
+      btn.dataset.armed = '1';
+      btn.classList.add('armed');
+      btn.title = 'Click again to delete';
+      btn.append(' Delete?');
+      setTimeout(() => { delete btn.dataset.armed; btn.classList.remove('armed'); btn.lastChild?.remove(); }, 3000);
+    }
+  }, { class: 'icon-btn', title: 'Delete pending comment' });
+  return btn;
+}
+
+function renderReply(t: ThreadVM): HTMLElement {
+  const state = replies.get(t.id);
+  if (!state) {
+    return h('div', { class: 'reply' }, h('div', {
+      class: 'reply-stub', role: 'button', tabindex: '0', text: 'Reply…',
+      onclick: () => { replies.set(t.id, { text: '' }); render(); focus(`reply:${t.id}`); },
+    }));
+  }
+  const submit = () => {
+    if (!area.value.trim()) {
+      return;
+    }
+    const requestId = ++requestSeq;
+    replies.set(t.id, { text: area.value, saving: requestId });
+    post({ type: 'reply', threadId: t.id, text: area.value, requestId });
+    render();
+  };
+  const cancel = () => { replies.delete(t.id); render(); };
+  const area = textarea(`reply:${t.id}`, state.text, v => (state.text = v), submit, cancel);
+  return h('div', { class: 'reply open' }, area,
+    h('div', { class: 'actions' },
+      h('span', { class: 'hint', text: 'Ctrl+Enter to add · goes out with your review' }),
+      button('Cancel', cancel),
+      button(state.saving ? 'Adding…' : 'Add reply', submit, { class: 'primary', disabled: !!state.saving })));
+}
+
+function renderComposer(x: Composer): HTMLElement {
+  const key = anchorKey(x.anchor);
+  const submit = () => {
+    if (!area.value.trim()) {
+      return;
+    }
+    const requestId = ++requestSeq;
+    x.text = area.value;
+    x.saving = requestId;
+    post({ type: 'addComment', anchor: x.anchor, text: area.value, requestId });
+    render();
+  };
+  const cancel = () => { composers.delete(key); render(); };
+  const area = textarea(`compose:${key}`, x.text, v => (x.text = v), submit, cancel);
+  const what = x.anchor.kind === 'source'
+    ? x.anchor.start === x.anchor.end ? `line ${x.anchor.start! + 1}` : `lines ${x.anchor.start! + 1}–${x.anchor.end! + 1}`
+    : x.anchor.kind === 'output' ? 'this output' : 'this cell';
+  const suggest = x.anchor.kind === 'source' && x.anchor.side === 'RIGHT'
+    ? button([icon('git-pull-request-create'), 'Suggest change'], () => {
+      const lines = sourceText(x.anchor);
+      const block = '```suggestion\n' + lines.join('\n') + '\n```\n';
+      area.value = area.value ? `${area.value}\n${block}` : block;
+      area.dispatchEvent(new Event('input'));
+      area.focus();
+    }, { class: 'ghost', title: 'Propose replacement lines that the author can commit from GitHub' })
+    : null;
+  return h('div', { class: 'composer' },
+    h('div', { class: 'composer-head' }, icon('comment'), h('span', { text: `Comment on ${what}${x.anchor.side === 'LEFT' ? ' (old version)' : ''}` })),
+    area,
+    h('div', { class: 'actions' },
+      h('span', { class: 'hint', text: x.describe ?? '' }),
+      suggest,
+      button('Cancel', cancel),
+      button(x.saving ? 'Adding…' : 'Add review comment', submit, { class: 'primary', disabled: !!x.saving })));
+}
+
+function sourceText(a: Anchor): string[] {
+  const c = model?.cells.find(x => (a.side === 'LEFT' ? x.baseId : x.headId) === a.cellId);
+  const lines = (a.side === 'LEFT' ? c?.baseSource : c?.headSource) ?? [];
+  return lines.slice(a.start ?? 0, (a.end ?? a.start ?? 0) + 1);
+}
+
+function textarea(focusId: string, value: string, onInput: (v: string) => void, onSubmit: () => void, onCancel: () => void): HTMLTextAreaElement {
+  const area = h('textarea', {
+    rows: '3',
+    placeholder: 'Leave a comment (Markdown supported)',
+    data: { focusKey: focusId },
+  });
+  area.value = value;
+  const grow = () => {
+    area.style.height = 'auto';
+    area.style.height = `${Math.min(400, area.scrollHeight + 2)}px`;
+  };
+  area.addEventListener('input', () => { onInput(area.value); grow(); });
+  area.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      onSubmit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      onCancel();
+    }
+    e.stopPropagation();
+  });
+  requestAnimationFrame(grow);
+  return area;
+}
+
+function focus(key: string): void {
+  requestAnimationFrame(() => app.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`)?.focus());
+}
+
+function openComposer(anchor: Anchor): void {
+  const key = anchorKey(anchor);
+  if (!composers.has(key)) {
+    const requestId = ++requestSeq;
+    composers.set(key, { anchor, text: '' });
+    planRequests.set(requestId, key);
+    post({ type: 'plan', anchor, requestId });
+  }
+  render();
+  focus(`compose:${key}`);
+}
+
+const planRequests = new Map<number, string>();
+
+function wireLinks(root: HTMLElement): void {
+  for (const a of root.querySelectorAll('a')) {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      const href = a.getAttribute('href');
+      if (href) {
+        post({ type: 'openExternal', url: href });
+      }
+    });
+  }
+}
+
+// --- Navigation --------------------------------------------------------------------------------
+
+function jump(dir: 1 | -1): void {
+  const cards = [...app.querySelectorAll<HTMLElement>('section.cell')].filter(el => !el.classList.contains('unchanged') || el.querySelector('.thread'));
+  if (!cards.length) {
+    return;
+  }
+  const top = 64;
+  const positions = cards.map(el => el.getBoundingClientRect().top - top);
+  let target = dir > 0 ? positions.findIndex(p => p > 4) : positions.map((p, i) => [p, i] as const).filter(([p]) => p < -4).pop()?.[1] ?? -1;
+  if (target < 0) {
+    target = dir > 0 ? cards.length - 1 : 0;
+  }
+  reveal(cards[target]);
+}
+
+let threadCursor = -1;
+
+function jumpThread(dir: 1 | -1): void {
+  const all = [...app.querySelectorAll<HTMLElement>('.thread')];
+  if (!all.length) {
+    return;
+  }
+  threadCursor = (threadCursor + dir + all.length) % all.length;
+  reveal(all[threadCursor]);
+}
+
+function reveal(el: HTMLElement): void {
+  window.scrollTo({ top: window.scrollY + el.getBoundingClientRect().top - 60, behavior: 'smooth' });
+  el.classList.remove('flash');
+  void el.offsetWidth;
+  el.classList.add('flash');
+}
+
+window.addEventListener('mousedown', e => {
+  if (submitBox.open && !submitBox.sending && !(e.target as HTMLElement).closest('.submit-wrap')) {
+    submitBox.open = false;
+    render();
+  }
+});
+
+window.addEventListener('keydown', e => {
+  const target = e.target as HTMLElement;
+  if (target.closest('textarea, input') || e.ctrlKey || e.metaKey || e.altKey) {
+    return;
+  }
+  if (e.key === 'n' || e.key === 'j') {
+    jump(1);
+  } else if (e.key === 'p' || e.key === 'k') {
+    jump(-1);
+  } else if (e.key === 'c') {
+    jumpThread(1);
+  } else if (e.key === 'C') {
+    jumpThread(-1);
+  }
+});
+
+let scrollTimer: number | undefined;
+window.addEventListener('scroll', () => {
+  clearTimeout(scrollTimer);
+  scrollTimer = window.setTimeout(persist, 200);
+});
+
+let lastLayout = layout();
+window.addEventListener('resize', () => {
+  if (!ui.layout && layout() !== lastLayout) {
+    lastLayout = layout();
+    render();
+  }
+});
+
+function toast(message: string): void {
+  const el = document.getElementById('toast');
+  if (!el) {
+    return;
+  }
+  el.textContent = message;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 6000);
+}
+
+// --- Messages from the extension ---------------------------------------------------------------
+
+window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
+  const msg = event.data;
+  switch (msg.type) {
+    case 'model':
+      model = msg.model;
+      render();
+      break;
+    case 'threads':
+      threads = msg.threads;
+      // Comments that were being saved are now part of the threads.
+      for (const [key, x] of composers) {
+        if (x.saving) {
+          composers.delete(key);
+        }
+      }
+      for (const [key, r] of replies) {
+        if (r.saving) {
+          replies.delete(key);
+        }
+      }
+      render();
+      break;
+    case 'state':
+      panel = msg.state;
+      render();
+      break;
+    case 'plan': {
+      const key = planRequests.get(msg.requestId);
+      planRequests.delete(msg.requestId);
+      const x = key ? composers.get(key) : undefined;
+      if (x) {
+        x.describe = msg.describe;
+        const hint = app.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(`compose:${key}`)}"]`)?.parentElement?.querySelector('.hint');
+        if (hint) {
+          hint.textContent = msg.describe;
+        }
+      }
+      break;
+    }
+    case 'reveal': {
+      const card = app.querySelector<HTMLElement>(`section.cell[data-head="${CSS.escape(msg.cellKey)}"], section.cell[data-key="${CSS.escape(msg.cellKey)}"]`);
+      if (card) {
+        reveal(card);
+      }
+      break;
+    }
+    case 'submitted':
+      submitBox.sending = false;
+      if (msg.ok) {
+        submitBox.open = false;
+        submitBox.text = '';
+        submitBox.event = 'COMMENT';
+      } else {
+        submitBox.error = msg.message;
+      }
+      render();
+      break;
+    case 'error':
+      for (const x of composers.values()) {
+        x.saving = undefined;
+      }
+      for (const r of replies.values()) {
+        r.saving = undefined;
+      }
+      render();
+      toast(msg.message);
+      break;
+  }
+});
+
+persist();
+post({ type: 'ready' });

@@ -1,0 +1,9 @@
+**
+!dist/**
+!media/icon.svg
+!images/icon.png
+!syntaxes/**
+!language-configuration.json
+!package.json
+!README.md
+!LICENSE

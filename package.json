@@ -1,0 +1,376 @@
+{
+  "name": "nbreview",
+  "displayName": "Notebook Review for GitHub Pull Requests (Jupyter .ipynb)",
+  "description": "Review Jupyter notebooks (.ipynb) in GitHub pull requests inside VS Code: rendered cell-by-cell diffs of code, Markdown, LaTeX and outputs, with line comments on any cell that post to GitHub as a normal PR review.",
+  "version": "0.3.0",
+  "publisher": "KonstantinSofeikov",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1c4ed8",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sofeikov/nbreview.git"
+  },
+  "homepage": "https://github.com/sofeikov/nbreview#readme",
+  "bugs": {
+    "url": "https://github.com/sofeikov/nbreview/issues"
+  },
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Notebooks",
+    "Data Science",
+    "SCM Providers",
+    "Visualization"
+  ],
+  "keywords": [
+    "jupyter",
+    "notebook",
+    "ipynb",
+    "jupyter notebook",
+    "notebook diff",
+    "notebook review",
+    "code review",
+    "pull request",
+    "github",
+    "github pull request",
+    "pr review",
+    "review comments",
+    "diff",
+    "data science",
+    "machine learning",
+    "nbdev",
+    "reviewnb",
+    "nbdime",
+    "markdown",
+    "latex"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nbreview",
+          "title": "Notebook Review",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "nbreview": [
+        {
+          "id": "nbreview.files",
+          "name": "Pull Request",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "nbreview.files",
+        "contents": "Review the Jupyter notebooks in a GitHub pull request cell by cell, and leave comments on code, Markdown and outputs that show up on GitHub.\n[Open Pull Request](command:nbreview.openPr)\nUses your `gh` CLI login, or VS Code's GitHub sign-in."
+      }
+    ],
+    "commands": [
+      {
+        "command": "nbreview.openPr",
+        "title": "Open Pull Request…",
+        "category": "Notebook Review",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "nbreview.refresh",
+        "title": "Refresh",
+        "category": "Notebook Review",
+        "icon": "$(refresh)",
+        "enablement": "nbreview.active"
+      },
+      {
+        "command": "nbreview.submitReview",
+        "title": "Submit Review…",
+        "category": "Notebook Review",
+        "icon": "$(check-all)",
+        "enablement": "nbreview.active"
+      },
+      {
+        "command": "nbreview.openOnGitHub",
+        "title": "Open on GitHub",
+        "category": "Notebook Review",
+        "icon": "$(github)",
+        "enablement": "nbreview.active"
+      },
+      {
+        "command": "nbreview.close",
+        "title": "Close Pull Request",
+        "category": "Notebook Review",
+        "icon": "$(close)",
+        "enablement": "nbreview.active"
+      },
+      {
+        "command": "nbreview.openNotebook",
+        "title": "Review Notebook",
+        "category": "Notebook Review"
+      },
+      {
+        "command": "nbreview.openVisual",
+        "title": "Open Visual Review",
+        "category": "Notebook Review",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "nbreview.openNotebookDiff",
+        "title": "Open Text Diff",
+        "category": "Notebook Review",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "nbreview.openFileDiff",
+        "title": "Open File Diff",
+        "category": "Notebook Review"
+      },
+      {
+        "command": "nbreview.addComment",
+        "title": "Add Review Comment",
+        "category": "Notebook Review"
+      },
+      {
+        "command": "nbreview.editDraft",
+        "title": "Edit Pending Comment",
+        "category": "Notebook Review",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "nbreview.saveDraft",
+        "title": "Save",
+        "category": "Notebook Review"
+      },
+      {
+        "command": "nbreview.cancelEditDraft",
+        "title": "Cancel",
+        "category": "Notebook Review"
+      },
+      {
+        "command": "nbreview.deleteDraft",
+        "title": "Delete Pending Comment",
+        "category": "Notebook Review",
+        "icon": "$(trash)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "nbreview.submitReview",
+          "when": "view == nbreview.files && nbreview.active",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nbreview.refresh",
+          "when": "view == nbreview.files && nbreview.active",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nbreview.openPr",
+          "when": "view == nbreview.files",
+          "group": "navigation@3"
+        },
+        {
+          "command": "nbreview.openOnGitHub",
+          "when": "view == nbreview.files && nbreview.active",
+          "group": "more@1"
+        },
+        {
+          "command": "nbreview.close",
+          "when": "view == nbreview.files && nbreview.active",
+          "group": "more@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "nbreview.openVisual",
+          "when": "view == nbreview.files && viewItem == notebook",
+          "group": "inline@1"
+        },
+        {
+          "command": "nbreview.openNotebookDiff",
+          "when": "view == nbreview.files && viewItem == notebook",
+          "group": "inline@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "nbreview.openVisual",
+          "when": "resourceScheme == nbreview",
+          "group": "navigation@1"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "nbreview.addComment",
+          "when": "commentController == nbreview",
+          "group": "inline@1"
+        }
+      ],
+      "comments/comment/title": [
+        {
+          "command": "nbreview.editDraft",
+          "when": "commentController == nbreview && comment == draft",
+          "group": "inline@1"
+        },
+        {
+          "command": "nbreview.deleteDraft",
+          "when": "commentController == nbreview && comment == draft",
+          "group": "inline@2"
+        }
+      ],
+      "comments/comment/context": [
+        {
+          "command": "nbreview.saveDraft",
+          "when": "commentController == nbreview && comment == draft",
+          "group": "inline@1"
+        },
+        {
+          "command": "nbreview.cancelEditDraft",
+          "when": "commentController == nbreview && comment == draft",
+          "group": "inline@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "nbreview.addComment",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.editDraft",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.saveDraft",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.cancelEditDraft",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.deleteDraft",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.openNotebook",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.openFileDiff",
+          "when": "false"
+        },
+        {
+          "command": "nbreview.openVisual",
+          "when": "resourceScheme == nbreview"
+        },
+        {
+          "command": "nbreview.openNotebookDiff",
+          "when": "false"
+        }
+      ]
+    },
+    "languages": [
+      {
+        "id": "nbreview",
+        "aliases": [
+          "Notebook Review"
+        ],
+        "extensions": [
+          ".nbreview"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "nbreview",
+        "scopeName": "source.nbreview",
+        "path": "./syntaxes/nbreview.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.python": "python",
+          "meta.embedded.block.markdown": "markdown"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Notebook Review",
+      "properties": {
+        "nbreview.useGhCli": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use the token from `gh auth token` when the GitHub CLI is signed in, before asking for VS Code's GitHub sign-in."
+        },
+        "nbreview.defaultView": {
+          "type": "string",
+          "enum": [
+            "visual",
+            "text"
+          ],
+          "enumDescriptions": [
+            "Rendered cells, outputs and comments side by side.",
+            "Line-by-line text diff with VS Code's comment widgets."
+          ],
+          "default": "visual",
+          "description": "What opens when you click a notebook in the Pull Request panel."
+        },
+        "nbreview.markGeneratedFilesViewed": {
+          "type": "boolean",
+          "default": true,
+          "description": "In nbdev repositories: when you mark a notebook as viewed, also mark the Python modules nbdev generated from it."
+        }
+      }
+    },
+    "colors": [
+      {
+        "id": "nbreview.cellHeaderBackground",
+        "description": "Background of the cell header lines in notebook review diffs.",
+        "defaults": {
+          "dark": "#3794ff26",
+          "light": "#0066bf1a",
+          "highContrast": null,
+          "highContrastLight": null
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[nbreview]": {
+        "editor.wordWrap": "on",
+        "editor.stickyScroll.enabled": true
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p .",
+    "test": "esbuild test/*.test.ts --bundle --platform=node --format=esm --main-fields=module,main --outdir=out/test --out-extension:.js=.mjs --log-level=warning && node --test out/test/*.test.mjs",
+    "package": "npm run build && vsce package --no-dependencies -o nbreview.vsix",
+    "demo": "npm run build && esbuild scripts/demo.ts --bundle --platform=node --format=esm --main-fields=module,main --outfile=out/demo.mjs --log-level=warning && node out/demo.mjs"
+  },
+  "dependencies": {
+    "@vscode/markdown-it-katex": "^1.1.2",
+    "dompurify": "^3.4.17",
+    "highlight.js": "^11.12.0",
+    "jsonc-parser": "^3.3.1",
+    "katex": "^0.16.47",
+    "markdown-it": "^14.3.3"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "^1.95.0",
+    "@vscode/codicons": "^0.0.36",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3"
+  }
+}
