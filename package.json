@@ -495,7 +495,8 @@
     "test": "esbuild test/*.test.ts --bundle --platform=node --format=esm --main-fields=module,main --outdir=out/test --out-extension:.js=.mjs --log-level=warning && node --test out/test/*.test.mjs",
     "package": "npm run build && vsce package --no-dependencies -o nbreview.vsix",
     "demo": "npm run build && esbuild scripts/demo.ts --bundle --platform=node --format=esm --main-fields=module,main --outfile=out/demo.mjs --log-level=warning && node out/demo.mjs",
-    "bench": "node scripts/bench.mjs"
+    "bench": "node scripts/bench.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@vscode/markdown-it-katex": "^1.1.2",
@@ -510,6 +511,7 @@
     "@types/node": "^22.20.5",
     "@types/vscode": "^1.95.0",
     "@vscode/codicons": "^0.0.36",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.25.12",
     "typescript": "^5.9.3"

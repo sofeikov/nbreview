@@ -110,7 +110,10 @@ GitHub anchors review comments to lines of the raw `.ipynb` file. Notebook Revie
 | `npm run typecheck` | Type-check the sources. |
 | `npm run package` | Build `nbreview.vsix`. |
 | `npm run bench -- [--before REF] [--runs N] TASK ARGS` | Compare the speed of a git ref (default `HEAD`) with the working tree, in alternating fresh processes, and print the mean difference with a 95% bootstrap confidence interval. Tasks: `viewModel BASE.ipynb HEAD.ipynb PATCH …` (building the review page), `activate` (loading the extension), and `openPr owner/repo#123` with `GH_TOKEN` set (opening a pull request; read-only). |
+| `npm run smoke -- [--from REV]` | Check the packaged extension in a real VS Code (downloaded into `.vscode-test/`): **A**, a fresh install; **B**, an update in place from the previous release (or `REV`) with **Restart Extensions** and no window reload. In both, every command must be registered and the ones that work without a pull request are run; it fails on any error from them, any Notebook Review error notification or extension host error, and, in A, on any setting that can't be written. Opens VS Code windows for about a minute. |
 | `npm run demo` | Write `out/demo/index.html`: the review page for the notebooks in `docs/demo/`, outside VS Code. Serve `out/demo` over HTTP to open it. The README screenshots are taken from it. |
+
+Before publishing a release: `npm run typecheck`, `npm test`, `npm run smoke`, then try the new feature by hand in the packaged extension, both freshly installed and updated in place. New commands go in `RUN` or `SKIP` in `scripts/smoke.mjs`; the smoke test fails until they do. Commands must not write settings: right after an update, VS Code hasn't registered the new ones yet.
 
 The core does not use the VS Code API and is in `src/core/`:
 
@@ -129,6 +132,7 @@ The core does not use the VS Code API and is in `src/core/`:
 ## Changelog
 
 ### 0.8.2
+- `npm run smoke`: a check of the packaged extension, freshly installed and updated in place, run before each release.
 - Fix: **View as List** / **View as Tree** failed with "nbreview.fileLayout is not a registered configuration" after updating the extension without reloading the window. The buttons now remember the choice themselves instead of writing the setting, which gives the default.
 
 ### 0.8.1

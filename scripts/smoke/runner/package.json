@@ -1,0 +1,14 @@
+{
+  "name": "nbreview-smoke-runner",
+  "publisher": "nbreview-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Loaded next to the installed Notebook Review by `npm run smoke`: runs its commands and settings and reports what failed.",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.cjs"
+}

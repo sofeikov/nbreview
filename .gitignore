@@ -3,3 +3,4 @@ dist/
 *.vsix
 test/fixtures/private/
 out/
+.vscode-test/
