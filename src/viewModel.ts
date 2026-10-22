@@ -1,7 +1,7 @@
 // Builds what the visual review page shows from a notebook pair, its threads and pending comments.
 import type { NotebookEntry, PlacedThread } from './session.ts';
 import type { NbCell, NbOutput } from './core/notebook.ts';
-import { diffCells } from './core/cellDiff.ts';
+import { diffCells, onlyWhitespaceDiffers } from './core/cellDiff.ts';
 import { anchorForDocLines, type ReviewDoc } from './core/reviewDoc.ts';
 import { parseBody } from './core/anchor.ts';
 import { highlightLines, renderCommentBody, renderMarkdownCell } from './render.ts';
@@ -10,26 +10,39 @@ import type { CellVM, CommentVM, OutputVM, ThreadVM, ViewModel } from './webview
 
 /**
  * The page's data for a notebook. With `since`, the old side is the notebook as it was at the
- * viewer's last review instead of the pull request's base.
+ * viewer's last review instead of the pull request's base. With `hideNoise`, cells whose only
+ * change is their outputs, or whitespace in their source, show as unchanged.
  */
 export function buildViewModel(
   prEntry: NotebookEntry,
   pr: { number: number; title: string; url: string },
   since?: { base: ReviewDoc; label: string },
+  options: { hideNoise?: boolean } = {},
 ): ViewModel {
   const entry = since ? { ...prEntry, base: since.base } : prEntry;
+  const hide = !!options.hideNoise;
   const language = entry.head.notebook.language || entry.base.notebook.language || 'python';
-  const pairs = diffCells(entry.base.notebook.cells, entry.head.notebook.cells);
+  const pairs = diffCells(entry.base.notebook.cells, entry.head.notebook.cells, { ignoreWhitespace: hide });
+  const noise = { cells: 0, outputs: 0, whitespace: 0 };
   const cells: CellVM[] = pairs.map(p => {
     const any = (p.head ?? p.base)!;
     const lang = any.type === 'code' ? language : any.type === 'markdown' ? 'markdown' : 'plaintext';
     const same = !!p.base && !!p.head && p.base.type === p.head.type && p.lines.every(l => l.op === 'same') && p.base.source.length === p.head.source.length;
+    // Counted whether or not it is hidden, so the page can say how much there is to hide.
+    const whitespace = !!p.base && !!p.head && p.base.type === p.head.type && onlyWhitespaceDiffers(p.base.source, p.head.source);
+    const sourceChanged = p.sourceChanged && !(hide && whitespace);
+    const outputsOnly = !!p.base && !!p.head && !sourceChanged && !whitespace && p.outputsChanged;
+    noise.outputs += outputsOnly || (whitespace && p.outputsChanged) ? 1 : 0;
+    noise.whitespace += whitespace ? 1 : 0;
+    noise.cells += outputsOnly || whitespace ? 1 : 0;
+    const hidden = hide && !!p.base && !!p.head && !sourceChanged && (p.outputsChanged || whitespace);
     return {
       key: (p.head ?? p.base)!.id + (p.head ? '' : ':removed'),
-      status: p.status,
+      status: hidden ? 'unchanged' : p.status,
       moved: p.moved,
-      sourceChanged: p.sourceChanged,
-      outputsChanged: p.outputsChanged,
+      sourceChanged,
+      outputsChanged: p.outputsChanged && !hidden,
+      ...(hidden ? { noiseHidden: p.outputsChanged && whitespace ? 'outputs and whitespace' : p.outputsChanged ? 'outputs' : 'whitespace' } : {}),
       type: any.type,
       baseId: p.base?.id,
       headId: p.head?.id,
@@ -48,15 +61,18 @@ export function buildViewModel(
     };
   });
   const count = (s: CellVM['status']) => cells.filter(c => c.status === s).length;
-  // The file's own counts are for the whole pull request; since a review, the changed source lines are counted.
-  const lines = (op: 'add' | 'del') => cells.reduce((n, c) => n + c.ops.filter(o => o.op === op).length, 0);
+  // Source lines, not the JSON lines GitHub counts, which for a notebook are mostly outputs and metadata.
+  const lines = (op: 'add' | 'del') => cells.reduce((n, c) => n + (c.sourceChanged ? c.ops.filter(o => o.op === op).length : 0), 0);
   return {
     pr,
     path: entry.path,
     ...(since ? { since: { label: since.label } } : {}),
+    hideNoise: hide,
+    noise,
+    fileStats: { additions: prEntry.file.additions, deletions: prEntry.file.deletions },
     stats: {
-      additions: since ? lines('add') : entry.file.additions,
-      deletions: since ? lines('del') : entry.file.deletions,
+      additions: lines('add'),
+      deletions: lines('del'),
       modified: count('modified'),
       added: count('added'),
       removed: count('removed'),

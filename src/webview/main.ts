@@ -169,9 +169,10 @@ function render(): void {
 
 function renderToolbar(m: ViewModel): HTMLElement {
   const slash = m.path.lastIndexOf('/');
+  const linesTitle = `Source lines. GitHub counts +${m.fileStats.additions} −${m.fileStats.deletions} in the .ipynb file, outputs and metadata included.`;
   const chips: Child[] = [
-    h('span', { class: 'chip add', text: `+${m.stats.additions}` }),
-    h('span', { class: 'chip del', text: `−${m.stats.deletions}` }),
+    h('span', { class: 'chip add', text: `+${m.stats.additions}`, title: linesTitle }),
+    h('span', { class: 'chip del', text: `−${m.stats.deletions}`, title: linesTitle }),
   ];
   const describe: string[] = [];
   if (m.stats.modified) describe.push(`${m.stats.modified} modified`);
@@ -203,6 +204,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
           disabled: !panel.since.available,
           title: panel.since.problem ?? `Only what changed after ${panel.since.label}`,
         })),
+      noiseButton(m),
       segmented([
         ['Changes', 'Show changed cells; fold the rest', !ui.showAll, () => { ui.showAll = false; persist(); render(); }],
         ['All cells', 'Show every cell', ui.showAll, () => { ui.showAll = true; persist(); render(); }],
@@ -237,6 +239,28 @@ function renderToolbar(m: ViewModel): HTMLElement {
         submitBox.open && renderSubmitBox()),
     ),
   );
+}
+
+/**
+ * "Hide noise": cells whose only change is their outputs (a notebook run again) or whitespace in
+ * their source (code reformatted) fold away like unchanged ones.
+ */
+function noiseButton(m: ViewModel): HTMLElement | false {
+  if (!m.noise.cells && !m.hideNoise) {
+    return false;
+  }
+  const cells = (n: number) => `${n} cell${n === 1 ? '' : 's'}`;
+  const what = [
+    m.noise.outputs && `${cells(m.noise.outputs)} whose outputs changed but not their source`,
+    m.noise.whitespace && `${cells(m.noise.whitespace)} whose source changed only in whitespace`,
+  ].filter(Boolean).join(', and ');
+  const title = (m.hideNoise ? `Hidden: ${what || 'nothing in this notebook'}. Click to show them.` : `Hide ${what}.`)
+    + ' Execution counts and metadata are always left out.';
+  return button([icon(m.hideNoise ? 'eye-closed' : 'eye'), m.hideNoise ? 'Noise hidden' : 'Hide noise', m.noise.cells ? h('span', { class: 'count', text: String(m.noise.cells) }) : null], () => post({ type: 'setHideNoise', on: !m.hideNoise }), {
+    class: `ghost noise${m.hideNoise ? ' on' : ''}`,
+    title,
+    'aria-pressed': m.hideNoise ? 'true' : 'false',
+  });
 }
 
 /** "3" when every thread is open, "2/5" when some are resolved. */
@@ -356,10 +380,12 @@ function renderCells(m: ViewModel): HTMLElement {
     } else {
       const cells = group;
       const titles = cells.map(c => c.title).filter(Boolean).slice(0, 3).join(' · ');
+      const noisy = cells.filter(c => c.noiseHidden).length;
       root.append(
         h('div', { class: 'fold-cells', role: 'button', tabindex: '0', title: 'Show these cells', onclick: () => { ui.expanded[key] = true; persist(); render(); } },
           icon('unfold'),
           h('span', { class: 'n', text: `${cells.length} unchanged cell${cells.length === 1 ? '' : 's'}` }),
+          noisy > 0 && h('span', { class: 'noisy', text: `${noisy} with only outputs or whitespace changed` }),
           h('span', { class: 'titles', text: titles })),
       );
     }
@@ -394,6 +420,7 @@ function renderCell(c: CellVM): HTMLElement {
     h('span', { class: 'id', text: c.headId ?? c.baseId }),
     c.status !== 'unchanged' && h('span', { class: `status ${c.status}`, text: c.status === 'modified' && !c.sourceChanged ? 'outputs changed' : c.status }),
     c.moved && h('span', { class: 'status moved', text: 'moved' }),
+    c.noiseHidden && h('span', { class: 'status noise', text: `${c.noiseHidden} changed`, title: 'Hidden as noise. Switch "Noise hidden" off in the toolbar to see the change.' }),
     c.sourceChanged && c.outputsChanged && c.status === 'modified' && h('span', { class: 'status outputs', text: 'outputs changed' }),
     h('span', { class: 'spacer' }),
     isMd && h('div', { class: 'segmented small' },

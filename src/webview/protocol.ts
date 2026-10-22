@@ -11,6 +11,12 @@ export interface ViewModel {
    * pull request's base. Comments can't be made on that side: it isn't part of the pull request.
    */
   since?: { label: string };
+  /** Cells whose only change is their outputs or whitespace show as unchanged. */
+  hideNoise: boolean;
+  /** Cells whose only changes are noise; of those, ones with changed outputs, and ones whose source changed only in whitespace. */
+  noise: { cells: number; outputs: number; whitespace: number };
+  /** GitHub's counts for the .ipynb file, JSON lines included; `stats` counts source lines. */
+  fileStats: { additions: number; deletions: number };
   stats: { additions: number; deletions: number; modified: number; added: number; removed: number; moved: number };
   cells: CellVM[];
 }
@@ -19,6 +25,8 @@ export interface CellVM {
   /** Stable key for the pair (head id, or base id for removed cells). */
   key: string;
   status: 'unchanged' | 'modified' | 'added' | 'removed';
+  /** Shown as unchanged because only this changed, and noise is hidden. */
+  noiseHidden?: 'outputs' | 'whitespace' | 'outputs and whitespace';
   moved: boolean;
   sourceChanged: boolean;
   outputsChanged: boolean;
@@ -143,6 +151,7 @@ export type WebviewMessage =
   | { type: 'resolve'; threadId: string; resolved: boolean }
   | { type: 'react'; commentId: string; content: ReactionContent; add: boolean }
   | { type: 'setSince'; on: boolean }
+  | { type: 'setHideNoise'; on: boolean }
   | { type: 'discardReview' }
   | { type: 'nextFile' }
   | { type: 'plan'; anchor: Anchor; requestId: number }

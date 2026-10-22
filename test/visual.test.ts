@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseNotebook, type NbCell } from '../src/core/notebook.ts';
-import { diffCells, diffLines } from '../src/core/cellDiff.ts';
+import { diffCells, diffLines, notebookChanges, onlyWhitespaceDiffers } from '../src/core/cellDiff.ts';
 import { anchorForDocLines, buildReviewDoc, docLineForSource, docLinesForAnchor } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
 import { highlightLines, renderMarkdownCell } from '../src/render.ts';
@@ -213,4 +213,57 @@ test('published threads: resolve flags, reactions, and editing only the viewer\'
   assert.deepEqual([theirs.canEdit, theirs.canDelete, theirs.text], [false, false, undefined]);
   assert.deepEqual(theirs.reactions, [{ content: 'HEART', count: 1, mine: true }]);
   assert.deepEqual([mine.canEdit, mine.canDelete, mine.text], [true, true, 'text C2']);
+});
+
+test('ignoring whitespace: reformatted code and blank lines are not a change, real edits still are', () => {
+  const base = [cell('a', ['def f(x):', '    return x+1']), cell('b', ['y = 1'])];
+  const head = [cell('a', ['def f(x):', '', '    return  x+1  ']), cell('b', ['y = 2'])];
+  const [a, b] = diffCells(base, head, { ignoreWhitespace: true });
+  assert.equal(a.sourceChanged, false);
+  assert.equal(a.status, 'unchanged');
+  assert.equal(b.sourceChanged, true);
+  assert.equal(diffCells(base, head)[0].sourceChanged, true, 'without the option, whitespace counts');
+  assert.equal(onlyWhitespaceDiffers(base[0].source, head[0].source), true);
+  assert.equal(onlyWhitespaceDiffers(base[1].source, head[1].source), false);
+  assert.equal(onlyWhitespaceDiffers(['x'], ['x']), false, 'identical is not a whitespace change');
+  // Cells without ids are still matched when only their whitespace changed.
+  const pairs = diffCells([cell('index-0', ['z  =  3'])], [cell('index-0', ['x = 0']), cell('index-1', ['z = 3'])], { ignoreWhitespace: true });
+  assert.deepEqual(pairs.map(p => [p.base?.source[0], p.head?.source[0], p.status]), [[undefined, 'x = 0', 'added'], ['z  =  3', 'z = 3', 'unchanged']]);
+});
+
+test('what changed in a notebook, in source lines rather than JSON lines', () => {
+  const base = parseNotebook(fx('small.base.ipynb')).cells;
+  const head = parseNotebook(fx('small.head.ipynb')).cells;
+  assert.deepEqual(notebookChanges(base, head), { additions: 4, deletions: 3, sourceCells: 2, outputCells: 1 });
+  assert.deepEqual(notebookChanges(base, base), { additions: 0, deletions: 0, sourceCells: 0, outputCells: 0 });
+});
+
+test('hiding noise folds cells whose only change is outputs or whitespace, and counts them either way', () => {
+  const e = entry(fx('small.base.ipynb'), fx('small.head.ipynb'), fx('small.patch'));
+  const pr = { number: 1, title: 't', url: 'u' };
+  const shown = buildViewModel(e, pr);
+  assert.equal(shown.hideNoise, false);
+  assert.deepEqual(shown.noise, { cells: 1, outputs: 1, whitespace: 0 });
+  assert.equal(shown.cells.find(c => c.key === 'demo')!.status, 'modified');
+  assert.deepEqual([shown.stats.additions, shown.stats.deletions], [4, 3], 'source lines, not the file\'s JSON lines');
+  assert.deepEqual(shown.fileStats, { additions: 3, deletions: 2 });
+
+  const hidden = buildViewModel(e, pr, undefined, { hideNoise: true });
+  const demo = hidden.cells.find(c => c.key === 'demo')!;
+  assert.equal(demo.status, 'unchanged');
+  assert.equal(demo.noiseHidden, 'outputs');
+  assert.equal(demo.outputsChanged, false, 'the outputs show once, as they are now');
+  assert.deepEqual(hidden.noise, { cells: 1, outputs: 1, whitespace: 0 });
+  assert.deepEqual(hidden.cells.filter(c => c.status !== 'unchanged').map(c => c.key), ['intro', 'loss-def']);
+
+  // A cell that was only reformatted.
+  const reformatted = JSON.parse(fx('small.head.ipynb'));
+  const lossDef = reformatted.cells.find((c: any) => c.id === 'loss-def');
+  lossDef.source = lossDef.source.map((l: string) => l.replace('(x - y)', '( x - y )'));
+  const e2 = entry(fx('small.head.ipynb'), JSON.stringify(reformatted), '');
+  assert.deepEqual(buildViewModel(e2, pr).noise, { cells: 1, outputs: 0, whitespace: 1 });
+  assert.equal(buildViewModel(e2, pr).cells.find(c => c.key === 'loss-def')!.status, 'modified');
+  const quiet = buildViewModel(e2, pr, undefined, { hideNoise: true });
+  assert.equal(quiet.cells.find(c => c.key === 'loss-def')!.noiseHidden, 'whitespace');
+  assert.deepEqual([quiet.stats.additions, quiet.stats.deletions], [0, 0]);
 });

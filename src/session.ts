@@ -6,6 +6,9 @@ import { buildReviewDoc, docLineForSource, type ReviewDoc } from './core/reviewD
 import { parsePatch, type CommentableLines } from './core/patch.ts';
 import { locateNotebookThread, matchExportedLine, nbdevSourceForLine, type Side } from './core/anchor.ts';
 import { locateFileThread } from './core/fileComments.ts';
+import { notebookChanges, type NotebookChanges } from './core/cellDiff.ts';
+
+export type { NotebookChanges };
 
 export interface NotebookEntry {
   file: PrFile;
@@ -75,6 +78,7 @@ export class ReviewSession {
   changedSinceReview?: Set<string>;
   sinceReviewProblem?: string;
   private readonly sinceDocs = new Map<string, Promise<ReviewDoc>>();
+  private readonly changes = new Map<string, NotebookChanges>();
   private readonly contents = new Map<string, Promise<string | undefined>>();
   private readonly commentables = new Map<string, CommentableLines>();
 
@@ -120,6 +124,20 @@ export class ReviewSession {
     } else {
       this.sinceReviewProblem = `GitHub can't compare the commit of your last review (${last.sha.slice(0, 7)}) with the pull request, perhaps after a force push.`;
     }
+  }
+
+  /** What changed in a notebook's cells (worked out once). */
+  notebookChanges(nbPath: string): NotebookChanges | undefined {
+    const entry = this.notebooks.get(nbPath);
+    if (!entry) {
+      return undefined;
+    }
+    let c = this.changes.get(nbPath);
+    if (!c) {
+      c = notebookChanges(entry.base.notebook.cells, entry.head.notebook.cells);
+      this.changes.set(nbPath, c);
+    }
+    return c;
   }
 
   /** Whether a file changed after the viewer's last review. */

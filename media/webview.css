@@ -151,6 +151,9 @@ button.danger.armed { border-color: var(--vscode-errorForeground); }
 .status.added { color: var(--add-mark); }
 .status.removed { color: var(--del-mark); }
 .status.moved, .status.outputs { color: var(--vscode-charts-orange, #d29922); }
+.status.noise { color: var(--muted); border-style: dashed; }
+button.noise.on { background: var(--vscode-button-secondaryBackground, var(--vscode-toolbar-activeBackground)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
+button.noise .count { margin-left: 2px; }
 .spacer { flex: 1; }
 
 .fold-cells {
@@ -166,6 +169,7 @@ button.danger.armed { border-color: var(--vscode-errorForeground); }
 }
 .fold-cells:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
 .fold-cells .n { font-weight: 600; white-space: nowrap; }
+.fold-cells .noisy { white-space: nowrap; color: var(--muted); font-style: italic; }
 .fold-cells .titles { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.8; }
 
 .empty-cell { padding: 8px 14px; color: var(--muted); font-style: italic; }

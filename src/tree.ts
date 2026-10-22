@@ -1,7 +1,7 @@
 // The "Review" side panel: the pull request, its notebooks and its other files, with GitHub
 // "Viewed" checkboxes, shown as a folder tree or as a flat list (setting `nbreview.fileLayout`).
 import * as vscode from 'vscode';
-import type { NotebookEntry, OtherFile } from './session.ts';
+import type { NotebookChanges, NotebookEntry, OtherFile } from './session.ts';
 import type { ReviewState } from './state.ts';
 import type { GhThread } from './github.ts';
 import { basename, buildFolderTree, dirname, shortPath, treeOrder, type FolderNode } from './paths.ts';
@@ -126,10 +126,19 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         const drafts = this.state.draftsFor(entry.path).length;
         const fresh = freshness(this.state, entry.path);
         const item = new vscode.TreeItem(fileLayout() === 'tree' ? basename(entry.path) : shortPath(entry.path, [...s.notebooks.keys()]));
-        item.description = [fresh && 'new', unresolved(threads), drafts ? `✎${drafts}` : '', `+${entry.file.additions} −${entry.file.deletions}`]
+        const changes = s.notebookChanges(entry.path);
+        item.description = [fresh && 'new', unresolved(threads), drafts ? `✎${drafts}` : '', changeCounts(changes)]
           .filter(Boolean)
           .join(' ');
-        item.tooltip = [entry.path, entry.file.status, fresh, threadSummary(threads), entry.error && `⚠ ${entry.error}`].filter(Boolean).join('\n');
+        item.tooltip = [
+          entry.path,
+          entry.file.status,
+          changesSummary(changes),
+          `In the .ipynb file on GitHub: +${entry.file.additions} −${entry.file.deletions} lines`,
+          fresh,
+          threadSummary(threads),
+          entry.error && `⚠ ${entry.error}`,
+        ].filter(Boolean).join('\n');
         item.iconPath = new vscode.ThemeIcon('notebook', statusColor(entry.file.status));
         item.contextValue = s.changedSince(entry.path) ? 'notebook since' : 'notebook';
         item.checkboxState = this.checkbox(entry.path);
@@ -186,6 +195,32 @@ export function reviewOrder(state: ReviewState): string[] {
 
 export function nodePath(node: Node): string | undefined {
   return node.kind === 'notebook' ? node.entry.path : node.kind === 'file' ? node.other.file.filename : undefined;
+}
+
+/**
+ * "+3 −1" in source lines, or "outputs only" for a notebook that was only run again: GitHub's
+ * own counts are of the JSON, mostly outputs and metadata.
+ */
+function changeCounts(c: NotebookChanges | undefined): string {
+  if (!c) {
+    return '';
+  }
+  if (c.additions || c.deletions || c.sourceCells) {
+    return `+${c.additions} −${c.deletions}`;
+  }
+  return c.outputCells ? 'outputs only' : 'metadata only';
+}
+
+function changesSummary(c: NotebookChanges | undefined): string {
+  if (!c) {
+    return '';
+  }
+  const cells = (n: number) => `${n} cell${n === 1 ? '' : 's'}`;
+  const parts = [
+    c.sourceCells && `source: +${c.additions} −${c.deletions} lines in ${cells(c.sourceCells)}`,
+    c.outputCells && `only the outputs of ${cells(c.outputCells)}`,
+  ].filter(Boolean);
+  return parts.length ? `Changed: ${parts.join('; ')}` : 'Only execution counts or metadata changed';
 }
 
 /** "💬2": the threads on GitHub still waiting to be resolved. */

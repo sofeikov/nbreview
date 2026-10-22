@@ -22,6 +22,12 @@ export class VisualReview implements vscode.Disposable {
       vscode.window.registerWebviewPanelSerializer('nbreview.visual', {
         deserializeWebviewPanel: (panel, saved) => this.restore(panel, saved),
       }),
+      // Changing the setting takes over from the last switch in a page.
+      vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('nbreview.hideNoise')) {
+          void this.setHideNoise(undefined);
+        }
+      }),
       state.onDidChange(e => {
         for (const [path, panel] of this.panels) {
           if (e.session) {
@@ -155,6 +161,9 @@ export class VisualReview implements vscode.Disposable {
       case 'react':
         await this.state.react(msg.commentId, msg.content, msg.add);
         return;
+      case 'setHideNoise':
+        await this.setHideNoise(msg.on);
+        return;
       case 'setSince':
         this.setSince(nbPath, msg.on);
         await this.sync(panel, nbPath, { model: true, threads: true });
@@ -194,6 +203,20 @@ export class VisualReview implements vscode.Disposable {
   // notebook is opened in the visual review, so the extension itself starts quickly.
   private viewModel?: Promise<typeof import('./viewModel.ts')>;
 
+  /**
+   * Whether cells whose only change is outputs or whitespace are folded away. The page's switch
+   * is remembered for every notebook; the setting gives the default. (Commands don't write
+   * settings: right after an update VS Code may not have registered a new one yet.)
+   */
+  private hideNoise(): boolean {
+    return this.ctx.globalState.get<boolean>('hideNoise') ?? vscode.workspace.getConfiguration('nbreview').get<boolean>('hideNoise', false);
+  }
+
+  private async setHideNoise(on: boolean | undefined): Promise<void> {
+    await this.ctx.globalState.update('hideNoise', on);
+    await Promise.all([...this.panels].map(([path, panel]) => this.sync(panel, path, { model: true })));
+  }
+
   private setSince(nbPath: string, on: boolean): void {
     if (on) {
       this.sinceOn.add(nbPath);
@@ -211,7 +234,8 @@ export class VisualReview implements vscode.Disposable {
     if (s && entry && what.model) {
       const base = since?.on ? await s.sinceReviewDoc(nbPath) : undefined;
       const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
-      this.post(panel, { type: 'model', model: vm.buildViewModel(entry, pr, base && since ? { base, label: since.label } : undefined) });
+      const model = vm.buildViewModel(entry, pr, base && since ? { base, label: since.label } : undefined, { hideNoise: this.hideNoise() });
+      this.post(panel, { type: 'model', model });
     }
     if (what.threads) {
       // Compared with the last review, the old side isn't the pull request's: its threads are left out.

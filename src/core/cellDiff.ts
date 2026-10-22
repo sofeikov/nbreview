@@ -21,7 +21,15 @@ export type LineOp =
   | { op: 'del'; base: number }
   | { op: 'add'; head: number };
 
-export function diffCells(base: NbCell[], head: NbCell[]): CellPair[] {
+export interface DiffOptions {
+  /**
+   * Compare lines without their whitespace, and don't count added or removed blank lines as a
+   * change, so code that was only reformatted reads as unchanged.
+   */
+  ignoreWhitespace?: boolean;
+}
+
+export function diffCells(base: NbCell[], head: NbCell[], options: DiffOptions = {}): CellPair[] {
   const matchOfHead = new Map<number, number>(); // head index → base index
   const usedBase = new Set<number>();
   const baseById = new Map(base.map((c, i) => [c.id, i]));
@@ -35,7 +43,7 @@ export function diffCells(base: NbCell[], head: NbCell[]): CellPair[] {
   // Cells without stable ids: match identical content, in order.
   const restHead = head.map((_, h) => h).filter(h => !matchOfHead.has(h));
   const restBase = base.map((_, b) => b).filter(b => !usedBase.has(b));
-  const key = (c: NbCell) => `${c.type}\u0000${c.source.join('\n')}`;
+  const key = (c: NbCell) => `${c.type}\u0000${(options.ignoreWhitespace ? meaningful(c.source) : c.source).join('\n')}`;
   for (const [h, b] of lcsPairs(restHead.map(h => key(head[h])), restBase.map(b => key(base[b])))) {
     matchOfHead.set(restHead[h], restBase[b]);
     usedBase.add(restBase[b]);
@@ -50,7 +58,7 @@ export function diffCells(base: NbCell[], head: NbCell[]): CellPair[] {
   const flushRemoved = (upTo: number) => {
     for (; nextBase < upTo; nextBase++) {
       if (!usedBase.has(nextBase)) {
-        pairs.push(makePair(base[nextBase], undefined, false));
+        pairs.push(makePair(base[nextBase], undefined, false, options));
       }
     }
   };
@@ -60,13 +68,13 @@ export function diffCells(base: NbCell[], head: NbCell[]): CellPair[] {
       flushRemoved(b);
       nextBase = Math.max(nextBase, b + 1);
     }
-    pairs.push(makePair(b === undefined ? undefined : base[b], cell, b !== undefined && !inOrder.has(h)));
+    pairs.push(makePair(b === undefined ? undefined : base[b], cell, b !== undefined && !inOrder.has(h), options));
   });
   flushRemoved(base.length);
   return pairs;
 }
 
-function makePair(base: NbCell | undefined, head: NbCell | undefined, moved: boolean): CellPair {
+function makePair(base: NbCell | undefined, head: NbCell | undefined, moved: boolean, options: DiffOptions): CellPair {
   if (!base || !head) {
     const cell = (base ?? head)!;
     return {
@@ -79,8 +87,10 @@ function makePair(base: NbCell | undefined, head: NbCell | undefined, moved: boo
       lines: base ? base.source.map((_, i) => ({ op: 'del', base: i })) : head!.source.map((_, i) => ({ op: 'add', head: i })),
     };
   }
-  const lines = diffLines(base.source, head.source);
-  const sourceChanged = lines.some(l => l.op !== 'same') || base.type !== head.type;
+  const ignore = options.ignoreWhitespace;
+  const lines = ignore ? diffLines(base.source.map(squash), head.source.map(squash)) : diffLines(base.source, head.source);
+  const blank = (l: LineOp) => (l.op === 'del' ? !base.source[l.base].trim() : l.op === 'add' ? !head.source[l.head].trim() : true);
+  const sourceChanged = base.type !== head.type || lines.some(l => l.op !== 'same' && !(ignore && blank(l)));
   const outputsChanged = base.outputs.map(o => o.hash).join() !== head.outputs.map(o => o.hash).join();
   return {
     base,
@@ -91,6 +101,57 @@ function makePair(base: NbCell | undefined, head: NbCell | undefined, moved: boo
     outputsChanged,
     lines,
   };
+}
+
+/**
+ * What changed in a notebook as a reader sees it, rather than in its JSON: GitHub's counts for a
+ * re-run notebook are mostly outputs, execution counts and metadata.
+ */
+export interface NotebookChanges {
+  /** Source lines added and removed, over all cells. */
+  additions: number;
+  deletions: number;
+  /** Cells whose source changed (or that were added or removed). */
+  sourceCells: number;
+  /** Cells whose source is the same but whose outputs changed. */
+  outputCells: number;
+}
+
+export function notebookChanges(base: NbCell[], head: NbCell[]): NotebookChanges {
+  const c: NotebookChanges = { additions: 0, deletions: 0, sourceCells: 0, outputCells: 0 };
+  for (const p of diffCells(base, head)) {
+    c.additions += p.lines.filter(l => l.op === 'add').length;
+    c.deletions += p.lines.filter(l => l.op === 'del').length;
+    if (p.sourceChanged) {
+      c.sourceCells++;
+    } else if (p.outputsChanged) {
+      c.outputCells++;
+    }
+  }
+  return c;
+}
+
+/**
+ * A line without its whitespace, as `git diff -w` compares lines: formatters add and remove
+ * spaces between tokens, not only at the start of a line.
+ */
+function squash(line: string): string {
+  return line.replace(/\s+/g, '');
+}
+
+/** The lines that say something, whitespace aside. */
+function meaningful(source: string[]): string[] {
+  return source.map(squash).filter(Boolean);
+}
+
+/** Whether two versions of a cell's source differ only in whitespace and blank lines. */
+export function onlyWhitespaceDiffers(a: string[], b: string[]): boolean {
+  if (a.join('\n') === b.join('\n')) {
+    return false;
+  }
+  const x = meaningful(a);
+  const y = meaningful(b);
+  return x.length === y.length && x.every((l, i) => l === y[i]);
 }
 
 /** Line diff: common prefix/suffix, then LCS on the middle. */
