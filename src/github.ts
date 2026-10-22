@@ -27,6 +27,8 @@ export interface PrFile {
 
 export interface GhComment {
   id: string;
+  /** Part of the viewer's pending (unsubmitted) review: visible only to them, editable. */
+  pending: boolean;
   /** REST id, for replying with a single comment. */
   databaseId?: number;
   body: string;
@@ -170,18 +172,26 @@ export class GitHub {
     return await res.text();
   }
 
-  async getThreads(owner: string, repo: string, number: number): Promise<GhThread[]> {
+  /**
+   * The review threads of a pull request, including the comments of the viewer's pending review
+   * (GitHub shows those to their author only), and the id of that pending review if there is one.
+   */
+  async getThreads(owner: string, repo: string, number: number): Promise<{ threads: GhThread[]; pendingReviewId?: string }> {
     const threads: GhThread[] = [];
+    let pendingReviewId: string | undefined;
     let after: string | null = null;
     for (;;) {
       const data: any = await this.graphql(
         `query($o:String!,$r:String!,$n:Int!,$after:String){repository(owner:$o,name:$r){pullRequest(number:$n){
+          reviews(states:PENDING, first:10){nodes{id viewerDidAuthor}}
           reviewThreads(first:100, after:$after){pageInfo{hasNextPage endCursor} nodes{
             id path line startLine originalLine diffSide subjectType isResolved isOutdated
             comments(first:100){nodes{id databaseId body createdAt url author{login avatarUrl} pullRequestReview{state}}}}}}}}`,
         { o: owner, r: repo, n: number, after },
       );
-      const page = data.repository.pullRequest.reviewThreads;
+      const pr = data.repository.pullRequest;
+      pendingReviewId ??= pr.reviews.nodes.find((r: any) => r.viewerDidAuthor)?.id;
+      const page = pr.reviewThreads;
       for (const t of page.nodes) {
         threads.push({
           id: t.id,
@@ -194,17 +204,19 @@ export class GitHub {
           isResolved: t.isResolved,
           isOutdated: t.isOutdated,
           comments: t.comments.nodes
-            // Our own unsubmitted comments from github.com are not shown; they'd confuse the drafts.
-            .filter((c: any) => c.pullRequestReview?.state !== 'PENDING')
+            // Every posted review comment belongs to a review. Right after a pending review is
+            // discarded, GitHub can briefly return its comments with no review; they are gone.
+            .filter((c: any) => c.pullRequestReview)
             .map((c: any) => ({
-              id: c.id,
-              databaseId: c.databaseId ?? undefined,
-              body: c.body,
-              createdAt: c.createdAt,
-              url: c.url,
-              author: c.author?.login ?? 'ghost',
-              avatarUrl: c.author?.avatarUrl,
-            })),
+            id: c.id,
+            pending: c.pullRequestReview?.state === 'PENDING',
+            databaseId: c.databaseId ?? undefined,
+            body: c.body,
+            createdAt: c.createdAt,
+            url: c.url,
+            author: c.author?.login ?? 'ghost',
+            avatarUrl: c.author?.avatarUrl,
+          })),
         });
       }
       if (!page.pageInfo.hasNextPage) {
@@ -212,7 +224,7 @@ export class GitHub {
       }
       after = page.pageInfo.endCursor;
     }
-    return threads.filter(t => t.comments.length > 0);
+    return { threads: threads.filter(t => t.comments.length > 0), pendingReviewId };
   }
 
   /**
@@ -325,60 +337,77 @@ export class GitHub {
     return res.json();
   }
 
+  // --- The pending review ----------------------------------------------------------------------
+  // Comments made with "Start a review" go into the viewer's pending review on GitHub, which only
+  // they can see until they submit it. It is the same review github.com uses, so either can be
+  // used to add to it, edit it or submit it.
+
+  /** Opens a pending review on the pull request and returns its id. */
+  async startPendingReview(pr: PrInfo): Promise<string> {
+    const data: any = await this.graphql(
+      `mutation($pr:ID!,$sha:GitObjectID!){addPullRequestReview(input:{pullRequestId:$pr,commitOID:$sha}){pullRequestReview{id}}}`,
+      { pr: pr.nodeId, sha: pr.headSha },
+    );
+    return data.addPullRequestReview.pullRequestReview.id;
+  }
+
+  async addPendingThread(reviewId: string, t: NewThread): Promise<void> {
+    await this.graphql(`mutation($input:AddPullRequestReviewThreadInput!){addPullRequestReviewThread(input:$input){thread{id}}}`, {
+      input: {
+        pullRequestReviewId: reviewId,
+        path: t.path,
+        body: t.body,
+        subjectType: t.subjectType,
+        ...(t.subjectType === 'LINE' ? { line: t.line, side: t.side, ...(t.startLine ? { startLine: t.startLine, startSide: t.side } : {}) } : {}),
+      },
+    });
+  }
+
+  async addPendingReply(reviewId: string, threadId: string, body: string): Promise<void> {
+    await this.graphql(
+      `mutation($input:AddPullRequestReviewThreadReplyInput!){addPullRequestReviewThreadReply(input:$input){comment{id}}}`,
+      { input: { pullRequestReviewId: reviewId, pullRequestReviewThreadId: threadId, body } },
+    );
+  }
+
+  async updatePendingComment(commentId: string, body: string): Promise<void> {
+    await this.graphql(
+      `mutation($input:UpdatePullRequestReviewCommentInput!){updatePullRequestReviewComment(input:$input){pullRequestReviewComment{id}}}`,
+      { input: { pullRequestReviewCommentId: commentId, body } },
+    );
+  }
+
+  async deletePendingComment(commentId: string): Promise<void> {
+    await this.graphql(
+      `mutation($input:DeletePullRequestReviewCommentInput!){deletePullRequestReviewComment(input:$input){clientMutationId}}`,
+      { input: { id: commentId } },
+    );
+  }
+
+  /** Discards a pending review and all its comments. */
+  async deleteReview(reviewId: string): Promise<void> {
+    await this.graphql(
+      `mutation($input:DeletePullRequestReviewInput!){deletePullRequestReview(input:$input){clientMutationId}}`,
+      { input: { pullRequestReviewId: reviewId } },
+    );
+  }
+
   /**
-   * Posts a whole review: opens (or reuses) the viewer's pending review, adds every new thread
-   * and reply, then submits it. `onPosted` is called after each item so callers can drop drafts
-   * that made it, and a retry after a failure doesn't post them twice.
+   * Submits the pending review, or, without one, a review with just a summary (for example an
+   * approval). Returns the review's URL.
    */
-  async submitReview(args: {
-    pr: PrInfo;
-    event: ReviewEvent;
-    body: string;
-    threads: (NewThread & { key: string })[];
-    replies: { key: string; threadId: string; body: string }[];
-    onPosted: (key: string) => void;
-  }): Promise<string> {
-    const { pr } = args;
-    const existing: any = await this.graphql(
-      `query($id:ID!){node(id:$id){... on PullRequest{reviews(states:PENDING,first:20){nodes{id viewerDidAuthor}}}}}`,
-      { id: pr.nodeId },
+  async submitReview(pr: PrInfo, pendingReviewId: string | undefined, event: ReviewEvent, body: string): Promise<string> {
+    if (pendingReviewId) {
+      const data: any = await this.graphql(
+        `mutation($id:ID!,$event:PullRequestReviewEvent!,$body:String){submitPullRequestReview(input:{pullRequestReviewId:$id,event:$event,body:$body}){pullRequestReview{url}}}`,
+        { id: pendingReviewId, event, body: body || null },
+      );
+      return data.submitPullRequestReview.pullRequestReview.url;
+    }
+    const data: any = await this.graphql(
+      `mutation($pr:ID!,$sha:GitObjectID!,$event:PullRequestReviewEvent!,$body:String){addPullRequestReview(input:{pullRequestId:$pr,commitOID:$sha,event:$event,body:$body}){pullRequestReview{url}}}`,
+      { pr: pr.nodeId, sha: pr.headSha, event, body: body || null },
     );
-    let reviewId: string | undefined = existing.node.reviews.nodes.find((r: any) => r.viewerDidAuthor)?.id;
-    if (!reviewId) {
-      const created: any = await this.graphql(
-        `mutation($pr:ID!,$sha:GitObjectID!){addPullRequestReview(input:{pullRequestId:$pr,commitOID:$sha}){pullRequestReview{id}}}`,
-        { pr: pr.nodeId, sha: pr.headSha },
-      );
-      reviewId = created.addPullRequestReview.pullRequestReview.id as string;
-    }
-    for (const t of args.threads) {
-      await this.graphql(
-        `mutation($input:AddPullRequestReviewThreadInput!){addPullRequestReviewThread(input:$input){thread{id}}}`,
-        {
-          input: {
-            pullRequestReviewId: reviewId,
-            path: t.path,
-            body: t.body,
-            subjectType: t.subjectType,
-            ...(t.subjectType === 'LINE'
-              ? { line: t.line, side: t.side, ...(t.startLine ? { startLine: t.startLine, startSide: t.side } : {}) }
-              : {}),
-          },
-        },
-      );
-      args.onPosted(t.key);
-    }
-    for (const r of args.replies) {
-      await this.graphql(
-        `mutation($input:AddPullRequestReviewThreadReplyInput!){addPullRequestReviewThreadReply(input:$input){comment{id}}}`,
-        { input: { pullRequestReviewId: reviewId, pullRequestReviewThreadId: r.threadId, body: r.body } },
-      );
-      args.onPosted(r.key);
-    }
-    const submitted: any = await this.graphql(
-      `mutation($id:ID!,$event:PullRequestReviewEvent!,$body:String){submitPullRequestReview(input:{pullRequestReviewId:$id,event:$event,body:$body}){pullRequestReview{url}}}`,
-      { id: reviewId, event: args.event, body: args.body || null },
-    );
-    return submitted.submitPullRequestReview.pullRequestReview.url;
+    return data.addPullRequestReview.pullRequestReview.url;
   }
 }

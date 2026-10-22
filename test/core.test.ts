@@ -6,6 +6,7 @@ import { parseNotebook } from '../src/core/notebook.ts';
 import { buildReviewDoc, docLineForSource, headerLine } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
 import {
+  replaceBodyText,
   locateNotebookThread,
   matchExportedLine,
   nbdevSourceForLine,
@@ -122,4 +123,34 @@ test('nbdev markers map .py lines to notebook cells', () => {
   assert.equal(matchExportedLine(head.cells[1], src), 2);
   const old = nbdevSourceForLine('src/pkg/losses.py', py.replace('#loss-def', '1'), 7)!;
   assert.equal(old.cellId, 'index-1');
+});
+
+test('output comments remember which output, and come back on it', () => {
+  const imageLine = headDoc.lines.findIndex(l => l.kind === 'output' && l.output?.kind === 'image');
+  const plan = planComment({ doc: headDoc, path: PATH, side: 'RIGHT', startDocLine: imageLine, endDocLine: imageLine, commentable, text: 'Axis labels?' });
+  assert.equal(parseBody(plan.body).marker?.outputIndex, 1);
+  const where = locateNotebookThread(
+    { line: null, startLine: null, originalLine: null, diffSide: 'RIGHT', subjectType: 'FILE', isOutdated: false, body: plan.body },
+    { base: baseDoc, head: headDoc },
+  );
+  assert.equal(where?.docLine, imageLine);
+});
+
+test('multi-line comments come back with their whole range', () => {
+  const a = docLineForSource(headDoc, 'loss-def', 1)!;
+  const plan = planComment({ doc: headDoc, path: PATH, side: 'RIGHT', startDocLine: a, endDocLine: a + 1, commentable, text: 'x' });
+  const where = locateNotebookThread(
+    { line: plan.line!, startLine: plan.startLine!, originalLine: plan.line!, diffSide: 'RIGHT', subjectType: 'LINE', isOutdated: false, body: plan.body },
+    { base: baseDoc, head: headDoc },
+  );
+  assert.deepEqual([where?.startDocLine, where?.docLine], [a, a + 1]);
+});
+
+test('editing a comment keeps its cell header and marker', () => {
+  const docLine = docLineForSource(headDoc, 'loss-def', 1)!;
+  const plan = planComment({ doc: headDoc, path: PATH, side: 'RIGHT', startDocLine: docLine, endDocLine: docLine, commentable, text: 'old' });
+  const edited = replaceBodyText(plan.body, 'new text');
+  assert.equal(parseBody(edited).text, 'new text');
+  assert.deepEqual(parseBody(edited).marker, parseBody(plan.body).marker);
+  assert.equal(replaceBodyText('a plain reply', 'changed'), 'changed');
 });

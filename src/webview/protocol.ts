@@ -87,7 +87,10 @@ export interface ThreadVM {
 
 export interface PanelState {
   viewed: boolean;
+  /** Comments in the pending review on GitHub, on any file. */
   pending: number;
+  /** The viewer has a pending review; GitHub doesn't take single comments next to one. */
+  pendingReview: boolean;
 }
 
 export type HostMessage =
@@ -106,6 +109,7 @@ export type WebviewMessage =
   | { type: 'reply'; threadId: string; text: string; requestId: number; mode: 'review' | 'single' }
   | { type: 'editDraft'; key: string; text: string }
   | { type: 'deleteDraft'; key: string }
+  | { type: 'discardReview' }
   | { type: 'plan'; anchor: Anchor; requestId: number }
   | { type: 'submitReview'; event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'; body: string }
   | { type: 'setViewed'; viewed: boolean }

@@ -1,31 +1,37 @@
 // The review in progress: the loaded pull request, pending comments and viewed flags. Both the
 // text diff and the visual review read from here and react to its change events, so a comment
 // made in one view shows up in the other.
+//
+// Pending comments live in the viewer's pending review on GitHub (as on github.com), not on this
+// computer: they survive restarts and other machines, and github.com can add to or submit the
+// same review.
 import * as vscode from 'vscode';
-import type { ReviewSession, NotebookEntry } from './session.ts';
-import { planComment, type GhThreadTarget, type Side } from './core/anchor.ts';
+import type { ReviewSession, NotebookEntry, PlacedThread } from './session.ts';
+import { parseBody, planComment, replaceBodyText, type GhThreadTarget, type Side } from './core/anchor.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
 
+/** A comment in the pending review, where it sits in the review documents. */
 export interface Draft {
+  /** GitHub id of the pending comment. */
   key: string;
   nbPath: string;
   side: Side;
   startDocLine: number;
   endDocLine: number;
+  /** The reviewer's text, without the cell header and marker. */
   text: string;
-  /** GitHub thread id when this draft is a reply. */
+  /** Thread id when this comment is a reply rather than the start of a thread. */
   replyTo?: string;
 }
 
-/** Which view caused a change, so it can skip redrawing what it already shows. */
-export type Origin = 'text' | 'visual' | 'system';
+/** What a new pending comment or single comment is about. */
+export type NewComment = Omit<Draft, 'key'>;
 
 export interface ChangeEvent {
   session?: boolean;
   drafts?: boolean;
   threads?: boolean;
   viewed?: boolean;
-  origin: Origin;
 }
 
 export class ReviewState {
@@ -39,7 +45,7 @@ export class ReviewState {
 
   setSession(session: ReviewSession | undefined): void {
     this.session = session;
-    this.changed.fire({ session: true, drafts: true, threads: true, viewed: true, origin: 'system' });
+    this.changed.fire({ session: true, drafts: true, threads: true, viewed: true });
   }
 
   prKey(): string {
@@ -58,34 +64,90 @@ export class ReviewState {
 
   // --- Pending comments -------------------------------------------------------------------
 
+  /** Pending comments on notebooks, from the pending review on GitHub. */
   drafts(): Draft[] {
-    return this.ctx.globalState.get<Draft[]>(`drafts:${this.prKey()}`, []);
+    const out: Draft[] = [];
+    for (const p of this.session?.placed ?? []) {
+      p.gh.comments.forEach((c, i) => {
+        if (c.pending) {
+          out.push({
+            key: c.id,
+            nbPath: p.nbPath,
+            side: p.side,
+            startDocLine: p.startDocLine ?? p.docLine,
+            endDocLine: p.docLine,
+            text: parseBody(c.body).text,
+            replyTo: i > 0 ? p.gh.id : undefined,
+          });
+        }
+      });
+    }
+    return out;
   }
 
   draftsFor(nbPath: string): Draft[] {
     return this.drafts().filter(d => d.nbPath === nbPath);
   }
 
-  private async save(list: Draft[], origin: Origin): Promise<void> {
-    await this.ctx.globalState.update(`drafts:${this.prKey()}`, list);
-    this.changed.fire({ drafts: true, origin });
+  /** Comments in the pending review, on any file. */
+  pendingCount(): number {
+    return this.session?.pendingCount ?? 0;
   }
 
-  async addDraft(draft: Omit<Draft, 'key'>, origin: Origin): Promise<Draft> {
-    const d: Draft = { key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...draft };
-    await this.save([...this.drafts(), d], origin);
-    return d;
+  /** Whether the viewer has a pending review, which GitHub doesn't allow single comments next to. */
+  hasPendingReview(): boolean {
+    return !!this.session?.pendingReviewId;
   }
 
-  async updateDraft(key: string, text: string, origin: Origin): Promise<void> {
-    await this.save(this.drafts().map(d => (d.key === key ? { ...d, text } : d)), origin);
+  /** Adds a comment or reply to the pending review on GitHub, starting the review if needed. */
+  async addDraft(d: NewComment): Promise<void> {
+    const s = this.requireSession();
+    const reviewId = s.pendingReviewId ?? (s.pendingReviewId = await s.gh.startPendingReview(s.pr));
+    if (d.replyTo) {
+      await s.gh.addPendingReply(reviewId, d.replyTo, d.text);
+    } else {
+      const plan = this.plan(d);
+      if (!plan) {
+        throw new Error('That notebook is no longer in the pull request.');
+      }
+      await s.gh.addPendingThread(reviewId, plan);
+    }
+    await this.reloadThreads();
   }
 
-  async removeDraft(key: string, origin: Origin): Promise<void> {
-    await this.save(this.drafts().filter(d => d.key !== key), origin);
+  async updateDraft(key: string, text: string): Promise<void> {
+    const s = this.requireSession();
+    const d = this.drafts().find(x => x.key === key);
+    const comment = s.placed.flatMap(p => p.gh.comments).find(c => c.id === key);
+    if (!d || !comment) {
+      throw new Error('That pending comment is no longer on GitHub.');
+    }
+    // The first comment of a thread carries the cell header; suggestions are re-encoded again.
+    const body = d.replyTo ? text : this.plan({ ...d, text })?.body ?? replaceBodyText(comment.body, text);
+    await s.gh.updatePendingComment(key, body);
+    await this.reloadThreads();
   }
 
-  /** Where a pending comment will land on GitHub. */
+  /** Deletes a pending comment; deleting the last one also discards the then empty review. */
+  async removeDraft(key: string): Promise<void> {
+    const s = this.requireSession();
+    await s.gh.deletePendingComment(key);
+    await this.reloadThreads();
+    if (s.pendingReviewId && s.pendingCount === 0) {
+      await this.discardReview();
+    }
+  }
+
+  /** Discards the pending review and all its comments. */
+  async discardReview(): Promise<void> {
+    const s = this.requireSession();
+    if (s.pendingReviewId) {
+      await s.gh.deleteReview(s.pendingReviewId);
+    }
+    await this.reloadThreads();
+  }
+
+  /** Where a comment will land on GitHub. */
   plan(d: Pick<Draft, 'nbPath' | 'side' | 'startDocLine' | 'endDocLine' | 'text'>): GhThreadTarget | undefined {
     const entry = this.entry(d.nbPath);
     if (!entry) {
@@ -103,17 +165,17 @@ export class ReviewState {
   }
 
   /**
-   * Posts a comment or a reply to GitHub straight away, outside the pending review, then reloads
-   * the threads so it shows like any other GitHub comment.
+   * Posts a comment or a reply to GitHub straight away, outside any review, then reloads the
+   * threads so it shows like any other GitHub comment.
    */
-  async postSingle(d: Omit<Draft, 'key'>): Promise<void> {
-    const s = this.session;
-    if (!s) {
-      throw new Error('No pull request is open.');
+  async postSingle(d: NewComment): Promise<void> {
+    const s = this.requireSession();
+    if (s.pendingReviewId) {
+      throw new Error('You have a pending review. Submit or discard it to post single comments, as on GitHub.');
     }
     if (d.replyTo) {
       const thread = s.placed.find(p => p.gh.id === d.replyTo)?.gh;
-      const first = thread?.comments.find(c => c.databaseId !== undefined);
+      const first = thread?.comments.find(c => c.databaseId !== undefined && !c.pending);
       if (!first?.databaseId) {
         throw new Error('That thread is no longer on the pull request.');
       }
@@ -128,8 +190,24 @@ export class ReviewState {
     await this.reloadThreads();
   }
 
-  describe(d: Draft): string {
-    return d.replyTo ? 'Pending reply' : `Pending · ${this.plan(d)?.describe ?? 'comment'}`;
+  /** The label of a thread made of pending comments: where it is on GitHub. */
+  describe(p: PlacedThread): string {
+    const t = p.gh;
+    if (t.comments.some(c => !c.pending)) {
+      return 'Pending reply';
+    }
+    if (t.subjectType === 'FILE') {
+      return `Pending · file comment on ${t.path}`;
+    }
+    const lines = t.startLine && t.startLine !== t.line ? `L${t.startLine}-${t.line}` : `L${t.line ?? t.originalLine}`;
+    return `Pending · line comment → ${t.path} ${lines}`;
+  }
+
+  private requireSession(): ReviewSession {
+    if (!this.session) {
+      throw new Error('No pull request is open.');
+    }
+    return this.session;
   }
 
   // --- GitHub threads and viewed state ----------------------------------------------------
@@ -139,7 +217,7 @@ export class ReviewState {
       return;
     }
     await this.session.loadThreads();
-    this.changed.fire({ threads: true, origin: 'system' });
+    this.changed.fire({ threads: true, drafts: true });
   }
 
   isViewed(path: string): boolean {
@@ -164,14 +242,14 @@ export class ReviewState {
     for (const p of all) {
       s.viewed.set(p, viewed);
     }
-    this.changed.fire({ viewed: true, origin: 'system' });
+    this.changed.fire({ viewed: true });
     try {
       await Promise.all([...all].map(p => s.gh.setViewed(s.pr.nodeId, p, viewed)));
     } catch (e) {
       for (const [p, v] of previous) {
         s.viewed.set(p, v);
       }
-      this.changed.fire({ viewed: true, origin: 'system' });
+      this.changed.fire({ viewed: true });
       throw e;
     }
   }

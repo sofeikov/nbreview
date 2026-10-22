@@ -7,7 +7,6 @@ import { buildReviewDoc, docLineForSource } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
 import { buildThreads, buildViewModel } from '../src/viewModel.ts';
 import type { NotebookEntry, PlacedThread } from '../src/session.ts';
-import type { Draft } from '../src/state.ts';
 
 const path = 'nbs/02_xg_model.ipynb';
 const patch = readFileSync('docs/demo/xg_model.patch', 'utf8');
@@ -31,24 +30,30 @@ const placed = [
       isResolved: false,
       isOutdated: false,
       comments: [
-        { author: 'maria', body: 'Why `C=0.5`? Was it tuned on the validation folds?', createdAt: hoursAgo(5), url: 'https://github.com/' },
-        { author: 'tom', body: 'Yes, a grid search over 0.1–2.0. The sweep is in `03_tuning.ipynb`.', createdAt: hoursAgo(2), url: 'https://github.com/' },
+        { author: 'maria', body: 'Why `C=0.5`? Was it tuned on the validation folds?', createdAt: hoursAgo(5), url: 'https://github.com/', pending: false },
+        { author: 'tom', body: 'Yes, a grid search over 0.1–2.0. The sweep is in `03_tuning.ipynb`.', createdAt: hoursAgo(2), url: 'https://github.com/', pending: false },
+      ],
+    },
+  },
+  {
+    // A comment in the reviewer's pending review, on the new plot.
+    nbPath: path,
+    side: 'RIGHT',
+    docLine: entry.head.lines.findIndex(l => l.kind === 'output' && l.cell.id === 'fit'),
+    gh: {
+      id: 'thread-2',
+      isResolved: false,
+      isOutdated: false,
+      subjectType: 'LINE',
+      path,
+      line: 48,
+      comments: [
+        { id: 'pending-1', author: 'you', body: 'The curve is **much closer to the diagonal** now. Can we add the Brier score next to it?', createdAt: hoursAgo(0.1), url: '', pending: true },
       ],
     },
   },
 ] as unknown as PlacedThread[];
-const outputLine = entry.head.lines.findIndex(l => l.kind === 'output' && l.cell.id === 'fit');
-const drafts: Draft[] = [
-  {
-    key: 'draft-1',
-    nbPath: path,
-    side: 'RIGHT',
-    startDocLine: outputLine,
-    endDocLine: outputLine,
-    text: 'The curve is **much closer to the diagonal** now. Can we add the Brier score next to it?',
-  },
-];
-const threads = buildThreads(entry, placed, drafts, () => 'Pending · comment on the output → nbs/02_xg_model.ipynb L48');
+const threads = buildThreads(entry, placed, () => 'Pending · comment on the output → nbs/02_xg_model.ipynb L48');
 
 mkdirSync('out/demo', { recursive: true });
 cpSync('dist', 'out/demo/dist', { recursive: true });
@@ -102,7 +107,7 @@ window.acquireVsCodeApi = () => ({
 <script>
 deliver({ type: 'model', model: window.__MODEL__ });
 deliver({ type: 'threads', threads: window.__THREADS__ });
-deliver({ type: 'state', state: { viewed: false, pending: 1 } });
+deliver({ type: 'state', state: { viewed: false, pending: 1, pendingReview: true } });
 // Scenes for the README screenshots: index.html#outputs, #comment, #submit.
 const scene = location.hash.slice(1);
 // Headless Firefox captures from the top of the page, so a scene hides the cells above its subject.

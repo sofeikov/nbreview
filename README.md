@@ -22,7 +22,8 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 - **Comment on any cell.** Hover a line of code or a Markdown paragraph and click `+`, or drag the `+` over several lines. Every cell and output also has a comment button, so you can comment on a whole cell or on a plot.
 - **Comments land on GitHub.** A comment becomes a line comment on the notebook in the pull request when GitHub allows it, otherwise a file comment. Every comment quotes the cell it is about, so it reads well on github.com too.
 - **Suggested changes.** "Suggest change" proposes new lines that the author can apply with GitHub's *Commit suggestion* button, directly in the notebook.
-- **Single comments or a review, like on GitHub.** "Add single comment" posts a comment or reply to the pull request straight away. "Start a review" keeps it pending until you submit all your comments together as one review: comment, approve or request changes.
+- **Reviews saved on GitHub.** "Start a review" adds comments to your pending review on GitHub, the same one github.com uses: private to you until you submit it, kept across restarts and machines, and you can add to it or submit it from VS Code or from github.com. Submit all your comments together as one review: comment, approve or request changes.
+- **Single comments, like on GitHub.** "Add single comment" posts a comment or reply straight away. As on github.com, it is available while you have no pending review.
 - **Existing review threads.** Comments already on the pull request show on the cell they belong to, with replies, resolved and outdated states.
 - **"Viewed" checkboxes.** Mark notebooks as viewed, synced with GitHub's own "Viewed" flags.
 - **Text diff too.** A line-by-line text view of the notebook in VS Code's diff editor, with VS Code's comment widgets, cell headers, outline, sticky scroll and folding. Both views share the same comments.
@@ -71,8 +72,8 @@ code --install-extension nbreview.vsix
 
    The badge on each pull request is the number of notebooks it changes, and its tooltip lists them. Click a pull request to review it. To find one that isn't listed, use the search button (or **Notebook Review: Open Pull Request…**): type to search by title, number, author or branch, or paste a number, `owner/repo#123` or a pull request URL.
 2. Click a notebook to open its visual review. The diff icon next to a notebook opens the text diff instead.
-3. Comment with `+` or the comment buttons, then choose **Add single comment** to post it now, or **Start a review** (`Ctrl+Enter`) to keep it pending with your other comments. Pending comments can be edited and deleted. Replies to existing threads work the same way.
-4. Click **Submit review** (in the page, the panel title or the status bar), write an optional summary and choose **Comment**, **Approve** or **Request changes**.
+3. Comment with `+` or the comment buttons, then choose **Start a review** (`Ctrl+Enter`) to add it to your pending review on GitHub, or **Add single comment** to post it now. Pending comments can be edited and deleted; deleting the last one discards the empty review. Replies to existing threads work the same way.
+4. Click **Submit review** (in the page, the panel title or the status bar), write an optional summary and choose **Comment**, **Approve** or **Request changes**. **Discard review** (in the same box, or **Notebook Review: Discard Pending Review…**) deletes the pending review and its comments.
 
 Sign-in uses the GitHub CLI (`gh auth login`) when it is installed, otherwise VS Code's built-in GitHub sign-in.
 
@@ -128,6 +129,13 @@ The core does not use the VS Code API and is in `src/core/`:
 - Images with relative paths in Markdown cells do not show.
 
 ## Changelog
+
+### 0.6.0
+- Pending comments are saved in your pending review on GitHub instead of on this computer. They survive restarts, reinstalls and other machines, stay private to you until you submit, and work together with github.com: comments started there show up here as pending, and either can submit the review.
+- Edit, delete and reply to pending comments on GitHub; deleting the last one discards the empty review. **Discard review** deletes a whole pending review.
+- "Add single comment" is unavailable while you have a pending review, as on github.com.
+- A comment on a cell output stays attached to that output (it used to come back on the cell header), and a comment on several lines keeps its whole range.
+- Fix: review tabs show the right pull request number after switching pull requests.
 
 ### 0.5.0
 - **Add single comment**: post a comment or a reply to GitHub straight away, outside the review, from the review page and from the text diff. It works on lines, cells, outputs and whole files, and doesn't touch a review you have pending on github.com.

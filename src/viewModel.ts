@@ -5,8 +5,7 @@ import { diffCells } from './core/cellDiff.ts';
 import { anchorForDocLines, type ReviewDoc } from './core/reviewDoc.ts';
 import { parseBody } from './core/anchor.ts';
 import { highlightLines, renderCommentBody, renderMarkdownCell } from './render.ts';
-import type { Anchor, CellVM, OutputVM, ThreadVM, ViewModel } from './webview/protocol.ts';
-import type { Draft } from './state.ts';
+import type { CellVM, OutputVM, ThreadVM, ViewModel } from './webview/protocol.ts';
 
 export function buildViewModel(entry: NotebookEntry, pr: { number: number; title: string; url: string }): ViewModel {
   const language = entry.head.notebook.language || entry.base.notebook.language || 'python';
@@ -76,19 +75,16 @@ function cellTitle(cell: NbCell): string {
   return (line ?? '').trim().slice(0, 100);
 }
 
-export function buildThreads(
-  entry: NotebookEntry,
-  placed: PlacedThread[],
-  drafts: Draft[],
-  describe: (d: Draft) => string,
-): ThreadVM[] {
+export function buildThreads(entry: NotebookEntry, placed: PlacedThread[], describe: (p: PlacedThread) => string): ThreadVM[] {
   const docOf = (side: 'LEFT' | 'RIGHT'): ReviewDoc => (side === 'LEFT' ? entry.base : entry.head);
   const out: ThreadVM[] = [];
   for (const p of placed) {
-    const a = anchorForDocLines(docOf(p.side), p.docLine, p.docLine);
+    const a = anchorForDocLines(docOf(p.side), p.startDocLine ?? p.docLine, p.docLine);
     if (!a) {
       continue;
     }
+    // A thread of only pending comments is the reviewer's own, not yet on the pull request.
+    const ownPending = p.gh.comments.every(c => c.pending);
     const labelBits = [p.gh.isResolved ? 'Resolved' : 'GitHub'];
     if (p.movedFrom) {
       labelBits.push(`from ${p.movedFrom}`);
@@ -99,44 +95,19 @@ export function buildThreads(
     out.push({
       id: p.gh.id,
       anchor: { side: p.side, ...a },
-      label: labelBits.join(' · '),
+      label: ownPending ? describe(p) : labelBits.join(' · '),
       resolved: p.gh.isResolved,
-      outdated: p.gh.isOutdated,
-      draft: false,
+      outdated: p.gh.isOutdated && !ownPending,
+      draft: ownPending,
       canReply: true,
-      comments: [
-        ...p.gh.comments.map(c => ({
-          author: c.author,
-          avatarUrl: c.avatarUrl,
-          html: renderCommentBody(parseBody(c.body).text),
-          createdAt: c.createdAt,
-          url: c.url,
-          pending: false,
-        })),
-        ...drafts.filter(d => d.replyTo === p.gh.id).map(draftComment),
-      ],
-    });
-  }
-  for (const d of drafts.filter(d => !d.replyTo && d.nbPath === entry.path)) {
-    const a = anchorForDocLines(docOf(d.side), d.startDocLine, d.endDocLine);
-    if (!a) {
-      continue;
-    }
-    const anchor: Anchor = { side: d.side, ...a };
-    out.push({
-      id: d.key,
-      anchor,
-      label: describe(d),
-      resolved: false,
-      outdated: false,
-      draft: true,
-      canReply: false,
-      comments: [draftComment(d)],
+      comments: p.gh.comments.map(c => {
+        const text = parseBody(c.body).text;
+        return c.pending
+          ? { author: 'You', html: renderCommentBody(text), createdAt: c.createdAt, pending: true, draftKey: c.id, text }
+          : { author: c.author, avatarUrl: c.avatarUrl, html: renderCommentBody(text), createdAt: c.createdAt, url: c.url, pending: false };
+      }),
     });
   }
   return out;
 }
 
-function draftComment(d: Draft) {
-  return { author: 'You', html: renderCommentBody(d.text), pending: true, draftKey: d.key, text: d.text };
-}

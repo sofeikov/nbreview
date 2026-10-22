@@ -22,6 +22,8 @@ export interface Marker {
   /** 0-based source lines within the cell. */
   start?: number;
   end?: number;
+  /** Which output, for comments on an output. */
+  outputIndex?: number;
 }
 
 export interface GhThreadTarget {
@@ -90,6 +92,9 @@ export function planComment(args: {
   // first source line when GitHub allows it, so they still sit next to the cell on github.com.
   const kind: Marker['kind'] = endInfo.kind === 'output' ? 'output' : 'cell';
   const marker: Marker = { v: 1, cell: cell.id, side, kind };
+  if (kind === 'output' && endInfo.output) {
+    marker.outputIndex = cell.outputs.indexOf(endInfo.output);
+  }
   const header = renderHeader(path, cell, marker);
   const first = cell.jsonLines[0];
   if (first !== undefined && allowed.has(first)) {
@@ -166,6 +171,12 @@ export function parseBody(body: string): { marker?: Marker; text: string } {
   return { marker, text };
 }
 
+/** Replaces the reviewer's text in a comment body, keeping the cell header and the marker. */
+export function replaceBodyText(body: string, text: string): string {
+  const endAt = body.indexOf(HEADER_END);
+  return endAt >= 0 ? `${body.slice(0, endAt + HEADER_END.length)}\n\n${text}` : text;
+}
+
 // --- Suggestions -----------------------------------------------------------------------------
 // GitHub's "Commit suggestion" replaces raw file lines. In a notebook those are JSON strings, so a
 // suggestion written as plain code is re-encoded in the notebook's own JSON layout.
@@ -213,6 +224,8 @@ export interface GhThreadLocation {
   side: Side;
   /** 0-based line in the review document of that side. */
   docLine: number;
+  /** First line, for comments on several lines. */
+  startDocLine?: number;
   /** Set when the thread could only be placed approximately. */
   note?: string;
 }
@@ -231,12 +244,19 @@ export function locateNotebookThread(
       if (!cell) {
         continue;
       }
-      const line =
-        marker.kind === 'source' && marker.end !== undefined && marker.end < cell.source.length
-          ? docLineForSource(doc, cell.id, marker.end)
-          : headerLine(doc, cell.id);
+      const note = thread.isOutdated ? 'outdated' : undefined;
+      if (marker.kind === 'source' && marker.end !== undefined && marker.end < cell.source.length) {
+        const end = docLineForSource(doc, cell.id, marker.end);
+        const start = marker.start !== undefined ? docLineForSource(doc, cell.id, marker.start) : undefined;
+        if (end !== undefined) {
+          return { side, docLine: end, ...(start !== undefined && start < end ? { startDocLine: start } : {}), note };
+        }
+      }
+      const output = marker.kind === 'output' && marker.outputIndex !== undefined ? cell.outputs[marker.outputIndex] : undefined;
+      const outputLine = output ? doc.lines.findIndex(l => l.kind === 'output' && l.output === output) : -1;
+      const line = outputLine >= 0 ? outputLine : headerLine(doc, cell.id);
       if (line !== undefined) {
-        return { side, docLine: line, note: thread.isOutdated ? 'outdated' : undefined };
+        return { side, docLine: line, note };
       }
     }
   }

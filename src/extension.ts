@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
-import { GitHub, type NewThread, type ReviewEvent } from './github.ts';
+import { GitHub, type ReviewEvent } from './github.ts';
 import { ReviewSession } from './session.ts';
 import { ReviewState } from './state.ts';
 import { TextReview } from './textReview.ts';
@@ -61,6 +61,8 @@ export function activate(context: vscode.ExtensionContext): void {
     treeView,
     status,
     state.onDidChange(updateStatus),
+    // "Add Single Comment" is hidden while a review is pending, as on github.com.
+    state.onDidChange(() => void vscode.commands.executeCommand('setContext', 'nbreview.pendingReview', state.hasPendingReview())),
     treeView.onDidChangeCheckboxState(e => {
       const byState = new Map<boolean, string[]>();
       for (const [node, checked] of e.items) {
@@ -95,6 +97,21 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nbreview.openOnGitHub', () => state.session && vscode.env.openExternal(vscode.Uri.parse(state.session.pr.url))),
     vscode.commands.registerCommand('nbreview.submitReview', (request?: SubmitRequest) =>
       request?.event ? submit(request) : submitInteractive().catch(showError)),
+    vscode.commands.registerCommand('nbreview.discardReview', async () => {
+      const n = state.pendingCount();
+      if (!state.hasPendingReview()) {
+        void vscode.window.showInformationMessage('You have no pending review on this pull request.');
+        return;
+      }
+      const choice = await vscode.window.showWarningMessage(
+        `Discard your pending review${n ? ` and its ${n} comment${n === 1 ? '' : 's'}` : ''}? This can't be undone.`,
+        { modal: true },
+        'Discard review',
+      );
+      if (choice) {
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: 'Discarding review…' }, () => state.discardReview()).then(undefined, showError);
+      }
+    }),
     vscode.commands.registerCommand('nbreview.close', async () => {
       state.setSession(undefined);
       await ctx.globalState.update('activePr', undefined);
@@ -167,7 +184,7 @@ function updateStatus(): void {
     treeView.description = undefined;
     return;
   }
-  const n = state.drafts().length;
+  const n = state.pendingCount();
   status.text = `$(notebook) #${s.pr.number}${n ? ` · ${n} pending` : ''}`;
   status.tooltip = n ? `Submit your notebook review on #${s.pr.number}` : `Reviewing ${s.pr.title}`;
   status.command = 'nbreview.submitReview';
@@ -284,7 +301,7 @@ export interface SubmitRequest {
 
 /** Why a review can't be submitted as asked, or undefined when it can. */
 function submitProblem(event: ReviewEvent, body: string): string | undefined {
-  const pending = state.drafts().length;
+  const pending = state.pendingCount();
   if (event === 'REQUEST_CHANGES' && !pending && !body.trim()) {
     return 'GitHub needs a summary or at least one comment to request changes.';
   }
@@ -303,7 +320,7 @@ async function submitInteractive(): Promise<void> {
   if (!s) {
     return;
   }
-  const n = state.drafts().length;
+  const n = state.pendingCount();
   const pendingText = n ? `${n} pending comment${n === 1 ? '' : 's'}` : 'no pending comments';
   type Item = vscode.QuickPickItem & { event: ReviewEvent };
   const items: Item[] = [
@@ -349,23 +366,11 @@ async function submit({ event, body }: SubmitRequest): Promise<string> {
   if (problem) {
     throw new Error(problem);
   }
-  const threads: (NewThread & { key: string })[] = [];
-  const replies: { key: string; threadId: string; body: string }[] = [];
-  for (const d of state.drafts()) {
-    if (d.replyTo) {
-      replies.push({ key: d.key, threadId: d.replyTo, body: d.text });
-      continue;
-    }
-    const plan = state.plan(d);
-    if (plan) {
-      threads.push({ key: d.key, ...plan });
-    }
-  }
   const verb = event === 'APPROVE' ? 'Approval' : event === 'REQUEST_CHANGES' ? 'Change request' : 'Review';
   try {
     const url = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Submitting review on #${s.pr.number}…` },
-      () => s.gh.submitReview({ pr: s.pr, event, body, threads, replies, onPosted: key => void state.removeDraft(key, 'system') }),
+      () => s.gh.submitReview(s.pr, s.pendingReviewId, event, body),
     );
     void vscode.window.showInformationMessage(`${verb} submitted on #${s.pr.number}.`, 'Open on GitHub').then(open => {
       if (open) {
@@ -374,7 +379,7 @@ async function submit({ event, body }: SubmitRequest): Promise<string> {
     });
     return url;
   } catch (e) {
-    const message = `Submitting the review failed: ${e instanceof Error ? e.message : e}. Comments that were posted have been removed from your pending list.`;
+    const message = `Submitting the review failed: ${e instanceof Error ? e.message : e}. Your pending comments are still in your review on GitHub.`;
     void vscode.window.showErrorMessage(message);
     throw new Error(message);
   } finally {

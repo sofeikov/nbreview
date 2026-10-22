@@ -49,10 +49,15 @@ button:focus-visible, [role="button"]:focus-visible, textarea:focus { outline: 1
 button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 button.primary:hover { background: var(--vscode-button-hoverBackground); }
 button.primary:disabled { opacity: 0.6; cursor: default; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button:disabled:hover { background: transparent; }
+button.primary:disabled:hover { background: var(--vscode-button-background); }
 button.ghost { border-color: var(--border); }
 button.icon-btn { padding: 2px 4px; color: var(--muted); }
 button.icon-btn:hover { color: var(--vscode-foreground); }
 button.icon-btn.armed { color: var(--vscode-errorForeground); }
+button.danger { color: var(--vscode-errorForeground); }
+button.danger.armed { border-color: var(--vscode-errorForeground); }
 .codicon { display: inline-flex; width: 15px; height: 15px; flex: none; }
 .codicon svg { width: 100%; height: 100%; }
 

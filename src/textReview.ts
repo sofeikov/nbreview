@@ -6,7 +6,7 @@ import type { GhThread } from './github.ts';
 import type { NotebookEntry, PlacedThread } from './session.ts';
 import { parseBody, type Side } from './core/anchor.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
-import type { Draft, ReviewState } from './state.ts';
+import type { ReviewState } from './state.ts';
 import { basename } from './paths.ts';
 
 export const SCHEME = 'nbreview';
@@ -29,7 +29,6 @@ export class TextReview implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly controller: vscode.CommentController;
   private readonly ghThreads = new Map<string, vscode.CommentThread>(); // GitHub thread id → UI thread
-  private readonly draftThreads = new Map<string, vscode.CommentThread>(); // draft key → UI thread
   private readonly contentChanged = new vscode.EventEmitter<vscode.Uri>();
   private readonly headerDeco: vscode.TextEditorDecorationType;
   private readonly outputDeco: vscode.TextEditorDecorationType;
@@ -85,7 +84,7 @@ export class TextReview implements vscode.Disposable {
       vscode.window.onDidChangeVisibleTextEditors(editors => this.decorate(editors)),
       vscode.commands.registerCommand('nbreview.addComment', (reply: vscode.CommentReply) => this.addFromReply(reply)),
       vscode.commands.registerCommand('nbreview.addSingleComment', (reply: vscode.CommentReply) => this.postFromReply(reply)),
-      vscode.commands.registerCommand('nbreview.deleteDraft', (c: NbComment) => c.draftKey && this.state.removeDraft(c.draftKey, 'system')),
+      vscode.commands.registerCommand('nbreview.deleteDraft', (c: NbComment) => c.draftKey && this.withGitHub('Deleting the comment', () => this.state.removeDraft(c.draftKey!))),
       vscode.commands.registerCommand('nbreview.editDraft', (c: NbComment) => this.setEditing(c, true)),
       vscode.commands.registerCommand('nbreview.cancelEditDraft', (c: NbComment) => this.setEditing(c, false)),
       vscode.commands.registerCommand('nbreview.saveDraft', (c: NbComment) => this.saveEdit(c)),
@@ -97,7 +96,7 @@ export class TextReview implements vscode.Disposable {
             }
           }
         }
-        if ((e.drafts && e.origin !== 'text') || e.threads || e.session) {
+        if (e.drafts || e.threads || e.session) {
           this.renderThreads();
         }
       }),
@@ -148,105 +147,78 @@ export class TextReview implements vscode.Disposable {
   // --- Comment threads ------------------------------------------------------------------------
 
   private renderThreads(): void {
-    for (const t of [...this.ghThreads.values(), ...this.draftThreads.values()]) {
+    for (const t of this.ghThreads.values()) {
       t.dispose();
     }
     this.ghThreads.clear();
-    this.draftThreads.clear();
     const s = this.state.session;
     if (!s) {
       return;
     }
-    const pending = this.state.drafts();
     for (const p of s.placed) {
-      const thread = this.controller.createCommentThread(this.reviewUri(p.nbPath, p.side), lineRange(p.docLine), []);
-      thread.comments = [
-        ...p.gh.comments.map(ghComment),
-        ...pending.filter(d => d.replyTo === p.gh.id).map(d => this.draftComment(d, thread)),
-      ];
-      thread.label = threadLabel(p);
-      thread.contextValue = 'github';
+      const range = new vscode.Range(p.startDocLine ?? p.docLine, 0, p.docLine, 0);
+      const thread = this.controller.createCommentThread(this.reviewUri(p.nbPath, p.side), range, []);
+      thread.comments = p.gh.comments.map(c => (c.pending ? this.draftComment(c, thread) : ghComment(c)));
+      // A thread of only pending comments is the reviewer's own, not yet on the pull request.
+      const ownPending = p.gh.comments.every(c => c.pending);
+      thread.label = ownPending ? this.state.describe(p) : threadLabel(p);
+      thread.contextValue = ownPending ? 'draft' : 'github';
       thread.canReply = true;
       thread.state = p.gh.isResolved ? vscode.CommentThreadState.Resolved : vscode.CommentThreadState.Unresolved;
-      thread.collapsibleState = p.gh.isResolved || p.gh.isOutdated
+      thread.collapsibleState = !ownPending && (p.gh.isResolved || p.gh.isOutdated)
         ? vscode.CommentThreadCollapsibleState.Collapsed
         : vscode.CommentThreadCollapsibleState.Expanded;
       this.ghThreads.set(p.gh.id, thread);
     }
-    for (const d of pending.filter(d => !d.replyTo)) {
-      const thread = this.controller.createCommentThread(
-        this.reviewUri(d.nbPath, d.side),
-        new vscode.Range(d.startDocLine, 0, d.endDocLine, 0),
-        [],
-      );
-      thread.comments = [this.draftComment(d, thread)];
-      this.markDraftThread(thread, d);
-    }
   }
 
-  private draftComment(d: Draft, parent: vscode.CommentThread): NbComment {
-    return new NbComment(new vscode.MarkdownString(d.text), { name: 'You' }, undefined, 'Pending', 'draft', d.key, parent);
+  private draftComment(c: GhThread['comments'][number], parent: vscode.CommentThread): NbComment {
+    const { text } = parseBody(c.body);
+    return new NbComment(new vscode.MarkdownString(text), { name: 'You' }, new Date(c.createdAt), 'Pending', 'draft', c.id, parent);
   }
 
-  private markDraftThread(thread: vscode.CommentThread, d: Draft): void {
-    thread.label = this.state.describe(d);
-    thread.contextValue = 'draft';
-    thread.canReply = false;
-    thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-    this.draftThreads.set(d.key, thread);
-  }
-
-  private async addFromReply(reply: vscode.CommentReply): Promise<void> {
-    const target = this.docFor(reply.thread.uri);
-    if (!target || !reply.text.trim()) {
-      return;
-    }
-    const replyTo = [...this.ghThreads.entries()].find(([, t]) => t === reply.thread)?.[0];
-    const range = reply.thread.range ?? lineRange(0);
-    const d = await this.state.addDraft(
-      {
-        nbPath: target.entry.path,
-        side: target.side,
-        startDocLine: range.start.line,
-        endDocLine: range.end.line,
-        text: reply.text,
-        replyTo,
-      },
-      'text',
-    );
-    if (replyTo) {
-      reply.thread.comments = [...reply.thread.comments, this.draftComment(d, reply.thread)];
-    } else {
-      reply.thread.comments = [this.draftComment(d, reply.thread)];
-      this.markDraftThread(reply.thread, d);
-    }
-  }
-
-  /** "Add Single Comment": posts to GitHub now instead of adding to the pending review. */
-  private async postFromReply(reply: vscode.CommentReply): Promise<void> {
-    const target = this.docFor(reply.thread.uri);
-    if (!target || !reply.text.trim()) {
-      return;
-    }
-    const replyTo = [...this.ghThreads.entries()].find(([, t]) => t === reply.thread)?.[0];
-    const range = reply.thread.range ?? lineRange(0);
+  /** Runs a GitHub change with progress in the status bar; failures are shown, and reported as false. */
+  private async withGitHub(what: string, fn: () => Promise<void>): Promise<boolean> {
     try {
-      await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: 'Posting comment to GitHub…' }, () =>
-        this.state.postSingle({
-          nbPath: target.entry.path,
-          side: target.side,
-          startDocLine: range.start.line,
-          endDocLine: range.end.line,
-          text: reply.text,
-          replyTo,
-        }),
-      );
-      // The posted comment comes back as a GitHub thread; the empty thread it was typed in goes.
-      if (!replyTo) {
-        reply.thread.dispose();
-      }
+      await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: `${what}…` }, fn);
+      return true;
     } catch (e) {
-      void vscode.window.showErrorMessage(`Posting the comment failed: ${e instanceof Error ? e.message : String(e)}`);
+      void vscode.window.showErrorMessage(`${what} failed: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }
+
+  private commentFromReply(reply: vscode.CommentReply) {
+    const target = this.docFor(reply.thread.uri);
+    if (!target || !reply.text.trim()) {
+      return undefined;
+    }
+    const replyTo = [...this.ghThreads.entries()].find(([, t]) => t === reply.thread)?.[0];
+    const range = reply.thread.range ?? lineRange(0);
+    return {
+      nbPath: target.entry.path,
+      side: target.side,
+      startDocLine: range.start.line,
+      endDocLine: range.end.line,
+      text: reply.text,
+      replyTo,
+    };
+  }
+
+  /** "Add Review Comment": adds to the pending review on GitHub. */
+  private async addFromReply(reply: vscode.CommentReply): Promise<void> {
+    const comment = this.commentFromReply(reply);
+    if (comment && (await this.withGitHub('Adding to your review', () => this.state.addDraft(comment))) && !comment.replyTo) {
+      // The comment comes back from GitHub as a pending thread; the one it was typed in goes.
+      reply.thread.dispose();
+    }
+  }
+
+  /** "Add Single Comment": posts to GitHub now, outside the review. */
+  private async postFromReply(reply: vscode.CommentReply): Promise<void> {
+    const comment = this.commentFromReply(reply);
+    if (comment && (await this.withGitHub('Posting the comment', () => this.state.postSingle(comment))) && !comment.replyTo) {
+      reply.thread.dispose();
     }
   }
 
@@ -268,16 +240,13 @@ export class TextReview implements vscode.Disposable {
       return;
     }
     const text = typeof comment.body === 'string' ? comment.body : comment.body.value;
-    comment.body = new vscode.MarkdownString(text);
-    comment.mode = vscode.CommentMode.Preview;
+    if (await this.withGitHub('Saving the comment', () => this.state.updateDraft(comment.draftKey!, text))) {
+      return; // redrawn from GitHub
+    }
+    // Keep the edit open with the text so nothing is lost.
+    comment.mode = vscode.CommentMode.Editing;
     if (comment.parent) {
       comment.parent.comments = [...comment.parent.comments];
-    }
-    await this.state.updateDraft(comment.draftKey, text, 'text');
-    const d = this.state.drafts().find(x => x.key === comment.draftKey);
-    const thread = this.draftThreads.get(comment.draftKey);
-    if (d && thread) {
-      thread.label = this.state.describe(d);
     }
   }
 

@@ -97,11 +97,17 @@ test('view model: changed cells, outputs and pending threads', () => {
   assert.equal(demo.headOutputs[1].imageSrc?.startsWith('data:image/png;base64,'), true);
   assert.match(vm.cells[0].headHtml!, /data-src/);
 
+  // A pending comment from GitHub on two lines comes back with its range and as the reviewer's own.
   const startDocLine = docLineForSource(e.head, 'loss-def', 1)!;
-  const threads = buildThreads(e, [], [
-    { key: 'd1', nbPath: e.path, side: 'RIGHT', startDocLine, endDocLine: startDocLine + 1, text: 'hi **there**' },
-  ], () => 'Pending · x');
+  const placed = [{
+    nbPath: e.path, side: 'RIGHT', docLine: startDocLine + 1, startDocLine,
+    gh: { id: 'T1', isResolved: false, isOutdated: false, comments: [{ id: 'C1', pending: true, body: 'hi **there**', createdAt: 'x', url: '', author: 'me' }] },
+  }] as any;
+  const threads = buildThreads(e, placed, () => 'Pending · x');
   assert.equal(threads.length, 1);
+  assert.equal(threads[0].draft, true);
+  assert.equal(threads[0].label, 'Pending · x');
+  assert.equal(threads[0].comments[0].draftKey, 'C1');
   assert.deepEqual(threads[0].anchor, { side: 'RIGHT', cellId: 'loss-def', kind: 'source', start: 1, end: 2 });
   assert.match(threads[0].comments[0].html, /<strong>there<\/strong>/);
 });

@@ -34,11 +34,12 @@ const saved = (vscode.getState() ?? {}) as Partial<UiState>;
 const ui: UiState = { showAll: false, mdSource: {}, expanded: {}, threadOpen: {}, ...saved };
 let model: ViewModel | undefined;
 let threads: ThreadVM[] = [];
-let panel: PanelState = { viewed: false, pending: 0 };
+let panel: PanelState = { viewed: false, pending: 0, pendingReview: false };
 let requestSeq = 0;
 const composers = new Map<string, Composer>();
 const replies = new Map<string, { text: string; saving?: number; savingMode?: 'review' | 'single' }>();
-const edits = new Map<string, string>();
+/** Pending comments being edited: their text, and whether the edit is being saved to GitHub. */
+const edits = new Map<string, { text: string; saving?: boolean }>();
 let focusKey: string | undefined;
 let restoredScroll = false;
 
@@ -265,9 +266,27 @@ function renderSubmitBox(): HTMLElement {
         h('span', {}, h('b', { text: label }), h('span', { class: 'muted', text: hint }))))),
     submitBox.error && h('div', { class: 'submit-error', text: submitBox.error }),
     h('div', { class: 'actions' },
+      panel.pendingReview && discardButton(),
       h('span', { class: 'hint', id: 'submit-hint', text: problem ?? 'Ctrl+Enter to submit' }),
       button('Cancel', close),
       button(submitBox.sending ? 'Submitting…' : 'Submit review', send, { class: 'primary', id: 'submit-send', disabled: submitBox.sending || !!problem })));
+}
+
+/** "Discard review", with a second click to confirm: it deletes every pending comment on GitHub. */
+function discardButton(): HTMLButtonElement {
+  const btn = button('Discard review', () => {
+    if (btn.dataset.armed) {
+      submitBox.open = false;
+      post({ type: 'discardReview' });
+      render();
+    } else {
+      btn.dataset.armed = '1';
+      btn.classList.add('armed');
+      btn.textContent = `Discard ${panel.pending} pending comment${panel.pending === 1 ? '' : 's'}?`;
+      setTimeout(() => { delete btn.dataset.armed; btn.classList.remove('armed'); btn.textContent = 'Discard review'; }, 4000);
+    }
+  }, { class: 'ghost danger', title: 'Delete your pending review and all its comments on GitHub' });
+  return btn;
 }
 
 /** Updates the hint and button while typing, without re-rendering the text box. */
@@ -762,15 +781,25 @@ function renderComment(c: CommentVM): HTMLElement {
     c.pending && h('span', { class: 'pill pending', text: 'Pending' }),
     h('span', { class: 'spacer' }),
     c.url && button(icon('link-external'), () => post({ type: 'openExternal', url: c.url! }), { class: 'icon-btn', title: 'View on GitHub' }),
-    c.pending && !editing && button(icon('edit'), () => { edits.set(c.draftKey!, c.text ?? ''); focusKey = `edit:${c.draftKey}`; render(); focus(`edit:${c.draftKey}`); }, { class: 'icon-btn', title: 'Edit' }),
+    c.pending && !editing && button(icon('edit'), () => { edits.set(c.draftKey!, { text: c.text ?? '' }); focusKey = `edit:${c.draftKey}`; render(); focus(`edit:${c.draftKey}`); }, { class: 'icon-btn', title: 'Edit' }),
     c.pending && !editing && deleteButton(c.draftKey!));
   let body: HTMLElement;
   if (editing) {
     const key = c.draftKey!;
-    const area = textarea(`edit:${key}`, edits.get(key) ?? '', v => edits.set(key, v), () => save(), () => cancel());
-    const save = () => { post({ type: 'editDraft', key, text: area.value }); edits.delete(key); render(); };
+    const edit = edits.get(key)!;
+    const area = textarea(`edit:${key}`, edit.text, v => (edit.text = v), () => save(), () => cancel());
+    // The editor stays open until GitHub has the new text; if saving fails, the text is still here.
+    const save = () => {
+      if (!edit.saving && area.value.trim()) {
+        edit.saving = true;
+        post({ type: 'editDraft', key, text: area.value });
+        render();
+      }
+    };
     const cancel = () => { edits.delete(key); render(); };
-    body = h('div', { class: 'editor' }, area, h('div', { class: 'actions' }, button('Cancel', cancel), button('Save', save, { class: 'primary' })));
+    body = h('div', { class: 'editor' }, area, h('div', { class: 'actions' },
+      button('Cancel', cancel),
+      button(edit.saving ? 'Saving…' : 'Save', save, { class: 'primary', disabled: !!edit.saving })));
   } else {
     body = h('div', { class: 'body markdown', html: c.html });
     wireLinks(body);
@@ -828,13 +857,15 @@ function submitButtons(state: { saving?: number; savingMode?: 'review' | 'single
   return h('span', { class: 'submit-buttons' },
     button(busy && state.savingMode === 'single' ? 'Posting…' : 'Add single comment', () => submit('single'), {
       class: 'ghost',
-      disabled: busy,
-      title: 'Post this comment on GitHub now, on its own',
+      disabled: busy || panel.pendingReview,
+      title: panel.pendingReview
+        ? 'You have a pending review: submit or discard it to post single comments (as on GitHub)'
+        : 'Post this comment on GitHub now, on its own',
     }),
     button(busy && state.savingMode === 'review' ? 'Adding…' : panel.pending ? reviewLabel : 'Start a review', () => submit('review'), {
       class: 'primary',
       disabled: busy,
-      title: 'Keep this comment pending and send it with your other comments when you submit the review (Ctrl+Enter)',
+      title: 'Add this comment to your pending review on GitHub; it is sent with your other comments when you submit the review (Ctrl+Enter)',
     }));
 }
 
@@ -1045,6 +1076,11 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
           replies.delete(key);
         }
       }
+      for (const [key, e] of edits) {
+        if (e.saving) {
+          edits.delete(key);
+        }
+      }
       render();
       break;
     case 'state':
@@ -1090,6 +1126,9 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       for (const r of replies.values()) {
         r.saving = undefined;
         r.savingMode = undefined;
+      }
+      for (const e of edits.values()) {
+        e.saving = undefined;
       }
       render();
       toast(msg.message);

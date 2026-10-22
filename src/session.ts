@@ -32,6 +32,8 @@ export interface PlacedThread {
   nbPath: string;
   side: Side;
   docLine: number;
+  /** First line, for comments on several lines. */
+  startDocLine?: number;
   note?: string;
   /** Where the thread really lives on GitHub when it was moved from a generated .py file. */
   movedFrom?: string;
@@ -43,6 +45,10 @@ export class ReviewSession {
   readonly notebooks = new Map<string, NotebookEntry>();
   readonly others: OtherFile[] = [];
   placed: PlacedThread[] = [];
+  /** The viewer's pending review on GitHub, if they have started one. */
+  pendingReviewId: string | undefined;
+  /** Comments in the pending review, on any file (some may not be on notebooks). */
+  pendingCount = 0;
   /** GitHub "Viewed" state per file path. */
   viewed = new Map<string, boolean>();
   private readonly contents = new Map<string, Promise<string | undefined>>();
@@ -56,7 +62,7 @@ export class ReviewSession {
   static async load(gh: GitHub, owner: string, repo: string, number: number, progress?: (msg: string) => void): Promise<ReviewSession> {
     progress?.('Fetching pull request…');
     // Everything that only needs the pull request number is requested at once.
-    const [pr, files, threads, viewed] = await Promise.all([
+    const [pr, files, found, viewed] = await Promise.all([
       gh.getPr(owner, repo, number),
       gh.listFiles(owner, repo, number),
       gh.getThreads(owner, repo, number),
@@ -66,7 +72,7 @@ export class ReviewSession {
     session.viewed = viewed;
     progress?.(`Loading ${files.filter(isNotebook).length} notebooks…`);
     await session.loadFiles();
-    await session.placeThreads(threads);
+    await session.placeThreads(found.threads, found.pendingReviewId);
     return session;
   }
 
@@ -127,11 +133,19 @@ export class ReviewSession {
   }
 
   async loadThreads(): Promise<void> {
-    await this.placeThreads(await this.gh.getThreads(this.pr.owner, this.pr.repo, this.pr.number));
+    const found = await this.gh.getThreads(this.pr.owner, this.pr.repo, this.pr.number);
+    await this.placeThreads(found.threads, found.pendingReviewId);
   }
 
   /** Puts each thread on its notebook cell, moving threads on generated modules to their notebook. */
-  async placeThreads(threads: GhThread[]): Promise<void> {
+  async placeThreads(found: GhThread[], pendingReviewId?: string): Promise<void> {
+    this.pendingReviewId = pendingReviewId;
+    // Right after a pending review is discarded, GitHub can still return its comments for a
+    // moment; without a pending review they are stale.
+    const threads = pendingReviewId
+      ? found
+      : found.map(t => ({ ...t, comments: t.comments.filter(c => !c.pending) })).filter(t => t.comments.length > 0);
+    this.pendingCount = threads.reduce((n, t) => n + t.comments.filter(c => c.pending).length, 0);
     const placed: PlacedThread[] = [];
     for (const o of this.others) {
       o.movedThreads = 0;

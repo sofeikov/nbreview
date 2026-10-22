@@ -27,6 +27,7 @@ export class VisualReview implements vscode.Disposable {
               panel.dispose();
               continue;
             }
+            panel.title = this.title(path);
           }
           void this.sync(panel, path, { model: !!e.session, threads: !!(e.session || e.drafts || e.threads) });
         }
@@ -74,12 +75,16 @@ export class VisualReview implements vscode.Disposable {
     }
   }
 
+  private title(nbPath: string): string {
+    return `📓 ${basename(nbPath)} · #${this.state.session?.pr.number ?? ''}`;
+  }
+
   private dist(): vscode.Uri {
     return vscode.Uri.joinPath(this.ctx.extensionUri, 'dist');
   }
 
   private adopt(panel: vscode.WebviewPanel, nbPath: string, revealCellId?: string): void {
-    panel.title = `📓 ${basename(nbPath)} · #${this.state.session!.pr.number}`;
+    panel.title = this.title(nbPath);
     panel.iconPath = vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'icon.svg');
     panel.webview.html = this.html(panel.webview, this.dist(), nbPath);
     this.panels.set(nbPath, panel);
@@ -115,7 +120,7 @@ export class VisualReview implements vscode.Disposable {
           throw new Error('That cell is no longer in the notebook.');
         }
         const draft = { nbPath, side: msg.anchor.side, startDocLine: lines.start, endDocLine: lines.end, text: msg.text };
-        await (msg.mode === 'single' ? this.state.postSingle(draft) : this.state.addDraft(draft, 'visual'));
+        await (msg.mode === 'single' ? this.state.postSingle(draft) : this.state.addDraft(draft));
         return;
       }
       case 'reply': {
@@ -124,14 +129,17 @@ export class VisualReview implements vscode.Disposable {
           throw new Error('That thread is no longer on the pull request.');
         }
         const draft = { nbPath: placed.nbPath, side: placed.side, startDocLine: placed.docLine, endDocLine: placed.docLine, text: msg.text, replyTo: msg.threadId };
-        await (msg.mode === 'single' ? this.state.postSingle(draft) : this.state.addDraft(draft, 'visual'));
+        await (msg.mode === 'single' ? this.state.postSingle(draft) : this.state.addDraft(draft));
         return;
       }
       case 'editDraft':
-        await this.state.updateDraft(msg.key, msg.text, 'visual');
+        await this.state.updateDraft(msg.key, msg.text);
         return;
       case 'deleteDraft':
-        await this.state.removeDraft(msg.key, 'visual');
+        await this.state.removeDraft(msg.key);
+        return;
+      case 'discardReview':
+        await this.state.discardReview();
         return;
       case 'submitReview':
         try {
@@ -171,14 +179,14 @@ export class VisualReview implements vscode.Disposable {
       this.post(panel, { type: 'model', model: vm.buildViewModel(entry, { number: s.pr.number, title: s.pr.title, url: s.pr.url }) });
     }
     if (what.threads) {
-      const threads = s && entry ? vm.buildThreads(entry, s.threadsFor(nbPath), this.state.draftsFor(nbPath), d => this.state.describe(d)) : [];
+      const threads = s && entry ? vm.buildThreads(entry, s.threadsFor(nbPath), p => this.state.describe(p)) : [];
       this.post(panel, { type: 'threads', threads });
     }
     this.post(panel, this.stateMessage(nbPath));
   }
 
   private stateMessage(nbPath: string): HostMessage {
-    return { type: 'state', state: { viewed: this.state.isViewed(nbPath), pending: this.state.drafts().length } };
+    return { type: 'state', state: { viewed: this.state.isViewed(nbPath), pending: this.state.pendingCount(), pendingReview: this.state.hasPendingReview() } };
   }
 
   private post(panel: vscode.WebviewPanel, msg: HostMessage): void {
