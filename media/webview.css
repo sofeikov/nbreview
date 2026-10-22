@@ -278,8 +278,16 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .md-block { position: relative; border-radius: 3px; }
 .md-block > .add-comment { left: -22px; top: 2px; }
 .md-block.changed-add, .md-block.changed-del { padding-left: 9px; margin-left: -9px; }
-.md-block.changed-add { box-shadow: inset 3px 0 0 var(--add-mark); background: color-mix(in srgb, var(--add-line) 45%, transparent); }
-.md-block.changed-del { box-shadow: inset 3px 0 0 var(--del-mark); background: color-mix(in srgb, var(--del-line) 45%, transparent); }
+.md-block.changed-add { box-shadow: inset 3px 0 0 var(--add-mark); }
+.md-block.changed-del { box-shadow: inset 3px 0 0 var(--del-mark); }
+/* Changed words inside a changed paragraph, and whole paragraphs that were added or removed. */
+.md-col .x-ins { background: color-mix(in srgb, var(--add-mark) 35%, transparent); border-radius: 2px; }
+.md-col .x-del { background: color-mix(in srgb, var(--del-mark) 35%, transparent); border-radius: 2px; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--del-mark) 70%, transparent); }
+/* Formulas and code blocks change as a whole: tint them on each side. */
+.md-col .changed-del div.md-changed, .md-col div.md-changed.changed-del, .md-col .changed-del pre:has(code.md-changed) { background: color-mix(in srgb, var(--del-line) 55%, transparent); border-radius: 3px; }
+.md-col .changed-add div.md-changed, .md-col div.md-changed.changed-add, .md-col .changed-add pre:has(code.md-changed) { background: color-mix(in srgb, var(--add-line) 55%, transparent); border-radius: 3px; }
+.md-col .md-added { background: color-mix(in srgb, var(--add-line) 60%, transparent); border-radius: 3px; }
+.md-col .md-removed { background: color-mix(in srgb, var(--del-line) 60%, transparent); border-radius: 3px; }
 .md-block.changed-add > .add-comment, .md-block.changed-del > .add-comment { left: -13px; }
 .md-threads > * { margin: 8px 0; }
 

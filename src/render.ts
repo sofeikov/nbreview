@@ -23,6 +23,8 @@ function highlightFence(code: string, lang: string): string {
 }
 
 const cellMd = new MarkdownIt({ html: true, linkify: true, highlight: highlightFence });
+/** The renderer for notebook Markdown cells, shared with the Markdown diff. */
+export const cellMarkdown = cellMd;
 (cellMd as any).use((katex as any).default ?? katex, { throwOnError: false });
 
 // Tag every block with the cell source lines it came from, so a comment on a rendered
@@ -41,8 +43,9 @@ for (const name of Object.keys(cellMd.renderer.rules).filter(n => n.startsWith('
   const original = cellMd.renderer.rules[name]!;
   cellMd.renderer.rules[name] = (tokens, idx, options, env, self) => {
     const src = tokens[idx].attrGet('data-src');
+    const cls = tokens[idx].attrGet('class');
     const html = original(tokens, idx, options, env, self);
-    return src ? `<div data-src="${src}">${html}</div>` : html;
+    return src ? `<div data-src="${src}"${cls ? ` class="${cls}"` : ''}>${html}</div>` : html;
   };
 }
 

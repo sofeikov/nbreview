@@ -139,3 +139,38 @@ test('unchanged cells share the new version instead of repeating it', () => {
   const changed = buildViewModel(e, { number: 1, title: 't', url: 'u' }).cells.find(c => c.key === 'loss-def')!;
   assert.equal(changed.baseSameAsHead, undefined);
 });
+
+import { renderMarkdownDiff } from '../src/mdDiff.ts';
+
+test('markdown diff marks changed words, not whole paragraphs, and keeps formatting', () => {
+  const { base, head } = renderMarkdownDiff(
+    ['A **logistic** regression that gives the probability that a shot is scored.'],
+    ['A **logistic** regression that gives the chance that a shot is scored, with the body part.'],
+  );
+  assert.match(base, /<span class="x-del">probability<\/span>/);
+  assert.match(head, /<span class="x-ins">chance<\/span>/);
+  assert.match(head, /<span class="x-ins">body<\/span>/);
+  assert.match(head, /<strong>logistic<\/strong>/, 'unchanged bold text stays bold and unmarked');
+  assert.doesNotMatch(head, /x-ins">regression/);
+  assert.match(head, /<p data-src="0-0" class="md-changed">/, 'source lines and a changed marker on the paragraph');
+});
+
+test('markdown diff marks added and removed paragraphs as a whole', () => {
+  const { base, head } = renderMarkdownDiff(
+    ['# Title', '', 'Old note that goes away entirely.', '', 'Kept paragraph.'],
+    ['# Title', '', 'Kept paragraph.', '', 'A completely new closing remark.'],
+  );
+  assert.match(base, /<p data-src="2-2" class="md-removed">Old note/);
+  assert.match(head, /<p data-src="4-4" class="md-added">A completely new/);
+  assert.doesNotMatch(head, /<h1[^>]*md-/, 'unchanged heading is not marked');
+});
+
+test('markdown diff works inside list items and on display maths', () => {
+  const { base, head } = renderMarkdownDiff(
+    ['- first item', '- second item here', '', '$$x^2$$'],
+    ['- first item', '- second item there', '', '$$x^3$$'],
+  );
+  assert.match(head, /<li[^>]*class="md-changed"[^>]*>second item <span class="x-ins">there<\/span>/);
+  assert.match(base, /<span class="x-del">here<\/span>/);
+  assert.match(head, /<div data-src="3-3" class="md-changed">/);
+});

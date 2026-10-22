@@ -5,6 +5,7 @@ import { diffCells } from './core/cellDiff.ts';
 import { anchorForDocLines, type ReviewDoc } from './core/reviewDoc.ts';
 import { parseBody } from './core/anchor.ts';
 import { highlightLines, renderCommentBody, renderMarkdownCell } from './render.ts';
+import { renderMarkdownDiff } from './mdDiff.ts';
 import type { CellVM, OutputVM, ThreadVM, ViewModel } from './webview/protocol.ts';
 
 export function buildViewModel(entry: NotebookEntry, pr: { number: number; title: string; url: string }): ViewModel {
@@ -31,8 +32,7 @@ export function buildViewModel(entry: NotebookEntry, pr: { number: number; title
       headSource: p.head?.source ?? [],
       baseSameAsHead: same || undefined,
       ops: p.lines.map(l => (l.op === 'same' ? { op: 'same', b: l.base, h: l.head } : l.op === 'del' ? { op: 'del', b: l.base } : { op: 'add', h: l.head })),
-      baseHtml: p.base?.type === 'markdown' && !same ? renderMarkdownCell(p.base.source) : undefined,
-      headHtml: p.head?.type === 'markdown' ? renderMarkdownCell(p.head.source) : undefined,
+      ...markdownHtml(p, same),
       baseOutputs: (p.base?.outputs ?? []).map(outputVM),
       headOutputs: (p.head?.outputs ?? []).map(outputVM),
       title: cellTitle(any),
@@ -51,6 +51,20 @@ export function buildViewModel(entry: NotebookEntry, pr: { number: number; title
       moved: cells.filter(c => c.moved).length,
     },
     cells,
+  };
+}
+
+/** Rendered Markdown of each version; a changed cell gets its changed words and paragraphs marked. */
+function markdownHtml(p: ReturnType<typeof diffCells>[number], same: boolean): { baseHtml?: string; headHtml?: string } {
+  const base = p.base?.type === 'markdown' ? p.base : undefined;
+  const head = p.head?.type === 'markdown' ? p.head : undefined;
+  if (base && head && p.sourceChanged) {
+    const diff = renderMarkdownDiff(base.source, head.source);
+    return { baseHtml: diff.base, headHtml: diff.head };
+  }
+  return {
+    baseHtml: base && !same ? renderMarkdownCell(base.source) : undefined,
+    headHtml: head ? renderMarkdownCell(head.source) : undefined,
   };
 }
 

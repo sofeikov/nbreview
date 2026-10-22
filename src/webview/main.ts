@@ -617,15 +617,13 @@ function highlightSelection(): void {
 // Rendered markdown ----------------------------------------------------------------------------
 
 function renderMarkdown(c: CellVM): HTMLElement {
-  const sides: { side: Side; html: string; cellId: string; changed: Set<number> }[] = [];
-  const changedBase = new Set(c.ops.filter(o => o.op === 'del').map(o => (o as { b: number }).b));
-  const changedHead = new Set(c.ops.filter(o => o.op === 'add').map(o => (o as { h: number }).h));
+  const sides: { side: Side; html: string; cellId: string }[] = [];
   const both = c.baseHtml !== undefined && c.headHtml !== undefined && c.sourceChanged;
   if (c.baseHtml !== undefined && (both ? layout() === 'split' : c.headHtml === undefined)) {
-    sides.push({ side: 'LEFT', html: c.baseHtml, cellId: c.baseId!, changed: changedBase });
+    sides.push({ side: 'LEFT', html: c.baseHtml, cellId: c.baseId! });
   }
   if (c.headHtml !== undefined) {
-    sides.push({ side: 'RIGHT', html: c.headHtml, cellId: c.headId!, changed: changedHead });
+    sides.push({ side: 'RIGHT', html: c.headHtml, cellId: c.headId! });
   }
   const wrap = h('div', { class: `rendered${sides.length === 2 ? ' two' : ''}` });
   for (const s of sides) {
@@ -633,7 +631,7 @@ function renderMarkdown(c: CellVM): HTMLElement {
     if (sides.length === 2) {
       col.prepend(h('div', { class: 'col-label', text: s.side === 'LEFT' ? 'Before' : 'After' }));
     }
-    decorateBlocks(col, c, s.side, s.cellId, c.status === 'modified' ? s.changed : new Set());
+    decorateBlocks(col, c, s.side, s.cellId);
     wrap.append(col);
   }
   if (!sides.length || !c.headHtml && !c.baseHtml) {
@@ -654,7 +652,7 @@ function blockRange(el: HTMLElement): [number, number] | undefined {
   return [Math.min(...ranges.map(r => r[0])), Math.max(...ranges.map(r => r[1]))];
 }
 
-function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string, changed: Set<number>): void {
+function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string): void {
   const blocks = [...col.children].filter((el): el is HTMLElement => el instanceof HTMLElement && !el.classList.contains('col-label'));
   const placed = new Set<ThreadVM | Composer>();
   const items = [
@@ -667,11 +665,9 @@ function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string,
       continue;
     }
     block.classList.add('md-block');
-    for (let l = range[0]; l <= range[1]; l++) {
-      if (changed.has(l)) {
-        block.classList.add(side === 'LEFT' ? 'changed-del' : 'changed-add');
-        break;
-      }
+    // The extension marks changed words and paragraphs; a bar in the margin points them out.
+    if (block.matches('.md-changed, .md-added, .md-removed') || block.querySelector('.md-changed, .md-added, .md-removed')) {
+      block.classList.add(side === 'LEFT' ? 'changed-del' : 'changed-add');
     }
     const add = button('+', () => openComposer({ side, cellId, kind: 'source', start: range[0], end: range[1] }), {
       class: 'add-comment block',
