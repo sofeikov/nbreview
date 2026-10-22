@@ -28,6 +28,11 @@ export interface CellVM {
   /** Raw source lines, for suggestions. */
   baseSource: string[];
   headSource: string[];
+  /**
+   * The old source is the same as the new one, so baseLines, baseSource and baseHtml are left
+   * empty and the head versions stand for both (most cells don't change).
+   */
+  baseSameAsHead?: boolean;
   ops: ({ op: 'same'; b: number; h: number } | { op: 'del'; b: number } | { op: 'add'; h: number })[];
   /** Rendered markdown (HTML with data-src="start-end" on blocks). */
   baseHtml?: string;

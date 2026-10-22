@@ -14,6 +14,7 @@ export function buildViewModel(entry: NotebookEntry, pr: { number: number; title
   const cells: CellVM[] = pairs.map(p => {
     const any = (p.head ?? p.base)!;
     const lang = any.type === 'code' ? language : any.type === 'markdown' ? 'markdown' : 'plaintext';
+    const same = !!p.base && !!p.head && p.base.type === p.head.type && p.lines.every(l => l.op === 'same') && p.base.source.length === p.head.source.length;
     return {
       key: (p.head ?? p.base)!.id + (p.head ? '' : ':removed'),
       status: p.status,
@@ -25,12 +26,13 @@ export function buildViewModel(entry: NotebookEntry, pr: { number: number; title
       headId: p.head?.id,
       baseNumber: p.base ? p.base.index + 1 : undefined,
       headNumber: p.head ? p.head.index + 1 : undefined,
-      baseLines: p.base ? highlightLines(p.base.source, lang) : [],
+      baseLines: p.base && !same ? highlightLines(p.base.source, lang) : [],
       headLines: p.head ? highlightLines(p.head.source, lang) : [],
-      baseSource: p.base?.source ?? [],
+      baseSource: same ? [] : p.base?.source ?? [],
       headSource: p.head?.source ?? [],
+      baseSameAsHead: same || undefined,
       ops: p.lines.map(l => (l.op === 'same' ? { op: 'same', b: l.base, h: l.head } : l.op === 'del' ? { op: 'del', b: l.base } : { op: 'add', h: l.head })),
-      baseHtml: p.base?.type === 'markdown' ? renderMarkdownCell(p.base.source) : undefined,
+      baseHtml: p.base?.type === 'markdown' && !same ? renderMarkdownCell(p.base.source) : undefined,
       headHtml: p.head?.type === 'markdown' ? renderMarkdownCell(p.head.source) : undefined,
       baseOutputs: (p.base?.outputs ?? []).map(outputVM),
       headOutputs: (p.head?.outputs ?? []).map(outputVM),

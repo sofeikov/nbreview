@@ -3,7 +3,6 @@
 import * as vscode from 'vscode';
 import type { ReviewState } from './state.ts';
 import type { TextReview } from './textReview.ts';
-import { buildThreads, buildViewModel } from './viewModel.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
 import type { HostMessage, WebviewMessage } from './webview/protocol.ts';
 import { basename } from './paths.ts';
@@ -28,12 +27,8 @@ export class VisualReview implements vscode.Disposable {
               panel.dispose();
               continue;
             }
-            this.post(panel, this.modelMessage(path));
           }
-          if (e.session || e.drafts || e.threads) {
-            this.post(panel, this.threadsMessage(path));
-          }
-          this.post(panel, this.stateMessage(path));
+          void this.sync(panel, path, { model: !!e.session, threads: !!(e.session || e.drafts || e.threads) });
         }
       }),
     );
@@ -104,9 +99,7 @@ export class VisualReview implements vscode.Disposable {
   private async handle(nbPath: string, panel: vscode.WebviewPanel, msg: WebviewMessage): Promise<void> {
     switch (msg.type) {
       case 'ready':
-        this.post(panel, this.modelMessage(nbPath));
-        this.post(panel, this.threadsMessage(nbPath));
-        this.post(panel, this.stateMessage(nbPath));
+        await this.sync(panel, nbPath, { model: true, threads: true });
         return;
       case 'plan': {
         const doc = this.state.doc(nbPath, msg.anchor.side);
@@ -169,21 +162,23 @@ export class VisualReview implements vscode.Disposable {
     }
   }
 
-  private modelMessage(nbPath: string): HostMessage {
-    const s = this.state.session!;
-    return { type: 'model', model: buildViewModel(this.state.entry(nbPath)!, { number: s.pr.number, title: s.pr.title, url: s.pr.url }) };
-  }
+  // Rendering (KaTeX, markdown-it, highlight.js) is most of the bundle; it is only loaded once a
+  // notebook is opened in the visual review, so the extension itself starts quickly.
+  private viewModel?: Promise<typeof import('./viewModel.ts')>;
 
-  private threadsMessage(nbPath: string): HostMessage {
+  /** Sends the page what changed, in order: the notebook, then its threads, then the toolbar state. */
+  private async sync(panel: vscode.WebviewPanel, nbPath: string, what: { model?: boolean; threads?: boolean }): Promise<void> {
+    const vm = await (this.viewModel ??= import('./viewModel.ts'));
     const s = this.state.session;
     const entry = this.state.entry(nbPath);
-    if (!s || !entry) {
-      return { type: 'threads', threads: [] };
+    if (s && entry && what.model) {
+      this.post(panel, { type: 'model', model: vm.buildViewModel(entry, { number: s.pr.number, title: s.pr.title, url: s.pr.url }) });
     }
-    return {
-      type: 'threads',
-      threads: buildThreads(entry, s.threadsFor(nbPath), this.state.draftsFor(nbPath), d => this.state.describe(d)),
-    };
+    if (what.threads) {
+      const threads = s && entry ? vm.buildThreads(entry, s.threadsFor(nbPath), this.state.draftsFor(nbPath), d => this.state.describe(d)) : [];
+      this.post(panel, { type: 'threads', threads });
+    }
+    this.post(panel, this.stateMessage(nbPath));
   }
 
   private stateMessage(nbPath: string): HostMessage {
@@ -211,7 +206,6 @@ export class VisualReview implements vscode.Disposable {
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${uri('katex', 'katex.min.css')}">
-<link rel="stylesheet" href="${uri('codicons', 'codicon.css')}">
 <link rel="stylesheet" href="${uri('webview.css')}">
 </head>
 <body data-path="${escapeAttr(nbPath)}">

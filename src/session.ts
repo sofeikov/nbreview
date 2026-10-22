@@ -55,16 +55,18 @@ export class ReviewSession {
 
   static async load(gh: GitHub, owner: string, repo: string, number: number, progress?: (msg: string) => void): Promise<ReviewSession> {
     progress?.('Fetching pull request…');
-    const pr = await gh.getPr(owner, repo, number);
-    const files = await gh.listFiles(owner, repo, number);
+    // Everything that only needs the pull request number is requested at once.
+    const [pr, files, threads, viewed] = await Promise.all([
+      gh.getPr(owner, repo, number),
+      gh.listFiles(owner, repo, number),
+      gh.getThreads(owner, repo, number),
+      gh.getViewed(owner, repo, number).catch(() => new Map<string, boolean>()),
+    ]);
     const session = new ReviewSession(gh, pr, files);
+    session.viewed = viewed;
     progress?.(`Loading ${files.filter(isNotebook).length} notebooks…`);
     await session.loadFiles();
-    progress?.('Loading review comments…');
-    await Promise.all([
-      session.loadThreads(),
-      gh.getViewed(owner, repo, number).then(v => (session.viewed = v)).catch(() => undefined),
-    ]);
+    await session.placeThreads(threads);
     return session;
   }
 
@@ -86,7 +88,7 @@ export class ReviewSession {
   }
 
   private async loadFiles(): Promise<void> {
-    await pool(this.files, 8, async file => {
+    await pool(this.files, 16, async file => {
       if (isNotebook(file)) {
         const [baseText, headText] = await Promise.all([this.content(file.filename, 'LEFT'), this.content(file.filename, 'RIGHT')]);
         let error: string | undefined;
@@ -125,7 +127,11 @@ export class ReviewSession {
   }
 
   async loadThreads(): Promise<void> {
-    const threads = await this.gh.getThreads(this.pr.owner, this.pr.repo, this.pr.number);
+    await this.placeThreads(await this.gh.getThreads(this.pr.owner, this.pr.repo, this.pr.number));
+  }
+
+  /** Puts each thread on its notebook cell, moving threads on generated modules to their notebook. */
+  async placeThreads(threads: GhThread[]): Promise<void> {
     const placed: PlacedThread[] = [];
     for (const o of this.others) {
       o.movedThreads = 0;

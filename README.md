@@ -110,6 +110,7 @@ GitHub anchors review comments to lines of the raw `.ipynb` file. Notebook Revie
 | `npm test` | Run the unit tests. |
 | `npm run typecheck` | Type-check the sources. |
 | `npm run package` | Build `nbreview.vsix`. |
+| `npm run bench -- [--before REF] [--runs N] TASK ARGS` | Compare the speed of a git ref (default `HEAD`) with the working tree, in alternating fresh processes, and print the mean difference with a 95% bootstrap confidence interval. Tasks: `viewModel BASE.ipynb HEAD.ipynb PATCH …` (building the review page), `activate` (loading the extension), and `openPr owner/repo#123` with `GH_TOKEN` set (opening a pull request; read-only). |
 | `npm run demo` | Write `out/demo/index.html`: the review page for the notebooks in `docs/demo/`, outside VS Code. Serve `out/demo` over HTTP to open it. The README screenshots are taken from it. |
 
 The core does not use the VS Code API and is in `src/core/`:
@@ -127,6 +128,14 @@ The core does not use the VS Code API and is in `src/core/`:
 - Images with relative paths in Markdown cells do not show.
 
 ## Changelog
+
+### 0.4.1
+Measured with `npm run bench` against 0.4.0 (mean saving, 95% confidence interval):
+- Opening a pull request is about twice as fast: the pull request, its files, review threads and viewed flags are requested at once, and file contents 16 at a time. A pull request with 109 changed files and 14 notebooks opens in 1.6 s, not 3.4 s (saved 1.80 s, CI 1.72–1.88 s).
+- The extension loads in half the time: rendering (KaTeX, markdown-it, highlight.js) is loaded when a notebook is first opened. 16.8 ms, not 34.3 ms (CI 17.3–17.6 ms saved).
+- The review page is built 30% faster and its data is 35% smaller: unchanged cells are highlighted and sent once, not twice. 34.9 ms, not 50.2 ms, for three notebooks with 230 cells (CI 15.1–15.6 ms saved).
+- The package is 481 KB, not 525 KB: the page's 13 icons are built in instead of the whole icon font.
+- Fix: unchanged cells you expand show their code instead of a folded placeholder.
 
 ### 0.4.0
 - A **Pull Requests** list in the sidebar: this branch, waiting for my review, changing notebooks, created by me, with the number of changed notebooks on each.

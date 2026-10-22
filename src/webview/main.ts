@@ -92,8 +92,13 @@ function sanitize(html: string): string {
   return DOMPurify.sanitize(html, { ADD_ATTR: ['target'], FORBID_TAGS: ['style', 'form', 'input', 'button'] });
 }
 
+/** SVGs of the codicons in icons.json, put in at build time. */
+declare const __ICONS__: Record<string, string>;
+
 function icon(name: string): HTMLElement {
-  return h('span', { class: `codicon codicon-${name}`, 'aria-hidden': 'true' });
+  const el = h('span', { class: `codicon codicon-${name}`, 'aria-hidden': 'true' });
+  el.innerHTML = __ICONS__[name] ?? '';
+  return el;
 }
 
 function button(label: Child | Child[], onclick: (e: MouseEvent) => void, props: Record<string, unknown> = {}): HTMLButtonElement {
@@ -385,6 +390,11 @@ function oneColumn(c: CellVM): boolean {
   return layout() === 'unified' || c.status === 'added' || c.status === 'removed' || (c.status === 'unchanged' && !c.moved) || (c.status === 'modified' && !c.sourceChanged);
 }
 
+/** The old version's highlighted lines; unchanged cells share the new version's. */
+function baseLines(c: CellVM): string[] {
+  return c.baseSameAsHead ? c.headLines : c.baseLines;
+}
+
 function buildRows(c: CellVM): Row[] {
   const rows: Row[] = [];
   const unified = oneColumn(c);
@@ -404,13 +414,13 @@ function buildRows(c: CellVM): Row[] {
   };
   for (const op of c.ops) {
     if (op.op === 'del') {
-      dels.push({ side: 'LEFT', line: op.b, number: op.b + 1, html: c.baseLines[op.b] ?? '', kind: 'del' });
+      dels.push({ side: 'LEFT', line: op.b, number: op.b + 1, html: baseLines(c)[op.b] ?? '', kind: 'del' });
     } else if (op.op === 'add') {
       adds.push({ side: 'RIGHT', line: op.h, number: op.h + 1, html: c.headLines[op.h] ?? '', kind: 'add' });
     } else {
       flush();
       rows.push({
-        left: { side: 'LEFT', line: op.b, number: op.b + 1, html: c.baseLines[op.b] ?? '', kind: 'same' },
+        left: { side: 'LEFT', line: op.b, number: op.b + 1, html: baseLines(c)[op.b] ?? '', kind: 'same' },
         right: { side: 'RIGHT', line: op.h, number: op.h + 1, html: c.headLines[op.h] ?? '', kind: 'same' },
         kind: 'same',
       });
@@ -455,9 +465,10 @@ function renderSource(c: CellVM): HTMLElement {
       icon('unfold'), `${more} more removed line${more === 1 ? '' : 's'}`));
     return body;
   }
-  // Fold long unchanged runs, keeping three lines of context. Unchanged cells only show up in
-  // "Changes" mode because of a comment, so they fold down to the lines around it.
-  const foldable = c.status !== 'unchanged' || !ui.showAll;
+  // Fold long unchanged runs, keeping three lines of context. An unchanged cell shown in
+  // "Changes" mode only because it has a comment folds down to the lines around the comment; one
+  // the reviewer expanded on purpose shows in full.
+  const foldable = c.status !== 'unchanged' || (!ui.showAll && cellHasThreads(c));
   let i = 0;
   while (i < rows.length) {
     if (foldable && rows[i].kind === 'same') {
@@ -845,7 +856,7 @@ function renderComposer(x: Composer): HTMLElement {
 
 function sourceText(a: Anchor): string[] {
   const c = model?.cells.find(x => (a.side === 'LEFT' ? x.baseId : x.headId) === a.cellId);
-  const lines = (a.side === 'LEFT' ? c?.baseSource : c?.headSource) ?? [];
+  const lines = (a.side === 'LEFT' ? (c?.baseSameAsHead ? c.headSource : c?.baseSource) : c?.headSource) ?? [];
   return lines.slice(a.start ?? 0, (a.end ?? a.start ?? 0) + 1);
 }
 

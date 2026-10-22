@@ -136,24 +136,23 @@ export class GitHub {
   }
 
   async listFiles(owner: string, repo: string, number: number): Promise<PrFile[]> {
-    const files: PrFile[] = [];
-    for (let page = 1; page <= 30; page++) {
-      const batch = await this.json<any[]>(`/repos/${owner}/${repo}/pulls/${number}/files?per_page=100&page=${page}`);
-      for (const f of batch) {
-        files.push({
-          filename: f.filename,
-          previousFilename: f.previous_filename,
-          status: f.status,
-          additions: f.additions,
-          deletions: f.deletions,
-          patch: f.patch,
-        });
-      }
-      if (batch.length < 100) {
-        break;
-      }
+    const page = (n: number) => this.json<any[]>(`/repos/${owner}/${repo}/pulls/${number}/files?per_page=100&page=${n}`);
+    // Pages 1 and 2 together: most pull requests fit, and the rest are rare enough to fetch in turn.
+    const batches: any[][] = await Promise.all([page(1), page(2)]);
+    for (let n = 3; n <= 30 && batches[batches.length - 1].length === 100; n++) {
+      batches.push(await page(n));
     }
-    return files;
+    if (batches[0].length < 100) {
+      batches.length = 1;
+    }
+    return batches.flat().map(f => ({
+      filename: f.filename,
+      previousFilename: f.previous_filename,
+      status: f.status,
+      additions: f.additions,
+      deletions: f.deletions,
+      patch: f.patch,
+    }));
   }
 
   /** Raw file content at a commit, or undefined when the file doesn't exist there. */

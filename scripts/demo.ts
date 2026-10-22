@@ -59,7 +59,6 @@ writeFileSync('out/demo/index.html', `<!DOCTYPE html>
 <meta charset="utf-8">
 <title>Notebook Review demo</title>
 <link rel="stylesheet" href="dist/katex/katex.min.css">
-<link rel="stylesheet" href="dist/codicons/codicon.css">
 <link rel="stylesheet" href="dist/webview.css">
 <style>
 /* The theme variables VS Code gives a webview, from the Dark Modern theme. */

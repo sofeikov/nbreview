@@ -110,3 +110,26 @@ test('display maths keeps its source lines', () => {
   const html = renderMarkdownCell(['Intro', '', '$$', 'x^2', '$$', '', 'After']);
   assert.match(html, /<div data-src="2-4">[^]*?katex-display/);
 });
+
+test('every icon the page uses is built into it', () => {
+  const page = readFileSync(join(process.cwd(), 'src', 'webview', 'main.ts'), 'utf8');
+  const built = new Set(JSON.parse(readFileSync(join(process.cwd(), 'src', 'webview', 'icons.json'), 'utf8')));
+  const used = new Set<string>();
+  for (const call of page.match(/icon\([^)]*\)/g) ?? []) {
+    for (const name of call.match(/'([a-z-]+)'/g) ?? []) {
+      used.add(name.slice(1, -1));
+    }
+  }
+  assert.ok(used.size >= 10);
+  assert.deepEqual([...used].filter(n => !built.has(n)), []);
+});
+
+test('unchanged cells share the new version instead of repeating it', () => {
+  const e = entry(fx('small.base.ipynb'), fx('small.head.ipynb'), fx('small.patch'));
+  const demo = buildViewModel(e, { number: 1, title: 't', url: 'u' }).cells.find(c => c.key === 'demo')!;
+  assert.equal(demo.baseSameAsHead, true);
+  assert.deepEqual(demo.baseLines, []);
+  assert.ok(demo.headLines.length > 0);
+  const changed = buildViewModel(e, { number: 1, title: 't', url: 'u' }).cells.find(c => c.key === 'loss-def')!;
+  assert.equal(changed.baseSameAsHead, undefined);
+});
