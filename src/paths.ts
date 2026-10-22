@@ -18,3 +18,51 @@ export function shortPath(path: string, all: string[]): string {
   }
   return common ? path.slice(common.length + 1) : path;
 }
+
+/** A folder of changed files, for the tree layout of the Review panel. */
+export interface FolderNode {
+  /** Shown name; chains of single folders are merged, e.g. `src/pkg/models`. */
+  name: string;
+  /** Full path of the folder. */
+  path: string;
+  folders: FolderNode[];
+  /** Full paths of the files directly in this folder. */
+  files: string[];
+}
+
+/** Groups paths into folders, like the Explorer: folders first, then files, by name. */
+export function buildFolderTree(paths: string[]): FolderNode {
+  const root: FolderNode = { name: '', path: '', folders: [], files: [] };
+  for (const path of paths) {
+    let node = root;
+    const parts = path.split('/');
+    for (const part of parts.slice(0, -1)) {
+      const sub = node.path ? `${node.path}/${part}` : part;
+      let next = node.folders.find(f => f.path === sub);
+      if (!next) {
+        next = { name: part, path: sub, folders: [], files: [] };
+        node.folders.push(next);
+      }
+      node = next;
+    }
+    node.files.push(path);
+  }
+  const compact = (node: FolderNode): FolderNode => {
+    let n = node;
+    while (n.files.length === 0 && n.folders.length === 1) {
+      const only = n.folders[0];
+      n = { ...only, name: `${n.name}/${only.name}` };
+    }
+    n.folders = n.folders.map(compact).sort((a, b) => a.name.localeCompare(b.name));
+    n.files.sort((a, b) => basename(a).localeCompare(basename(b)));
+    return n;
+  };
+  root.folders = root.folders.map(compact).sort((a, b) => a.name.localeCompare(b.name));
+  root.files.sort((a, b) => basename(a).localeCompare(basename(b)));
+  return root;
+}
+
+/** Files in the order the tree shows them: each folder's subfolders first, then its files. */
+export function treeOrder(node: FolderNode): string[] {
+  return [...node.folders.flatMap(treeOrder), ...node.files];
+}

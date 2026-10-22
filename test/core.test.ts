@@ -178,3 +178,20 @@ test('threads on ordinary files go on their own line', () => {
   assert.deepEqual(locateFileThread({ ...base, line: null, isOutdated: true }), { side: 'RIGHT', docLine: 6, note: 'outdated' });
   assert.deepEqual(locateFileThread({ ...base, line: null, subjectType: 'FILE' }), { side: 'RIGHT', docLine: 0, note: 'file comment' });
 });
+
+import { buildFolderTree, treeOrder } from '../src/paths.ts';
+
+test('changed files group into folders, single-folder chains merged', () => {
+  const root = buildFolderTree([
+    'src/pkg/models/graph.py', 'src/pkg/models/gnn.py', 'src/pkg/trainer.py',
+    'configs/a.yaml', 'tests/test_x.py', 'pyproject.toml', 'nbs/steps/val.ipynb',
+  ]);
+  assert.deepEqual(root.folders.map(f => f.name), ['configs', 'nbs/steps', 'src/pkg', 'tests']);
+  assert.deepEqual(root.files, ['pyproject.toml']);
+  const pkg = root.folders.find(f => f.name === 'src/pkg')!;
+  assert.deepEqual(pkg.folders.map(f => [f.name, f.path]), [['models', 'src/pkg/models']]);
+  assert.deepEqual(pkg.files, ['src/pkg/trainer.py']);
+  assert.deepEqual(treeOrder(root), [
+    'configs/a.yaml', 'nbs/steps/val.ipynb', 'src/pkg/models/gnn.py', 'src/pkg/models/graph.py', 'src/pkg/trainer.py', 'tests/test_x.py', 'pyproject.toml',
+  ]);
+});

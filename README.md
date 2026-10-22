@@ -68,7 +68,7 @@ code --install-extension nbreview.vsix
    - **Created by me**: your own open pull requests.
 
    The badge on each pull request is the number of notebooks it changes, and its tooltip lists them. Click a pull request to review it. To find one that isn't listed, use the search button (or **Notebook Review: Open Pull Request…**): type to search by title, number, author or branch, or paste a number, `owner/repo#123` or a pull request URL.
-2. Click a notebook to open its visual review (the diff icon next to it opens the text diff instead), or any other file to open its diff. Every diff has **Mark as viewed**, **Next file** and **Submit review** buttons in its title bar (the visual review has them in its toolbar), so you can go through the whole pull request file by file.
+2. Click a notebook to open its visual review (the diff icon next to it opens the text diff instead), or any other file to open its diff. Every diff has **Mark as viewed**, **Next file** and **Submit review** buttons in its title bar (the visual review has them in its toolbar), so you can go through the whole pull request file by file. The **Review** panel shows the files grouped into folders; its **View as List** button (next to Collapse All) switches to a flat list, and **View as Tree** switches back.
 3. Comment with `+` or the comment buttons, then choose **Start a review** (`Ctrl+Enter`) to add it to your pending review on GitHub, or **Add single comment** to post it now. Pending comments can be edited and deleted; deleting the last one discards the empty review. Replies to existing threads work the same way.
 4. Click **Submit review** (in the page, the panel title or the status bar), write an optional summary and choose **Comment**, **Approve** or **Request changes**. **Discard review** (in the same box, or **Notebook Review: Discard Pending Review…**) deletes the pending review and its comments.
 
@@ -89,6 +89,7 @@ Sign-in uses the GitHub CLI (`gh auth login`) when it is installed, otherwise VS
 | Setting | Default | Description |
 |---|---|---|
 | `nbreview.defaultView` | `visual` | What opens when you click a notebook: `visual` (rendered cells) or `text` (line-by-line text diff). |
+| `nbreview.fileLayout` | `tree` | How the Review panel shows the changed files: `tree` (grouped into folders) or `list` (flat). **Next file** follows the same order. |
 | `nbreview.useGhCli` | `true` | Use the GitHub CLI's login when it is available, before asking for VS Code's GitHub sign-in. |
 | `nbreview.markGeneratedFilesViewed` | `false` | In nbdev repositories, mark the generated modules viewed together with their notebook. |
 
@@ -126,6 +127,9 @@ The core does not use the VS Code API and is in `src/core/`:
 - Images with relative paths in Markdown cells do not show.
 
 ## Changelog
+
+### 0.8.1
+- The Review panel groups the changed files into folders, like the Explorer, with single-folder chains merged (`src/pkg/models`). **View as List** in its title bar switches to the flat list (setting `nbreview.fileLayout`). **Next file** follows the order shown.
 
 ### 0.8.0
 - Comments on every file: the diffs of other changed files (Python, configs, tests…) show their review threads and have comment widgets (line comments, single comments, replies) in the same review.

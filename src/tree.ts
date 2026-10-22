@@ -1,15 +1,24 @@
 // The "Review" side panel: the pull request, its notebooks and its other files, with GitHub
-// "Viewed" checkboxes.
+// "Viewed" checkboxes, shown as a folder tree or as a flat list (setting `nbreview.fileLayout`).
 import * as vscode from 'vscode';
 import type { NotebookEntry, OtherFile } from './session.ts';
 import type { ReviewState } from './state.ts';
-import { basename, dirname, shortPath } from './paths.ts';
+import { basename, buildFolderTree, dirname, shortPath, treeOrder, type FolderNode } from './paths.ts';
 
 export type Node =
   | { kind: 'pr' }
-  | { kind: 'group'; id: 'notebooks' | 'other'; label: string; paths: string[] }
+  | { kind: 'group'; id: Group; label: string; paths: string[] }
+  | { kind: 'folder'; group: Group; folder: FolderNode }
   | { kind: 'notebook'; entry: NotebookEntry }
   | { kind: 'file'; other: OtherFile };
+
+type Group = 'notebooks' | 'other';
+
+export type FileLayout = 'tree' | 'list';
+
+export function fileLayout(): FileLayout {
+  return vscode.workspace.getConfiguration('nbreview').get<FileLayout>('fileLayout') === 'list' ? 'list' : 'tree';
+}
 
 export class FilesTree implements vscode.TreeDataProvider<Node> {
   private readonly changed = new vscode.EventEmitter<void>();
@@ -17,6 +26,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
 
   constructor(private readonly state: ReviewState) {
     state.onDidChange(() => this.changed.fire());
+    vscode.workspace.onDidChangeConfiguration(e => e.affectsConfiguration('nbreview.fileLayout') && this.changed.fire());
   }
 
   getChildren(node?: Node): Node[] {
@@ -32,9 +42,24 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
       return nodes;
     }
     if (node.kind === 'group') {
+      if (fileLayout() === 'tree') {
+        return this.folderChildren(node.id, buildFolderTree(node.paths));
+      }
       return node.id === 'notebooks' ? notebookNodes(this.state) : s.others.map(other => ({ kind: 'file', other }));
     }
+    if (node.kind === 'folder') {
+      return this.folderChildren(node.group, node.folder);
+    }
     return [];
+  }
+
+  private folderChildren(group: Group, folder: FolderNode): Node[] {
+    const s = this.state.session!;
+    const others = new Map(s.others.map(o => [o.file.filename, o]));
+    return [
+      ...folder.folders.map(f => ({ kind: 'folder' as const, group, folder: f })),
+      ...folder.files.map((p): Node => (group === 'notebooks' ? { kind: 'notebook', entry: s.notebooks.get(p)! } : { kind: 'file', other: others.get(p)! })),
+    ];
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
@@ -59,11 +84,23 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         item.iconPath = new vscode.ThemeIcon(node.id === 'notebooks' ? 'notebook' : 'files');
         return item;
       }
+      case 'folder': {
+        const { folder } = node;
+        const item = new vscode.TreeItem(folder.name, vscode.TreeItemCollapsibleState.Expanded);
+        const files = treeOrder(folder);
+        const viewed = files.filter(p => this.state.isViewed(p)).length;
+        item.id = `${node.group}:${folder.path}`;
+        item.description = viewed ? `${viewed}/${files.length} viewed` : undefined;
+        item.tooltip = folder.path;
+        item.iconPath = vscode.ThemeIcon.Folder;
+        item.resourceUri = vscode.Uri.file(`/${folder.path}`);
+        return item;
+      }
       case 'notebook': {
         const { entry } = node;
         const threads = s.threadsFor(entry.path).length;
         const drafts = this.state.draftsFor(entry.path).length;
-        const item = new vscode.TreeItem(shortPath(entry.path, [...s.notebooks.keys()]));
+        const item = new vscode.TreeItem(fileLayout() === 'tree' ? basename(entry.path) : shortPath(entry.path, [...s.notebooks.keys()]));
         item.description = [threads ? `💬${threads}` : '', drafts ? `✎${drafts}` : '', `+${entry.file.additions} −${entry.file.deletions}`]
           .filter(Boolean)
           .join(' ');
@@ -84,7 +121,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
           published ? `💬${published}` : '',
           pending ? `✎${pending}` : '',
           `+${other.file.additions} −${other.file.deletions}`,
-          dirname(other.file.filename),
+          fileLayout() === 'list' ? dirname(other.file.filename) : '',
         ].filter(Boolean).join(' ');
         item.tooltip = other.file.filename;
         item.iconPath = new vscode.ThemeIcon('file', statusColor(other.file.status));
@@ -107,13 +144,18 @@ function notebookNodes(state: ReviewState): Node[] {
     .map(p => ({ kind: 'notebook', entry: state.session!.notebooks.get(p)! }));
 }
 
-/** Every changed file in the order the panel lists them: notebooks first, then the others. */
+/** Every changed file in the order the panel shows them: notebooks first, then the others. */
 export function reviewOrder(state: ReviewState): string[] {
   const s = state.session;
   if (!s) {
     return [];
   }
-  return [...[...s.notebooks.keys()].sort((a, b) => a.localeCompare(b)), ...s.others.map(o => o.file.filename)];
+  const notebooks = [...s.notebooks.keys()];
+  const others = s.others.map(o => o.file.filename);
+  if (fileLayout() === 'tree') {
+    return [...treeOrder(buildFolderTree(notebooks)), ...treeOrder(buildFolderTree(others))];
+  }
+  return [...notebooks.sort((a, b) => a.localeCompare(b)), ...others];
 }
 
 export function nodePath(node: Node): string | undefined {
