@@ -107,7 +107,7 @@ button.danger.armed { border-color: var(--vscode-errorForeground); }
 
 /* --- Cells --------------------------------------------------------------------------------- */
 
-.cells { max-width: 1600px; margin: 0 auto; padding: 16px 20px; display: flex; flex-direction: column; gap: var(--gap); }
+.cells { padding: 16px 20px; display: flex; flex-direction: column; gap: var(--gap); }
 
 .cell {
   border: 1px solid var(--border);
