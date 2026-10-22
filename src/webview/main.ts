@@ -27,6 +27,7 @@ interface Composer {
   text: string;
   describe?: string;
   saving?: number;
+  savingMode?: 'review' | 'single';
 }
 
 const saved = (vscode.getState() ?? {}) as Partial<UiState>;
@@ -36,7 +37,7 @@ let threads: ThreadVM[] = [];
 let panel: PanelState = { viewed: false, pending: 0 };
 let requestSeq = 0;
 const composers = new Map<string, Composer>();
-const replies = new Map<string, { text: string; saving?: number }>();
+const replies = new Map<string, { text: string; saving?: number; savingMode?: 'review' | 'single' }>();
 const edits = new Map<string, string>();
 let focusKey: string | undefined;
 let restoredScroll = false;
@@ -800,38 +801,58 @@ function renderReply(t: ThreadVM): HTMLElement {
       onclick: () => { replies.set(t.id, { text: '' }); render(); focus(`reply:${t.id}`); },
     }));
   }
-  const submit = () => {
-    if (!area.value.trim()) {
+  const submit = (mode: 'review' | 'single') => {
+    if (!area.value.trim() || state.saving) {
       return;
     }
     const requestId = ++requestSeq;
-    replies.set(t.id, { text: area.value, saving: requestId });
-    post({ type: 'reply', threadId: t.id, text: area.value, requestId });
+    replies.set(t.id, { text: area.value, saving: requestId, savingMode: mode });
+    post({ type: 'reply', threadId: t.id, text: area.value, requestId, mode });
     render();
   };
   const cancel = () => { replies.delete(t.id); render(); };
-  const area = textarea(`reply:${t.id}`, state.text, v => (state.text = v), submit, cancel);
+  const area = textarea(`reply:${t.id}`, state.text, v => (state.text = v), () => submit('review'), cancel);
   return h('div', { class: 'reply open' }, area,
     h('div', { class: 'actions' },
-      h('span', { class: 'hint', text: 'Ctrl+Enter to add · goes out with your review' }),
+      h('span', { class: 'hint', text: 'Ctrl+Enter adds it to your review' }),
       button('Cancel', cancel),
-      button(state.saving ? 'Adding…' : 'Add reply', submit, { class: 'primary', disabled: !!state.saving })));
+      submitButtons(state, submit, 'Add to review')));
+}
+
+/**
+ * GitHub's two ways to send a comment: "Add single comment" posts it now; the primary button
+ * adds it to the review, which goes out with "Submit review".
+ */
+function submitButtons(state: { saving?: number; savingMode?: 'review' | 'single' }, submit: (mode: 'review' | 'single') => void, reviewLabel: string): HTMLElement {
+  const busy = !!state.saving;
+  return h('span', { class: 'submit-buttons' },
+    button(busy && state.savingMode === 'single' ? 'Posting…' : 'Add single comment', () => submit('single'), {
+      class: 'ghost',
+      disabled: busy,
+      title: 'Post this comment on GitHub now, on its own',
+    }),
+    button(busy && state.savingMode === 'review' ? 'Adding…' : panel.pending ? reviewLabel : 'Start a review', () => submit('review'), {
+      class: 'primary',
+      disabled: busy,
+      title: 'Keep this comment pending and send it with your other comments when you submit the review (Ctrl+Enter)',
+    }));
 }
 
 function renderComposer(x: Composer): HTMLElement {
   const key = anchorKey(x.anchor);
-  const submit = () => {
-    if (!area.value.trim()) {
+  const submit = (mode: 'review' | 'single') => {
+    if (!area.value.trim() || x.saving) {
       return;
     }
     const requestId = ++requestSeq;
     x.text = area.value;
     x.saving = requestId;
-    post({ type: 'addComment', anchor: x.anchor, text: area.value, requestId });
+    x.savingMode = mode;
+    post({ type: 'addComment', anchor: x.anchor, text: area.value, requestId, mode });
     render();
   };
   const cancel = () => { composers.delete(key); render(); };
-  const area = textarea(`compose:${key}`, x.text, v => (x.text = v), submit, cancel);
+  const area = textarea(`compose:${key}`, x.text, v => (x.text = v), () => submit('review'), cancel);
   const what = x.anchor.kind === 'source'
     ? x.anchor.start === x.anchor.end ? `line ${x.anchor.start! + 1}` : `lines ${x.anchor.start! + 1}–${x.anchor.end! + 1}`
     : x.anchor.kind === 'output' ? 'this output' : 'this cell';
@@ -851,7 +872,7 @@ function renderComposer(x: Composer): HTMLElement {
       h('span', { class: 'hint', text: x.describe ?? '' }),
       suggest,
       button('Cancel', cancel),
-      button(x.saving ? 'Adding…' : 'Add review comment', submit, { class: 'primary', disabled: !!x.saving })));
+      submitButtons(x, submit, 'Add review comment')));
 }
 
 function sourceText(a: Anchor): string[] {
@@ -923,7 +944,7 @@ function jump(dir: 1 | -1): void {
   if (!cards.length) {
     return;
   }
-  const top = 64;
+  const top = toolbarHeight() + 4;
   const positions = cards.map(el => el.getBoundingClientRect().top - top);
   let target = dir > 0 ? positions.findIndex(p => p > 4) : positions.map((p, i) => [p, i] as const).filter(([p]) => p < -4).pop()?.[1] ?? -1;
   if (target < 0) {
@@ -943,8 +964,13 @@ function jumpThread(dir: 1 | -1): void {
   reveal(all[threadCursor]);
 }
 
+/** Height of the sticky toolbar, which wraps onto two rows in narrow editors. */
+function toolbarHeight(): number {
+  return (app.querySelector<HTMLElement>('.toolbar')?.offsetHeight ?? 50) + 10;
+}
+
 function reveal(el: HTMLElement): void {
-  window.scrollTo({ top: window.scrollY + el.getBoundingClientRect().top - 60, behavior: 'smooth' });
+  window.scrollTo({ top: window.scrollY + el.getBoundingClientRect().top - toolbarHeight(), behavior: 'smooth' });
   el.classList.remove('flash');
   void el.offsetWidth;
   el.classList.add('flash');
@@ -1059,9 +1085,11 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
     case 'error':
       for (const x of composers.values()) {
         x.saving = undefined;
+        x.savingMode = undefined;
       }
       for (const r of replies.values()) {
         r.saving = undefined;
+        r.savingMode = undefined;
       }
       render();
       toast(msg.message);

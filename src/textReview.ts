@@ -84,6 +84,7 @@ export class TextReview implements vscode.Disposable {
       vscode.languages.registerFoldingRangeProvider({ scheme: SCHEME }, symbols),
       vscode.window.onDidChangeVisibleTextEditors(editors => this.decorate(editors)),
       vscode.commands.registerCommand('nbreview.addComment', (reply: vscode.CommentReply) => this.addFromReply(reply)),
+      vscode.commands.registerCommand('nbreview.addSingleComment', (reply: vscode.CommentReply) => this.postFromReply(reply)),
       vscode.commands.registerCommand('nbreview.deleteDraft', (c: NbComment) => c.draftKey && this.state.removeDraft(c.draftKey, 'system')),
       vscode.commands.registerCommand('nbreview.editDraft', (c: NbComment) => this.setEditing(c, true)),
       vscode.commands.registerCommand('nbreview.cancelEditDraft', (c: NbComment) => this.setEditing(c, false)),
@@ -218,6 +219,34 @@ export class TextReview implements vscode.Disposable {
     } else {
       reply.thread.comments = [this.draftComment(d, reply.thread)];
       this.markDraftThread(reply.thread, d);
+    }
+  }
+
+  /** "Add Single Comment": posts to GitHub now instead of adding to the pending review. */
+  private async postFromReply(reply: vscode.CommentReply): Promise<void> {
+    const target = this.docFor(reply.thread.uri);
+    if (!target || !reply.text.trim()) {
+      return;
+    }
+    const replyTo = [...this.ghThreads.entries()].find(([, t]) => t === reply.thread)?.[0];
+    const range = reply.thread.range ?? lineRange(0);
+    try {
+      await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: 'Posting comment to GitHub…' }, () =>
+        this.state.postSingle({
+          nbPath: target.entry.path,
+          side: target.side,
+          startDocLine: range.start.line,
+          endDocLine: range.end.line,
+          text: reply.text,
+          replyTo,
+        }),
+      );
+      // The posted comment comes back as a GitHub thread; the empty thread it was typed in goes.
+      if (!replyTo) {
+        reply.thread.dispose();
+      }
+    } catch (e) {
+      void vscode.window.showErrorMessage(`Posting the comment failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

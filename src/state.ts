@@ -102,6 +102,32 @@ export class ReviewState {
     });
   }
 
+  /**
+   * Posts a comment or a reply to GitHub straight away, outside the pending review, then reloads
+   * the threads so it shows like any other GitHub comment.
+   */
+  async postSingle(d: Omit<Draft, 'key'>): Promise<void> {
+    const s = this.session;
+    if (!s) {
+      throw new Error('No pull request is open.');
+    }
+    if (d.replyTo) {
+      const thread = s.placed.find(p => p.gh.id === d.replyTo)?.gh;
+      const first = thread?.comments.find(c => c.databaseId !== undefined);
+      if (!first?.databaseId) {
+        throw new Error('That thread is no longer on the pull request.');
+      }
+      await s.gh.postSingleReply(s.pr, first.databaseId, d.text);
+    } else {
+      const plan = this.plan(d);
+      if (!plan) {
+        throw new Error('That notebook is no longer in the pull request.');
+      }
+      await s.gh.postSingleComment(s.pr, plan);
+    }
+    await this.reloadThreads();
+  }
+
   describe(d: Draft): string {
     return d.replyTo ? 'Pending reply' : `Pending · ${this.plan(d)?.describe ?? 'comment'}`;
   }

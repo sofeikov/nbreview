@@ -114,10 +114,8 @@ export class VisualReview implements vscode.Disposable {
         if (!lines) {
           throw new Error('That cell is no longer in the notebook.');
         }
-        await this.state.addDraft(
-          { nbPath, side: msg.anchor.side, startDocLine: lines.start, endDocLine: lines.end, text: msg.text },
-          'visual',
-        );
+        const draft = { nbPath, side: msg.anchor.side, startDocLine: lines.start, endDocLine: lines.end, text: msg.text };
+        await (msg.mode === 'single' ? this.state.postSingle(draft) : this.state.addDraft(draft, 'visual'));
         return;
       }
       case 'reply': {
@@ -125,10 +123,8 @@ export class VisualReview implements vscode.Disposable {
         if (!placed) {
           throw new Error('That thread is no longer on the pull request.');
         }
-        await this.state.addDraft(
-          { nbPath: placed.nbPath, side: placed.side, startDocLine: placed.docLine, endDocLine: placed.docLine, text: msg.text, replyTo: msg.threadId },
-          'visual',
-        );
+        const draft = { nbPath: placed.nbPath, side: placed.side, startDocLine: placed.docLine, endDocLine: placed.docLine, text: msg.text, replyTo: msg.threadId };
+        await (msg.mode === 'single' ? this.state.postSingle(draft) : this.state.addDraft(draft, 'visual'));
         return;
       }
       case 'editDraft':

@@ -110,7 +110,6 @@ button.icon-btn.armed { color: var(--vscode-errorForeground); }
   border-radius: var(--radius);
   background: var(--card);
   overflow: hidden;
-  scroll-margin-top: 70px;
 }
 .cell.modified { border-left-color: var(--mod-mark); }
 .cell.added { border-left-color: var(--add-mark); }
@@ -409,6 +408,7 @@ textarea {
 .actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .actions .hint { flex: 1; color: var(--muted); font-size: 11px; min-width: 120px; }
 .composer { padding: 8px 12px 10px; border-color: var(--accent); }
+.submit-buttons { display: inline-flex; gap: 6px; }
 .composer-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .editor { margin-top: 4px; }
 

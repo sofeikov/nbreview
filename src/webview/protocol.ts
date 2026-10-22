@@ -101,8 +101,9 @@ export type HostMessage =
 
 export type WebviewMessage =
   | { type: 'ready' }
-  | { type: 'addComment'; anchor: Anchor; text: string; requestId: number }
-  | { type: 'reply'; threadId: string; text: string; requestId: number }
+  /** `single` posts to GitHub straight away; `review` adds a pending comment to the review. */
+  | { type: 'addComment'; anchor: Anchor; text: string; requestId: number; mode: 'review' | 'single' }
+  | { type: 'reply'; threadId: string; text: string; requestId: number; mode: 'review' | 'single' }
   | { type: 'editDraft'; key: string; text: string }
   | { type: 'deleteDraft'; key: string }
   | { type: 'plan'; anchor: Anchor; requestId: number }

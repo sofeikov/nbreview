@@ -27,6 +27,8 @@ export interface PrFile {
 
 export interface GhComment {
   id: string;
+  /** REST id, for replying with a single comment. */
+  databaseId?: number;
   body: string;
   createdAt: string;
   url: string;
@@ -176,7 +178,7 @@ export class GitHub {
         `query($o:String!,$r:String!,$n:Int!,$after:String){repository(owner:$o,name:$r){pullRequest(number:$n){
           reviewThreads(first:100, after:$after){pageInfo{hasNextPage endCursor} nodes{
             id path line startLine originalLine diffSide subjectType isResolved isOutdated
-            comments(first:100){nodes{id body createdAt url author{login avatarUrl} pullRequestReview{state}}}}}}}}`,
+            comments(first:100){nodes{id databaseId body createdAt url author{login avatarUrl} pullRequestReview{state}}}}}}}}`,
         { o: owner, r: repo, n: number, after },
       );
       const page = data.repository.pullRequest.reviewThreads;
@@ -196,6 +198,7 @@ export class GitHub {
             .filter((c: any) => c.pullRequestReview?.state !== 'PENDING')
             .map((c: any) => ({
               id: c.id,
+              databaseId: c.databaseId ?? undefined,
               body: c.body,
               createdAt: c.createdAt,
               url: c.url,
@@ -283,6 +286,43 @@ export class GitHub {
     await this.graphql(`mutation($input:${input}!){${mutation}(input:$input){clientMutationId}}`, {
       input: { pullRequestId: prNodeId, path },
     });
+  }
+
+  /**
+   * Posts one comment straight away, outside any review ("Add single comment" on GitHub). It
+   * doesn't touch a review the user has pending on github.com.
+   */
+  async postSingleComment(pr: PrInfo, t: NewThread): Promise<void> {
+    const where = t.subjectType === 'FILE'
+      ? { subject_type: 'file' }
+      : { line: t.line, side: t.side, ...(t.startLine ? { start_line: t.startLine, start_side: t.side } : {}) };
+    await this.post(`/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}/comments`, {
+      body: t.body,
+      commit_id: pr.headSha,
+      path: t.path,
+      ...where,
+    });
+  }
+
+  /** Replies to a review thread straight away, outside any review. */
+  async postSingleReply(pr: PrInfo, commentDatabaseId: number, body: string): Promise<void> {
+    await this.post(`/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}/comments/${commentDatabaseId}/replies`, { body });
+  }
+
+  private async post(url: string, payload: unknown): Promise<unknown> {
+    const res = await this.request(url, { method: 'POST', body: JSON.stringify(payload), headers: { 'Content-Type': 'application/json' } });
+    if (!res.ok) {
+      const detail = await res.text();
+      let message = detail.slice(0, 300);
+      try {
+        const parsed = JSON.parse(detail);
+        message = [parsed.message, ...(parsed.errors ?? []).map((e: any) => e.message ?? e.code ?? JSON.stringify(e))].filter(Boolean).join(': ');
+      } catch {
+        // not JSON
+      }
+      throw new Error(`GitHub ${res.status}: ${message}`);
+    }
+    return res.json();
   }
 
   /**
