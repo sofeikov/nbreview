@@ -97,7 +97,7 @@ function markdownHtml(p: ReturnType<typeof diffCells>[number], same: boolean): {
 }
 
 function outputVM(o: NbOutput, index: number): OutputVM {
-  const vm: OutputVM = { index, kind: o.kind, label: o.label };
+  const vm: OutputVM = { index, hash: o.hash, kind: o.kind, label: o.label };
   if (o.kind === 'image' && o.data) {
     vm.imageSrc = o.mime === 'image/svg+xml'
       ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(o.data)}`

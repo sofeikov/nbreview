@@ -3,6 +3,7 @@
 import DOMPurify from 'dompurify';
 import type { Anchor, CellVM, CommentVM, HostMessage, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
 import { REACTIONS, REACTION_NAMES, type ReactionContent } from '../core/reactions.ts';
+import { diffPixels, pairImages, type ImagePair } from './imageDiff.ts';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: WebviewMessage): void;
@@ -22,6 +23,8 @@ interface UiState {
   threadOpen: Record<string, boolean>;
   /** Leave resolved threads out of the page. */
   hideResolved?: boolean;
+  /** How a changed plot is compared with its old version. */
+  imageMode?: ImageMode;
   scrollY?: number;
 }
 
@@ -769,12 +772,145 @@ function renderOutputs(c: CellVM): HTMLElement | undefined {
     wrap.append(h('div', { class: 'outputs-col' }, ...list.map(o => renderOutput(c, side, o))));
     return wrap;
   }
-  wrap.classList.add(layout() === 'split' ? 'two' : 'stacked');
-  wrap.append(
-    h('div', { class: 'outputs-col before' }, h('div', { class: 'col-label', text: 'Before' }), ...(c.baseOutputs.length ? c.baseOutputs.map(o => renderOutput(c, 'LEFT', o)) : [h('div', { class: 'none', text: 'no output' })])),
-    h('div', { class: 'outputs-col after' }, h('div', { class: 'col-label', text: 'After' }), ...(c.headOutputs.length ? c.headOutputs.map(o => renderOutput(c, 'RIGHT', o)) : [h('div', { class: 'none', text: 'no output' })])),
-  );
+  // Changed plots get a comparison of their own; the other outputs stay before and after.
+  const pairs = pairImages(c.baseOutputs, c.headOutputs);
+  const paired = new Set(pairs.flatMap(p => [p.base, p.head]));
+  const baseRest = c.baseOutputs.filter(o => !paired.has(o));
+  const headRest = c.headOutputs.filter(o => !paired.has(o));
+  if (!pairs.length || baseRest.length || headRest.length) {
+    wrap.append(h('div', { class: `output-cols ${layout() === 'split' ? 'two' : 'stacked'}` },
+      h('div', { class: 'outputs-col before' }, h('div', { class: 'col-label', text: 'Before' }), ...(baseRest.length ? baseRest.map(o => renderOutput(c, 'LEFT', o)) : [h('div', { class: 'none', text: 'no output' })])),
+      h('div', { class: 'outputs-col after' }, h('div', { class: 'col-label', text: 'After' }), ...(headRest.length ? headRest.map(o => renderOutput(c, 'RIGHT', o)) : [h('div', { class: 'none', text: 'no output' })]))));
+  }
+  for (const pair of pairs) {
+    wrap.append(renderImageCompare(c, pair));
+  }
   return wrap;
+}
+
+// Changed plots ---------------------------------------------------------------------------------
+
+type ImageMode = 'side' | 'swipe' | 'onion' | 'diff';
+
+const IMAGE_MODES: [ImageMode, string, string][] = [
+  ['side', 'Side by side', 'The old and the new plot next to each other'],
+  ['swipe', 'Swipe', 'The new plot over the old one; drag across to swipe between them'],
+  ['onion', 'Onion skin', 'Fade from the old plot to the new one'],
+  ['diff', 'Difference', 'The pixels that changed, in magenta, over a faded copy of the new plot'],
+];
+
+/** Swipe and fade positions (0 = old, 100 = new) by pair, kept while the page redraws. */
+const sliders = new Map<string, number>();
+/** Pixel comparisons by pair: worked out once, in the page, from the two images. */
+const pixelDiffs = new Map<string, { url: string; percent: number; box?: string; note?: string } | { error: string } | 'pending'>();
+
+function renderImageCompare(c: CellVM, { base, head }: ImagePair): HTMLElement {
+  const key = `${base.hash}:${head.hash}`;
+  const mode = ui.imageMode ?? 'side';
+  const ends = (side: Side, o: OutputVM) => {
+    const cellId = (side === 'LEFT' ? c.baseId : c.headId)!;
+    return h('span', { class: `compare-end ${side === 'LEFT' ? 'before' : 'after'}` },
+      h('span', { class: 'col-label', text: side === 'LEFT' ? 'Before' : 'After' }),
+      h('span', { class: 'output-label', text: o.label }),
+      commentable(side) && button(icon('comment'), () => openComposer({ side, cellId, kind: 'output', outputIndex: o.index }), {
+        class: 'icon-btn',
+        title: `Comment on the ${side === 'LEFT' ? 'old' : 'new'} plot`,
+      }));
+  };
+  const modes = h('div', { class: 'segmented small' }, ...IMAGE_MODES.map(([m, label, title]) =>
+    button(label, () => { ui.imageMode = m; persist(); render(); }, { class: mode === m ? 'on' : '', title, 'aria-pressed': mode === m ? 'true' : 'false' })));
+  const pos = sliders.get(key) ?? 50;
+  const slide = (apply: (v: number) => void) => (e: Event) => {
+    const v = Number((e.target as HTMLInputElement).value);
+    sliders.set(key, v);
+    apply(v);
+  };
+  let body: HTMLElement;
+  if (mode === 'swipe') {
+    const before = h('img', { class: 'before', src: base.imageSrc, alt: base.label, style: `clip-path: inset(0 ${100 - pos}% 0 0)` });
+    const handle = h('div', { class: 'swipe-handle', style: `left: ${pos}%` });
+    body = h('div', { class: 'compare-stage swipe' },
+      h('img', { class: 'after', src: head.imageSrc, alt: head.label }),
+      before,
+      handle,
+      h('input', {
+        type: 'range', min: 0, max: 100, value: pos, class: 'swipe-range', 'aria-label': 'Swipe between the old plot (left) and the new one (right)',
+        oninput: slide(v => { before.style.clipPath = `inset(0 ${100 - v}% 0 0)`; handle.style.left = `${v}%`; }),
+      }));
+  } else if (mode === 'onion') {
+    const before = h('img', { class: 'before', src: base.imageSrc, alt: base.label, style: `opacity: ${1 - pos / 100}` });
+    body = h('div', { class: 'compare-onion' },
+      h('div', { class: 'compare-stage' }, h('img', { class: 'after', src: head.imageSrc, alt: head.label }), before),
+      h('label', { class: 'onion-slider' }, 'Before',
+        h('input', { type: 'range', min: 0, max: 100, value: pos, 'aria-label': 'Fade from the old plot to the new one', oninput: slide(v => (before.style.opacity = String(1 - v / 100))) }),
+        'After'));
+  } else if (mode === 'diff') {
+    const d = pixelDiffs.get(key);
+    if (!d) {
+      comparePixels(key, base.imageSrc!, head.imageSrc!);
+    }
+    body = !d || d === 'pending'
+      ? h('div', { class: 'compare-wait', text: 'Comparing pixels…' })
+      : 'error' in d
+        ? h('div', { class: 'none', text: d.error })
+        : h('figure', { class: 'compare-diff' },
+          h('img', { src: d.url, alt: 'Changed pixels' }),
+          h('figcaption', {}, d.percent === 0 ? 'No visible difference' : `${d.percent < 0.1 ? '<0.1' : d.percent.toFixed(1)}% of pixels changed`, d.box ? ` · in ${d.box}` : '', d.note ? ` · ${d.note}` : ''));
+  } else {
+    body = h('div', { class: 'compare-side-by-side' },
+      h('img', { src: base.imageSrc, alt: base.label }),
+      h('img', { src: head.imageSrc, alt: head.label }));
+  }
+  const on = (t: { anchor: Anchor }) => t.anchor.kind === 'output'
+    && ((t.anchor.side === 'LEFT' && t.anchor.cellId === c.baseId && t.anchor.outputIndex === base.index)
+      || (t.anchor.side === 'RIGHT' && t.anchor.cellId === c.headId && t.anchor.outputIndex === head.index));
+  return h('div', { class: `image-compare ${mode}` },
+    h('div', { class: 'compare-head' }, ends('LEFT', base), modes, ends('RIGHT', head)),
+    h('div', { class: 'compare-body' }, body),
+    ...shown.filter(on).map(renderThread),
+    ...[...composers.values()].filter(on).map(renderComposer));
+}
+
+/** Draws both plots at the new one's size and marks the pixels that differ, then redraws the page. */
+function comparePixels(key: string, beforeSrc: string, afterSrc: string): void {
+  pixelDiffs.set(key, 'pending');
+  const load = (src: string) => new Promise<HTMLImageElement>((ok, fail) => {
+    const img = new Image();
+    img.onload = () => ok(img);
+    img.onerror = () => fail(new Error('could not load the image'));
+    img.src = src;
+  });
+  Promise.all([load(beforeSrc), load(afterSrc)]).then(([before, after]) => {
+    const w = after.naturalWidth || 300;
+    const hgt = after.naturalHeight || 150;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = hgt;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    const pixelsOf = (img: HTMLImageElement) => {
+      ctx.clearRect(0, 0, w, hgt);
+      ctx.drawImage(img, 0, 0, w, hgt);
+      return ctx.getImageData(0, 0, w, hgt).data;
+    };
+    const a = pixelsOf(before);
+    const b = pixelsOf(after);
+    const diff = diffPixels(a, b, w, hgt);
+    ctx.putImageData(new ImageData(diff.pixels, w, hgt), 0, 0);
+    if (diff.box) {
+      ctx.strokeStyle = 'rgba(255, 0, 170, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(diff.box.x - 3, diff.box.y - 3, diff.box.w + 6, diff.box.h + 6);
+    }
+    const sameSize = before.naturalWidth === after.naturalWidth && before.naturalHeight === after.naturalHeight;
+    pixelDiffs.set(key, {
+      url: canvas.toDataURL('image/png'),
+      percent: (diff.changed / (w * hgt)) * 100,
+      ...(diff.box ? { box: `${diff.box.w}×${diff.box.h} px at (${diff.box.x}, ${diff.box.y})` } : {}),
+      ...(sameSize ? {} : { note: `the old plot was ${before.naturalWidth}×${before.naturalHeight}, stretched to ${w}×${hgt}` }),
+    });
+  }).catch((e: unknown) => {
+    pixelDiffs.set(key, { error: `Can't compare these images: ${e instanceof Error ? e.message : String(e)}` });
+  }).finally(() => render());
 }
 
 function renderOutput(c: CellVM, side: Side, o: OutputVM): HTMLElement {

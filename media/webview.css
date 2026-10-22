@@ -329,8 +329,8 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 /* --- Outputs ------------------------------------------------------------------------------- */
 
 .outputs { border-top: 1px solid var(--border); }
-.outputs.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.outputs.two .outputs-col + .outputs-col { border-left: 1px solid var(--border); }
+.outputs.two, .output-cols.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.outputs.two .outputs-col + .outputs-col, .output-cols.two .outputs-col + .outputs-col { border-left: 1px solid var(--border); }
 .outputs-col { padding: 4px 12px 10px; min-width: 0; }
 .outputs-col.before .col-label { color: var(--del-mark); }
 .outputs-col.after .col-label { color: var(--add-mark); }
@@ -342,6 +342,32 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .output-body pre.error { color: var(--vscode-errorForeground); }
 .html-output table { border-collapse: collapse; font-size: 12px; }
 .html-output th, .html-output td { border: 1px solid var(--border); padding: 2px 8px; text-align: right; }
+/* A changed plot: side by side, swipe, onion skin or the changed pixels. */
+.image-compare { padding: 6px 12px 10px; }
+.output-cols + .image-compare, .image-compare + .image-compare { border-top: 1px solid var(--border); }
+.compare-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; font-size: 11px; color: var(--muted); font-family: var(--code-font); }
+.compare-head .segmented { font-family: var(--vscode-font-family); }
+.compare-end { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.compare-end .output-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-end.before .col-label { color: var(--del-mark); }
+.compare-end.after .col-label { color: var(--add-mark); }
+.compare-end .col-label { font-family: var(--vscode-font-family); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600; }
+.compare-body img { background: #fff; border-radius: 3px; }
+.compare-side-by-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.compare-side-by-side img { max-width: 100%; }
+.compare-stage { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+.compare-stage img.after { display: block; max-width: 100%; }
+.compare-stage img.before { position: absolute; inset: 0; width: 100%; height: 100%; }
+.swipe-handle { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; }
+.swipe-handle::after { content: ''; position: absolute; top: 50%; left: -6px; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px #fff; }
+.swipe-range { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; }
+.onion-slider { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.onion-slider input { flex: 0 1 300px; }
+.compare-diff { margin: 0; }
+.compare-diff img { max-width: 100%; }
+.compare-diff figcaption { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.compare-wait { color: var(--muted); font-style: italic; font-size: 12px; padding: 8px 0; }
+
 .outputs .none { color: var(--muted); font-style: italic; font-size: 12px; padding: 4px 0; }
 
 /* --- Threads ------------------------------------------------------------------------------- */
@@ -477,8 +503,8 @@ textarea {
 @media (max-width: 720px) {
   .cells { padding: 10px 8px; }
   .toolbar { padding: 8px; }
-  .rendered.two, .outputs.two { grid-template-columns: minmax(0, 1fr); }
-  .rendered.two .md-col + .md-col, .outputs.two .outputs-col + .outputs-col { border-left: 0; border-top: 1px solid var(--border); }
+  .rendered.two, .outputs.two, .output-cols.two, .compare-side-by-side { grid-template-columns: minmax(0, 1fr); }
+  .rendered.two .md-col + .md-col, .outputs.two .outputs-col + .outputs-col, .output-cols.two .outputs-col + .outputs-col { border-left: 0; border-top: 1px solid var(--border); }
 }
 
 /* --- Finish your review -------------------------------------------------------------------- */

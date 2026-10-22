@@ -124,7 +124,7 @@ export class VisualReview implements vscode.Disposable {
         const doc = this.state.doc(nbPath, msg.anchor.side);
         const lines = doc && docLinesForAnchor(doc, msg.anchor);
         const plan = lines && this.state.plan({ nbPath, side: msg.anchor.side, startDocLine: lines.start, endDocLine: lines.end, text: '' });
-        this.post(panel, { type: 'plan', requestId: msg.requestId, describe: plan ? `Will post as a ${plan.describe}` : '' });
+        this.post(panel, { type: 'plan', requestId: msg.requestId, describe: plan ? `Will post as ${/^[aeiou]/.test(plan.describe) ? 'an' : 'a'} ${plan.describe}` : '' });
         return;
       }
       case 'addComment': {

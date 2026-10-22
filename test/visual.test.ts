@@ -8,6 +8,7 @@ import { anchorForDocLines, buildReviewDoc, docLineForSource, docLinesForAnchor 
 import { parsePatch } from '../src/core/patch.ts';
 import { highlightLines, renderMarkdownCell } from '../src/render.ts';
 import { buildThreads, buildViewModel } from '../src/viewModel.ts';
+import { diffPixels, pairImages } from '../src/webview/imageDiff.ts';
 import type { NotebookEntry } from '../src/session.ts';
 
 const fx = (name: string) => readFileSync(join(process.cwd(), 'test', 'fixtures', name), 'utf8');
@@ -266,4 +267,34 @@ test('hiding noise folds cells whose only change is outputs or whitespace, and c
   const quiet = buildViewModel(e2, pr, undefined, { hideNoise: true });
   assert.equal(quiet.cells.find(c => c.key === 'loss-def')!.noiseHidden, 'whitespace');
   assert.deepEqual([quiet.stats.additions, quiet.stats.deletions], [0, 0]);
+});
+
+test('changed plots are paired in order; unchanged ones are not compared', () => {
+  const img = (index: number, hash: string) => ({ index, hash, kind: 'image' as const, label: `image/png #${hash}`, imageSrc: `data:image/png;base64,${hash}` });
+  const text = (index: number, hash: string) => ({ index, hash, kind: 'stream' as const, label: 'stream stdout', text: hash });
+  const pairs = pairImages([text(0, 't1'), img(1, 'a'), img(2, 'b')], [text(0, 't2'), img(1, 'a'), img(2, 'c'), img(3, 'd')]);
+  assert.deepEqual(pairs.map(p => [p.base.hash, p.head.hash]), [['b', 'c']]);
+  // A plot that was added has nothing to be compared with. Outputs carry the hash the page pairs by.
+  const e = entry(fx('small.base.ipynb'), fx('small.head.ipynb'), fx('small.patch'));
+  const demo = buildViewModel(e, { number: 1, title: 't', url: 'u' }).cells.find(c => c.key === 'demo')!;
+  assert.deepEqual(pairImages(demo.baseOutputs, demo.headOutputs), []);
+  assert.match(demo.headOutputs[1].hash, /^[0-9a-f]+$/);
+});
+
+test('pixel comparison marks what changed and boxes it, and ignores tiny differences', () => {
+  const w = 4;
+  const h = 3;
+  const white = () => new Uint8ClampedArray(w * h * 4).fill(255);
+  const before = white();
+  const after = white();
+  const paint = (img: Uint8ClampedArray, x: number, y: number, rgb: number[]) => img.set([...rgb, 255], (y * w + x) * 4);
+  paint(after, 1, 1, [0, 0, 255]);
+  paint(after, 2, 2, [0, 0, 255]);
+  paint(after, 3, 0, [250, 250, 250]); // re-rendering noise
+  const d = diffPixels(before, after, w, h);
+  assert.equal(d.changed, 2);
+  assert.deepEqual(d.box, { x: 1, y: 1, w: 2, h: 2 });
+  assert.deepEqual([...d.pixels.slice((1 * w + 1) * 4, (1 * w + 1) * 4 + 4)], [255, 0, 170, 255], 'changed pixels are magenta');
+  assert.deepEqual([...d.pixels.slice(0, 4)], [255, 255, 255, 255], 'unchanged white stays white');
+  assert.equal(diffPixels(before, before, w, h).box, undefined);
 });

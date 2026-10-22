@@ -19,6 +19,7 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 
 - **Pull requests to review, at a glance.** The sidebar lists the pull requests waiting for your review, the open pull requests that change notebooks, your own, and the one for the branch you're on, each with the number of notebooks it changes. Click one to start reviewing. No links to copy.
 - **Rendered notebook diff.** Markdown is rendered with LaTeX maths, with the changed words marked inside each paragraph, heading, list item and table cell, and added or removed paragraphs shown as a whole. Code is syntax-highlighted with the changed lines marked, and changed outputs (plots, pandas tables, text, errors) are shown before and after. Unchanged cells and unchanged lines fold away, so you only read what changed.
+- **Compare changed plots.** A plot that changed can be compared side by side, with a **Swipe** divider you drag across, as an **Onion skin** fading from old to new, or as the **Difference**: the changed pixels in magenta with a box around them and the share of the plot that changed. Your choice is remembered, and both plots keep their comment buttons.
 - **Hide the noise.** Execution counts and notebook metadata never show as changes. **Hide noise** in the review page also folds away cells whose only change is their outputs (a notebook that was run again) or whitespace (code that was reformatted), and says how many it hid. Counts are of source lines, not the JSON lines GitHub counts, and a notebook that was only run again is marked *outputs only*.
 - **Comment on any cell.** Hover a line of code or a Markdown paragraph and click `+`, or drag the `+` over several lines. Every cell and output also has a comment button, so you can comment on a whole cell or on a plot.
 - **Comments land on GitHub.** A comment becomes a line comment on the notebook in the pull request when GitHub allows it, otherwise a file comment. Every comment quotes the cell it is about, so it reads well on github.com too.
@@ -137,6 +138,10 @@ The core does not use the VS Code API and is in `src/core/`:
 - Images with relative paths in Markdown cells do not show.
 
 ## Changelog
+
+### 0.11.0
+- **Compare changed plots**: Side by side, Swipe, Onion skin and Difference views for plots that changed, in the review page. Difference marks the changed pixels and says how much of the plot changed, ignoring faint re-rendering differences.
+- Fix: the comment box said "a output comment".
 
 ### 0.10.0
 - **Hide noise**: a switch in the review page folds away cells whose only change is their outputs (the notebook was run again) or whitespace in their source (the code was reformatted; compared like `git diff -w`, blank lines included), and shows how many there are. Setting `nbreview.hideNoise` gives the default.

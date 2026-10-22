@@ -59,6 +59,8 @@ export interface CellVM {
 
 export interface OutputVM {
   index: number;
+  /** Content hash: the same output in both versions has the same one. */
+  hash: string;
   kind: 'stream' | 'text' | 'image' | 'error' | 'other';
   label: string;
   text?: string;
