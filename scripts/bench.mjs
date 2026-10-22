@@ -21,7 +21,7 @@ const flag = (name, fallback) => {
   return value;
 };
 const before = flag('--before', 'HEAD');
-const runs = Number(flag('--runs', '20'));
+const runs = Number(flag('--runs', '30'));
 const [task, ...taskArgs] = argv;
 if (!task) {
   console.error('usage: npm run bench -- [--before REF] [--runs N] viewModel|activate|openPr ARGS…');
