@@ -2,7 +2,7 @@
 
 Review the Jupyter notebooks (`.ipynb`) in a GitHub pull request inside VS Code, cell by cell, and leave review comments on code, Markdown and outputs that appear on GitHub as a normal pull request review.
 
-![Visual review of a Jupyter notebook pull request: rendered Markdown with LaTeX, a code diff and a GitHub review thread](images/overview.png)
+![Visual review of a Jupyter notebook pull request: rendered Markdown with LaTeX and changed words marked, a code diff, and a GitHub review thread with reactions and Resolve conversation](images/overview.png)
 
 ## Why
 
@@ -36,7 +36,7 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 
 ![Commenting on a line of a notebook code cell; the box shows where the comment will land on GitHub](images/comment.png)
 
-![Changed plot output before and after, with a pending review comment on the new plot](images/outputs.png)
+![A changed plot in the Swipe view: the old curve left of the divider and the new one right, with a pending review comment on the new plot](images/outputs.png)
 
 ![Finish your review: a summary, Comment, Approve or Request changes](images/submit.png)
 

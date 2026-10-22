@@ -29,9 +29,18 @@ const placed = [
       id: 'thread-1',
       isResolved: false,
       isOutdated: false,
+      viewerCanResolve: true,
+      viewerCanUnresolve: false,
       comments: [
-        { author: 'maria', body: 'Why `C=0.5`? Was it tuned on the validation folds?', createdAt: hoursAgo(5), url: 'https://github.com/', pending: false },
-        { author: 'tom', body: 'Yes, a grid search over 0.1–2.0. The sweep is in `03_tuning.ipynb`.', createdAt: hoursAgo(2), url: 'https://github.com/', pending: false },
+        {
+          id: 'c-1', author: 'maria', body: 'Why `C=0.5`? Was it tuned on the validation folds?', createdAt: hoursAgo(5), url: 'https://github.com/', pending: false,
+          viewerCanUpdate: false, viewerCanDelete: false, reactions: [],
+        },
+        {
+          id: 'c-2', author: 'tom', body: 'Yes, a grid search over 0.1–2.0. The sweep is in `03_tuning.ipynb`.', createdAt: hoursAgo(2), url: 'https://github.com/', pending: false,
+          viewerCanUpdate: false, viewerCanDelete: false,
+          reactions: [{ content: 'THUMBS_UP', count: 2, viewerHasReacted: true }, { content: 'HOORAY', count: 1, viewerHasReacted: false }],
+        },
       ],
     },
   },
@@ -44,11 +53,16 @@ const placed = [
       id: 'thread-2',
       isResolved: false,
       isOutdated: false,
+      viewerCanResolve: false,
+      viewerCanUnresolve: false,
       subjectType: 'LINE',
       path,
       line: 48,
       comments: [
-        { id: 'pending-1', author: 'you', body: 'The curve is **much closer to the diagonal** now. Can we add the Brier score next to it?', createdAt: hoursAgo(0.1), url: '', pending: true },
+        {
+          id: 'pending-1', author: 'you', body: 'The curve is **much closer to the diagonal** now. Can we add the Brier score next to it?', createdAt: hoursAgo(0.1), url: '', pending: true,
+          viewerCanUpdate: true, viewerCanDelete: true, reactions: [],
+        },
       ],
     },
   },
@@ -108,7 +122,7 @@ window.acquireVsCodeApi = () => ({
 deliver({ type: 'model', model: window.__MODEL__ });
 deliver({ type: 'threads', threads: window.__THREADS__ });
 deliver({ type: 'state', state: { viewed: false, pending: 1, pendingReview: true } });
-// Scenes for the README screenshots: index.html#outputs, #comment, #submit.
+// Scenes for the README screenshots: index.html#outputs (a changed plot), #comment, #submit.
 const scene = location.hash.slice(1);
 // Headless Firefox captures from the top of the page, so a scene hides the cells above its subject.
 const scrollTo = el => {
@@ -118,6 +132,9 @@ const scrollTo = el => {
   }
 };
 if (scene === 'outputs') {
+  // The changed plot, in the Swipe view: the old curve left of the divider, the new one right.
+  const swipe = [...document.querySelectorAll('section.cell[data-key="fit"] .image-compare .segmented button')].find(b => b.textContent === 'Swipe');
+  swipe.click();
   scrollTo(document.querySelector('section.cell[data-key="fit"] .outputs'));
 }
 if (scene === 'comment') {
