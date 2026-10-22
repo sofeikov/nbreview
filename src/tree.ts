@@ -16,9 +16,32 @@ type Group = 'notebooks' | 'other';
 
 export type FileLayout = 'tree' | 'list';
 
-export function fileLayout(): FileLayout {
-  return vscode.workspace.getConfiguration('nbreview').get<FileLayout>('fileLayout') === 'list' ? 'list' : 'tree';
+// As in Source Control, the title bar buttons remember a choice of their own instead of writing
+// the setting, which only gives the default. Writing a setting fails when VS Code hasn't
+// registered it yet, as after an update without a window reload.
+let memento: vscode.Memento | undefined;
+const layoutChanged = new vscode.EventEmitter<void>();
+
+export function initFileLayout(state: vscode.Memento): vscode.Disposable {
+  memento = state;
+  return vscode.Disposable.from(
+    layoutChanged,
+    // Changing the setting takes over from the last button press.
+    vscode.workspace.onDidChangeConfiguration(e => e.affectsConfiguration('nbreview.fileLayout') && void setFileLayout(undefined)),
+  );
 }
+
+export function fileLayout(): FileLayout {
+  const chosen = memento?.get<FileLayout>('fileLayout') ?? vscode.workspace.getConfiguration('nbreview').get<FileLayout>('fileLayout');
+  return chosen === 'list' ? 'list' : 'tree';
+}
+
+export async function setFileLayout(layout: FileLayout | undefined): Promise<void> {
+  await memento?.update('fileLayout', layout);
+  layoutChanged.fire();
+}
+
+export const onDidChangeFileLayout = layoutChanged.event;
 
 export class FilesTree implements vscode.TreeDataProvider<Node> {
   private readonly changed = new vscode.EventEmitter<void>();
@@ -26,7 +49,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
 
   constructor(private readonly state: ReviewState) {
     state.onDidChange(() => this.changed.fire());
-    vscode.workspace.onDidChangeConfiguration(e => e.affectsConfiguration('nbreview.fileLayout') && this.changed.fire());
+    onDidChangeFileLayout(() => this.changed.fire());
   }
 
   getChildren(node?: Node): Node[] {

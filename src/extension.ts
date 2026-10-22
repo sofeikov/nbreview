@@ -5,7 +5,7 @@ import { ReviewSession } from './session.ts';
 import { ReviewState } from './state.ts';
 import { TextReview } from './textReview.ts';
 import { VisualReview } from './visualReview.ts';
-import { FilesTree, fileLayout, nodePath, reviewOrder, type FileLayout, type Node } from './tree.ts';
+import { FilesTree, fileLayout, initFileLayout, nodePath, onDidChangeFileLayout, reviewOrder, setFileLayout, type Node } from './tree.ts';
 import { PrBadges, PrList, pickPullRequest, type RepoRef } from './prList.ts';
 
 let ctx: vscode.ExtensionContext;
@@ -23,6 +23,7 @@ export function activate(context: vscode.ExtensionContext): void {
   state = new ReviewState(context);
   text = new TextReview(state, context);
   visual = new VisualReview(state, text, context);
+  context.subscriptions.push(initFileLayout(context.globalState));
   treeView = vscode.window.createTreeView('nbreview.files', {
     treeDataProvider: new FilesTree(state),
     showCollapseAll: true,
@@ -63,7 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
     state.onDidChange(updateStatus),
     vscode.commands.registerCommand('nbreview.viewAsTree', () => setFileLayout('tree')),
     vscode.commands.registerCommand('nbreview.viewAsList', () => setFileLayout('list')),
-    vscode.workspace.onDidChangeConfiguration(e => e.affectsConfiguration('nbreview.fileLayout') && updateLayoutContext()),
+    onDidChangeFileLayout(updateLayoutContext),
     // "Add Single Comment" is hidden while a review is pending, as on github.com.
     state.onDidChange(() => void vscode.commands.executeCommand('setContext', 'nbreview.pendingReview', state.hasPendingReview())),
     treeView.onDidChangeCheckboxState(e => {
@@ -194,10 +195,6 @@ function reviewPath(arg?: vscode.Uri | string): string | undefined {
 function updateActiveContext(): void {
   const path = reviewPath();
   void vscode.commands.executeCommand('setContext', 'nbreview.activeViewed', !!path && state.isViewed(path));
-}
-
-function setFileLayout(layout: FileLayout): Thenable<void> {
-  return vscode.workspace.getConfiguration('nbreview').update('fileLayout', layout, vscode.ConfigurationTarget.Global);
 }
 
 function updateLayoutContext(): void {

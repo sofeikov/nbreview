@@ -89,7 +89,7 @@ Sign-in uses the GitHub CLI (`gh auth login`) when it is installed, otherwise VS
 | Setting | Default | Description |
 |---|---|---|
 | `nbreview.defaultView` | `visual` | What opens when you click a notebook: `visual` (rendered cells) or `text` (line-by-line text diff). |
-| `nbreview.fileLayout` | `tree` | How the Review panel shows the changed files: `tree` (grouped into folders) or `list` (flat). **Next file** follows the same order. |
+| `nbreview.fileLayout` | `tree` | How the Review panel shows the changed files by default: `tree` (grouped into folders) or `list` (flat). The title bar buttons switch it and remember the choice, as in Source Control. **Next file** follows the order shown. |
 | `nbreview.useGhCli` | `true` | Use the GitHub CLI's login when it is available, before asking for VS Code's GitHub sign-in. |
 | `nbreview.markGeneratedFilesViewed` | `false` | In nbdev repositories, mark the generated modules viewed together with their notebook. |
 
@@ -127,6 +127,9 @@ The core does not use the VS Code API and is in `src/core/`:
 - Images with relative paths in Markdown cells do not show.
 
 ## Changelog
+
+### 0.8.2
+- Fix: **View as List** / **View as Tree** failed with "nbreview.fileLayout is not a registered configuration" after updating the extension without reloading the window. The buttons now remember the choice themselves instead of writing the setting, which gives the default.
 
 ### 0.8.1
 - The Review panel groups the changed files into folders, like the Explorer, with single-folder chains merged (`src/pkg/models`). **View as List** in its title bar switches to the flat list (setting `nbreview.fileLayout`). **Next file** follows the order shown.
