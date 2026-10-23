@@ -96,4 +96,4 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
   3. Detach the worktree (`git switch --detach origin/main`) and delete the branch.
   4. Rebuild in `~/my/nbreview`: `npm ci`, `npm run typecheck`, `npm test`, `npm run smoke` and `npm run package`. The `.vsix` it leaves is the build.
 - Don't install the extension into the maintainer's VS Code unless asked: the maintainer installs it from the Marketplace.
-- Don't touch global git config, or history outside this repository.
+- Don't touch the global git config, or any history outside this repository.

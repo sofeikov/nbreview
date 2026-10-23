@@ -62,6 +62,7 @@ To build it from the source:
 
 ```bash
 npm install
+npm test
 npm run package
 code --install-extension nbreview.vsix
 ```
