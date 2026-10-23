@@ -3,7 +3,7 @@
 // paragraph that changed shows the changed words marked, with its formatting kept, instead of
 // the whole paragraph being highlighted.
 import type MarkdownIt from 'markdown-it';
-import { cellMarkdown } from './render.ts';
+import { cellMarkdown, escapeHtml, highlightLines } from './render.ts';
 import { diffLines } from './core/cellDiff.ts';
 
 type Token = ReturnType<MarkdownIt['parse']>[number];
@@ -135,6 +135,15 @@ function mark(tokens: Token[], leaf: Leaf, cls: string): void {
 function diffPair(a: Token[], x: Leaf, b: Token[], y: Leaf): void {
   const ta = a[x.index];
   const tb = b[y.index];
+  if (isCode(ta) && isCode(tb)) {
+    // A long code block (a file tree, a command list) often changes in one line: mark that line.
+    const linesA = codeLines(ta);
+    const linesB = codeLines(tb);
+    const ops = diffLines(linesA, linesB);
+    replaceCode(ta, linesA, new Set(ops.flatMap(o => (o.op === 'del' ? [o.base] : []))), 'line-del');
+    replaceCode(tb, linesB, new Set(ops.flatMap(o => (o.op === 'add' ? [o.head] : []))), 'line-ins');
+    return;
+  }
   if (ta.type !== 'inline' || tb.type !== 'inline') {
     // Code, maths and raw HTML change as a whole.
     mark(a, x, 'md-changed');
@@ -233,6 +242,28 @@ function renderAtoms(atoms: Atom[], marked: Set<number>, cls: string): string {
     html += `</${open.pop()!.tag}>`;
   }
   return html;
+}
+
+function isCode(t: Token): boolean {
+  return t.type === 'fence' || t.type === 'code_block';
+}
+
+function codeLines(t: Token): string[] {
+  return t.content.replace(/\n$/, '').split('\n');
+}
+
+/**
+ * Renders a code block as highlighted lines with the given ones marked. The block keeps its
+ * source lines (`data-src`) so comments still anchor to it, and `md-changed` for the margin bar.
+ */
+function replaceCode(t: Token, lines: string[], marked: Set<number>, cls: string): void {
+  const language = t.info.trim().split(/\s+/)[0] || 'plaintext';
+  const html = highlightLines(lines, language)
+    .map((line, i) => `<span class="code-line${marked.has(i) ? ` ${cls}` : ''}">${line || '&#8203;'}</span>`)
+    .join('');
+  const src = t.attrGet('data-src') ?? (t.map ? `${t.map[0]}-${Math.max(t.map[0], t.map[1] - 1)}` : '');
+  t.type = 'html_block';
+  t.content = `<pre class="md-code-diff md-changed" data-src="${escapeHtml(src)}"><code class="hljs">${html}</code></pre>\n`;
 }
 
 /** Makes an inline token render as the given HTML. */

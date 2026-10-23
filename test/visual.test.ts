@@ -356,3 +356,14 @@ test('threads on a file sit on their lines; file comments on the whole file', ()
   const plan = planFileComment({ path: 'a.py', side: 'RIGHT', startLine: 1, endLine: 1, commentable: { left: new Set(), right: new Set([1]) }, text: 'x', wholeFile: true });
   assert.equal(plan.subjectType, 'FILE');
 });
+
+test('a changed code block in Markdown marks the changed lines, not the whole block', () => {
+  const tree = ['# Layout', '', '```', 'nbs/', '  a.ipynb    Loads data', '  c.ipynb    Trains', '```'];
+  const grown = ['# Layout', '', '```', 'nbs/', '  a.ipynb    Loads data', '  b.ipynb    The pitch grid', '  c.ipynb    Trains', '```'];
+  const { base, head } = renderMarkdownDiff(tree, grown);
+  const marked = (html: string, cls: string) => [...html.matchAll(new RegExp(`class="code-line ${cls}">([^<]*)`, 'g'))].map(m => m[1]);
+  assert.deepEqual(marked(head, 'line-ins'), ['  b.ipynb    The pitch grid']);
+  assert.deepEqual(marked(base, 'line-del'), []);
+  assert.match(head, /<pre class="md-code-diff md-changed" data-src="2-7">/, 'the block keeps its source lines for comments');
+  assert.equal((head.match(/class="code-line/g) ?? []).length, 4);
+});

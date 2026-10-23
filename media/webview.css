@@ -109,6 +109,17 @@ button.danger.armed { border-color: var(--vscode-errorForeground); }
 
 .cells { padding: 16px 20px; display: flex; flex-direction: column; gap: var(--gap); }
 
+/* The change map down the right edge (drawn only when the page scrolls). */
+.change-map { position: fixed; right: 0; bottom: 0; width: 12px; z-index: 9; cursor: pointer; display: none; border-left: 1px solid var(--border); background: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--vscode-foreground)); }
+body.with-map .change-map { display: block; }
+body.with-map .cells { padding-right: 32px; }
+.map-view { position: absolute; left: 0; right: 0; background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); pointer-events: none; }
+.map-mark { position: absolute; pointer-events: none; }
+.map-mark.del { left: 1px; width: 4px; background: var(--del-mark); }
+.map-mark.add { left: 6px; width: 4px; background: var(--add-mark); }
+.map-mark.out { left: 3px; width: 5px; background: var(--mod-mark); opacity: 0.8; }
+.map-mark.note { left: 0; right: 0; height: 3px !important; background: var(--vscode-charts-yellow, #d29922); }
+
 .cell {
   border: 1px solid var(--border);
   border-left: 3px solid var(--border);
@@ -290,6 +301,9 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 /* Formulas and code blocks change as a whole: tint them on each side. */
 .md-col .changed-del div.md-changed, .md-col div.md-changed.changed-del, .md-col .changed-del pre:has(code.md-changed) { background: color-mix(in srgb, var(--del-line) 55%, transparent); border-radius: 3px; }
 .md-col .changed-add div.md-changed, .md-col div.md-changed.changed-add, .md-col .changed-add pre:has(code.md-changed) { background: color-mix(in srgb, var(--add-line) 55%, transparent); border-radius: 3px; }
+.md-code-diff .code-line { display: block; min-height: 1.2em; }
+.md-code-diff .line-ins { background: color-mix(in srgb, var(--add-mark) 30%, transparent); }
+.md-code-diff .line-del { background: color-mix(in srgb, var(--del-mark) 30%, transparent); }
 .md-col .md-added { background: color-mix(in srgb, var(--add-line) 60%, transparent); border-radius: 3px; }
 .md-col .md-removed { background: color-mix(in srgb, var(--del-line) 60%, transparent); border-radius: 3px; }
 .md-block.changed-add > .add-comment, .md-block.changed-del > .add-comment { left: -13px; }

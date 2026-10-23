@@ -153,6 +153,7 @@ function render(): void {
 
   shown = ui.hideResolved ? threads.filter(t => !t.resolved) : threads;
   app.replaceChildren(renderToolbar(model), renderCells(model), h('div', { class: 'toast', id: 'toast' }));
+  scheduleChangeMap();
   if (!restoredScroll) {
     restoredScroll = true;
     window.scrollTo(0, ui.scrollY ?? 0);
@@ -1229,6 +1230,91 @@ function openComposer(anchor: Anchor): void {
 
 const planRequests = new Map<number, string>();
 
+
+// --- Change map --------------------------------------------------------------------------------
+// A strip down the right edge, like the marks in VS Code's scrollbar, showing where on the page the
+// changes and comments are; a click scrolls there. A one-line change in a long README or a long
+// notebook is easy to miss otherwise.
+
+const changeMap = h('div', { class: 'change-map', title: 'Where the changes are: removed (red), added (green), outputs (blue), comments (yellow). Click to go there.' });
+const mapView = h('div', { class: 'map-view' });
+document.body.append(changeMap);
+
+/** What goes in each lane of the map. Precise marks (changed words, lines) win over their whole block. */
+const MAP_LANES: [lane: string, selector: string][] = [
+  ['del', '.row.del, .row.mod, .x-del, .line-del, .md-removed, .side-LEFT div.md-changed, section.cell.removed > .rendered'],
+  ['add', '.row.add, .row.mod, .x-ins, .line-ins, .md-added, .side-RIGHT div.md-changed, section.cell.added > .rendered'],
+  ['out', '.image-compare, .output-cols'],
+  ['note', '.thread, .composer'],
+];
+
+let mapQueued = false;
+
+function scheduleChangeMap(): void {
+  if (!mapQueued) {
+    mapQueued = true;
+    requestAnimationFrame(() => {
+      mapQueued = false;
+      drawChangeMap();
+    });
+  }
+}
+
+function drawChangeMap(): void {
+  const top = app.querySelector<HTMLElement>('.toolbar')?.offsetHeight ?? 0;
+  const pageHeight = document.documentElement.scrollHeight;
+  changeMap.style.top = `${top}px`;
+  const scrolls = pageHeight > window.innerHeight + 8;
+  document.body.classList.toggle('with-map', scrolls);
+  const height = changeMap.clientHeight;
+  if (!scrolls || !height) {
+    changeMap.replaceChildren();
+    return;
+  }
+  const scale = height / pageHeight;
+  const marks: HTMLElement[] = [];
+  for (const [lane, selector] of MAP_LANES) {
+    // Page positions of the marks, joined when they would touch on the map.
+    const spans = [...app.querySelectorAll<HTMLElement>(selector)]
+      .filter(el => !el.closest('.toolbar'))
+      .map(el => {
+        const r = el.getBoundingClientRect();
+        return [r.top + window.scrollY, r.bottom + window.scrollY];
+      })
+      .filter(([a, b]) => b > a)
+      .sort((x, y) => x[0] - y[0]);
+    const joined: number[][] = [];
+    for (const [a, b] of spans) {
+      const last = joined[joined.length - 1];
+      if (last && a - last[1] < 3 / scale) {
+        last[1] = Math.max(last[1], b);
+      } else {
+        joined.push([a, b]);
+      }
+    }
+    for (const [a, b] of joined) {
+      marks.push(h('div', { class: `map-mark ${lane}`, style: `top: ${a * scale}px; height: ${Math.max(3, (b - a) * scale)}px` }));
+    }
+  }
+  changeMap.replaceChildren(mapView, ...marks);
+  moveMapView();
+}
+
+function moveMapView(): void {
+  const scale = changeMap.clientHeight / document.documentElement.scrollHeight;
+  mapView.style.top = `${window.scrollY * scale}px`;
+  mapView.style.height = `${window.innerHeight * scale}px`;
+}
+
+changeMap.addEventListener('click', e => {
+  const scale = changeMap.clientHeight / document.documentElement.scrollHeight;
+  const y = e.clientY - changeMap.getBoundingClientRect().top;
+  window.scrollTo({ top: y / scale - window.innerHeight / 2, behavior: 'smooth' });
+});
+window.addEventListener('scroll', moveMapView, { passive: true });
+window.addEventListener('resize', scheduleChangeMap);
+// Plots and maths change the page's height after it is drawn.
+new ResizeObserver(scheduleChangeMap).observe(app);
 
 // --- Navigation --------------------------------------------------------------------------------
 
