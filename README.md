@@ -150,6 +150,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.13.1
+- README: a link to the Marketplace listing, and the two ways to open a pull request (the Command Palette, or a clone of the repository) at the top.
+
 ### 0.13.0
 - **Change map**: a strip down the right edge of the review page shows where the removed and added lines and words, changed outputs and comment threads are, with the part of the page in view; a click scrolls there.
 - A changed code block in Markdown (a file tree in a README, a list of commands) has its changed lines marked instead of the whole block.
