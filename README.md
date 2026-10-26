@@ -2,6 +2,8 @@
 
 Review the Jupyter notebooks (`.ipynb`) in a GitHub pull request inside VS Code, cell by cell, and leave review comments on code, Markdown and outputs that appear on GitHub as a normal pull request review.
 
+**[Install from the Visual Studio Code Marketplace](https://marketplace.visualstudio.com/items?itemName=KonstantinSofeikov.nbreview)** · [Source on GitHub](https://github.com/sofeikov/nbreview)
+
 ![Visual review of a Jupyter notebook pull request: rendered Markdown with LaTeX and changed words marked, a code diff, and a GitHub review thread with reactions and Resolve conversation](images/overview.png)
 
 ## Why
@@ -53,7 +55,7 @@ In [nbdev](https://nbdev.fast.ai) repositories, a comment on a generated `.py` m
 
 ## Install
 
-Install **Notebook Review for GitHub Pull Requests** from the Extensions view, or run:
+Install **[Notebook Review for GitHub Pull Requests](https://marketplace.visualstudio.com/items?itemName=KonstantinSofeikov.nbreview)** from the Visual Studio Code Marketplace (search for "Notebook Review" in the Extensions view), or run:
 
 ```bash
 code --install-extension KonstantinSofeikov.nbreview
