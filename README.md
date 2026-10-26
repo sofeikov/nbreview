@@ -4,6 +4,11 @@ Review the Jupyter notebooks (`.ipynb`) in a GitHub pull request inside VS Code,
 
 **[Install from the Visual Studio Code Marketplace](https://marketplace.visualstudio.com/items?itemName=KonstantinSofeikov.nbreview)** · [Source on GitHub](https://github.com/sofeikov/nbreview)
 
+Two ways to open a pull request:
+
+- **From the Command Palette, in any window.** Press `Ctrl+Shift+P` (`Cmd+Shift+P` on macOS), run **Notebook Review: Open Pull Request…**, and paste a pull request URL or `owner/repo#123`, or pick one from the list.
+- **From your clone of the repository.** Open the repository's folder in VS Code, then the **Notebook Review** view in the activity bar: it lists that repository's pull requests only (yours, the ones waiting for your review, the ones that change notebooks, and the one for your branch). Click one to start reviewing. With no repository open, it lists pull requests from any repository: the ones waiting for your review, the ones involving you that change notebooks, and your own.
+
 ![Visual review of a Jupyter notebook pull request: rendered Markdown with LaTeX and changed words marked, a code diff, and a GitHub review thread with reactions and Resolve conversation](images/overview.png)
 
 ## Why
