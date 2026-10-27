@@ -307,6 +307,11 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .md-col .md-added { background: color-mix(in srgb, var(--add-line) 60%, transparent); border-radius: 3px; }
 .md-col .md-removed { background: color-mix(in srgb, var(--del-line) 60%, transparent); border-radius: 3px; }
 .md-block.changed-add > .add-comment, .md-block.changed-del > .add-comment { left: -13px; }
+/* Inside lists and quotes the button sits in the column's margin, level with the top of its block,
+   so it doesn't cover a bullet or the quote bar. */
+.md-col { position: relative; }
+.md-col :is(li, blockquote) .md-block { position: static; }
+.md-col :is(li, blockquote) .md-block > .add-comment { left: 4px; top: auto; margin-top: 2px; }
 .md-threads > * { margin: 8px 0; }
 
 .markdown h1, .md-col h1 { font-size: 1.6em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }

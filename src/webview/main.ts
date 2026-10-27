@@ -741,27 +741,63 @@ function blockRange(el: HTMLElement): [number, number] | undefined {
   return [Math.min(...ranges.map(r => r[0])), Math.max(...ranges.map(r => r[1]))];
 }
 
+/**
+ * The blocks of a rendered column that each get a comment button. Lists and quotes are looked
+ * into, so every list item and quoted paragraph can be commented on by itself. `item` is the
+ * list item whose own text `el` holds.
+ */
+function commentBlocks(parent: Element): { el: HTMLElement; item?: HTMLElement }[] {
+  const out: { el: HTMLElement; item?: HTMLElement }[] = [];
+  for (const el of [...parent.children]) {
+    if (!(el instanceof HTMLElement) || el.classList.contains('col-label')) {
+      continue;
+    }
+    if (el.matches('ul, ol, blockquote')) {
+      out.push(...commentBlocks(el));
+    } else if (el.tagName === 'LI') {
+      // Items of a loose list hold their text in paragraphs, which are blocks of their own. In a
+      // tight list the item's text is wrapped, so its button, change bar and threads stay beside
+      // the text and not beside its nested list.
+      if (![...el.children].some(x => x.tagName === 'P')) {
+        const nested = [...el.childNodes].findIndex(x => x instanceof HTMLElement && blockRange(x));
+        const own = [...el.childNodes].slice(0, nested < 0 ? undefined : nested);
+        if (own.some(x => x.textContent?.trim())) {
+          const text = h('div', { class: 'li-text' }, ...own);
+          el.prepend(text);
+          out.push({ el: text, item: el });
+        }
+      }
+      out.push(...commentBlocks(el));
+    } else if (blockRange(el)) {
+      out.push({ el });
+    }
+  }
+  return out;
+}
+
 function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string): void {
-  const blocks = [...col.children].filter((el): el is HTMLElement => el instanceof HTMLElement && !el.classList.contains('col-label'));
   const placed = new Set<ThreadVM | Composer>();
   const items = [
     ...shown.filter(t => t.anchor.kind === 'source' && t.anchor.side === side && t.anchor.cellId === cellId),
     ...[...composers.values()].filter(x => x.anchor.kind === 'source' && x.anchor.side === side && x.anchor.cellId === cellId),
   ];
-  for (const block of blocks) {
-    const range = blockRange(block);
+  for (const { el: block, item } of commentBlocks(col)) {
+    // A list item's own lines are its text, without its nested list (see render.ts).
+    const range = item ? item.dataset.src?.split('-').map(Number) as [number, number] | undefined : blockRange(block);
     if (!range) {
       continue;
     }
     block.classList.add('md-block');
-    // The extension marks changed words and paragraphs; a bar in the margin points them out.
-    if (block.matches('.md-changed, .md-added, .md-removed') || block.querySelector('.md-changed, .md-added, .md-removed')) {
+    // The extension marks changed words and paragraphs; a bar in the margin points them out. A
+    // list item is marked itself when its own text changed.
+    const marks = '.md-changed, .md-added, .md-removed';
+    if (item ? item.matches(marks) : block.matches(marks) || block.querySelector(marks)) {
       block.classList.add(side === 'LEFT' ? 'changed-del' : 'changed-add');
     }
     if (commentable(side)) {
       block.prepend(button('+', () => openComposer({ side, cellId, kind: 'source', start: range[0], end: range[1] }), {
         class: 'add-comment block',
-        title: 'Comment on this paragraph',
+        title: item ? 'Comment on this list item' : 'Comment on this paragraph',
         'aria-label': 'Add comment',
       }));
     }

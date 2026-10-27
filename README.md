@@ -29,7 +29,7 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 - **See where the changes are.** A change map down the right edge of the review page marks removed and added lines and words, changed outputs and comment threads, like the marks in VS Code's scrollbar; click one to go there. A one-line change in a long README or a long notebook is easy to find, and a changed code block in Markdown has its changed lines marked, not the whole block.
 - **Compare changed plots.** A plot that changed can be compared side by side, with a **Swipe** divider you drag across, as an **Onion skin** fading from old to new, or as the **Difference**: the changed pixels in magenta with a box around them and the share of the plot that changed. Your choice is remembered, and both plots keep their comment buttons.
 - **Hide the noise.** Execution counts and notebook metadata never show as changes. **Hide noise** in the review page also folds away cells whose only change is their outputs (a notebook that was run again) or whitespace (code that was reformatted), and says how many it hid. Counts are of source lines, not the JSON lines GitHub counts, and a notebook that was only run again is marked *outputs only*.
-- **Comment on any cell.** Hover a line of code or a Markdown paragraph and click `+`, or drag the `+` over several lines. Every cell and output also has a comment button, so you can comment on a whole cell or on a plot.
+- **Comment on any cell.** Hover a line of code, a Markdown paragraph or a list item and click `+`, or drag the `+` over several lines. Every cell and output also has a comment button, so you can comment on a whole cell or on a plot.
 - **Comments land on GitHub.** A comment becomes a line comment on the notebook in the pull request when GitHub allows it, otherwise a file comment. Every comment quotes the cell it is about, so it reads well on github.com too.
 - **Suggested changes.** "Suggest change" proposes new lines that the author can apply with GitHub's *Commit suggestion* button, directly in the notebook.
 - **Reviews saved on GitHub.** "Start a review" adds comments to your pending review on GitHub, the same one github.com uses: private to you until you submit it, kept across restarts and machines, and you can add to it or submit it from VS Code or from github.com. Submit all your comments together as one review: comment, approve or request changes.
@@ -149,6 +149,10 @@ The core does not use the VS Code API and is in `src/core/`:
 - Binary files and files over 2 MB are not shown in the review page; **Open text diff** shows them in VS Code's diff.
 
 ## Changelog
+
+### 0.14.0
+- **Comment on each list item.** In rendered Markdown, every list item (nested items too) and every paragraph in a quote has its own `+`. Before, a list or a quote had one `+` for all of it.
+- A comment on rendered Markdown no longer lands on the blank line after a list: it goes on the last line of the item's own text.
 
 ### 0.13.2
 - Fix: outdated comment threads that are not resolved are no longer folded. Only resolved threads start folded, in the review page and in the text diff. Outdated threads still show the *outdated* label.

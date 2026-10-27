@@ -35,13 +35,25 @@ export const cellMarkdown = cellMd;
 (cellMd as any).use((katex as any).default ?? katex, { throwOnError: false });
 
 // Tag every block with the cell source lines it came from, so a comment on a rendered
-// paragraph can be anchored to those lines.
+// paragraph can be anchored to those lines. A comment lands on the last line of its range, so
+// the range must end on the block's own text: markdown-it counts the blank lines after a list
+// item as part of it, and a list item's lines include its nested list.
 cellMd.core.ruler.push('nbreview_source_lines', state => {
-  for (const token of state.tokens) {
-    if (token.map && token.nesting !== -1 && token.block) {
-      token.attrSet('data-src', `${token.map[0]}-${Math.max(token.map[0], token.map[1] - 1)}`);
+  const lines = state.src.split('\n');
+  state.tokens.forEach((token, i) => {
+    if (!token.map || token.nesting === -1 || !token.block) {
+      return;
     }
-  }
+    let [start, end] = [token.map[0], token.map[1] - 1];
+    const first = state.tokens[i + 1];
+    if (token.type === 'list_item_open' && first?.type === 'paragraph_open' && first.map) {
+      [start, end] = [first.map[0], first.map[1] - 1];
+    }
+    while (end > start && !lines[end]?.trim()) {
+      end--;
+    }
+    token.attrSet('data-src', `${start}-${Math.max(start, end)}`);
+  });
 });
 
 // Display maths is rendered by the KaTeX plugin, which drops token attributes; wrap it so it keeps

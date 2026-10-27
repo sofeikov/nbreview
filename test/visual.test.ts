@@ -117,6 +117,22 @@ test('view model: changed cells, outputs and pending threads', () => {
   assert.match(threads[0].comments[0].html, /<strong>there<\/strong>/);
 });
 
+test('list items and quote paragraphs carry only their own lines', () => {
+  /** Tag and source lines of every block, in order. */
+  const ranges = (source: string[]) => [...renderMarkdownCell(source).matchAll(/<(\w+) data-src="([\d-]+)"/g)].map(m => `${m[1]} ${m[2]}`);
+  // A comment lands on the last line of its range: it must not be the blank line after an item,
+  // or a line of the item's nested list.
+  assert.deepEqual(ranges(['- one', '- two', '  - nested a', '  - nested b', '- three', '', 'After']), [
+    'ul 0-4', 'li 0-0', 'li 1-1', 'ul 2-3', 'li 2-2', 'li 3-3', 'li 4-4', 'p 6-6',
+  ]);
+  assert.deepEqual(ranges(['1. one', '   still one', '2. two', '', '', 'After']), ['ol 0-2', 'li 0-1', 'li 2-2', 'p 5-5']);
+  // A loose list: every paragraph of an item has its own lines.
+  assert.deepEqual(ranges(['- one', '', '  more of one', '', '- two', '']), ['ul 0-4', 'li 0-0', 'p 0-0', 'p 2-2', 'li 4-4', 'p 4-4']);
+  assert.deepEqual(ranges(['> first', '>', '> second', '', 'After']), ['blockquote 0-2', 'p 0-0', 'p 2-2', 'p 4-4']);
+  // An item that starts with code, not text, keeps its own lines without the blank one after it.
+  assert.deepEqual(ranges(['- ```', '  x = 1', '  ```', '', '- two']).slice(0, 3), ['ul 0-4', 'li 0-2', 'code 0-2']);
+});
+
 test('display maths keeps its source lines', () => {
   const html = renderMarkdownCell(['Intro', '', '$$', 'x^2', '$$', '', 'After']);
   assert.match(html, /<div data-src="2-4">[^]*?katex-display/);
