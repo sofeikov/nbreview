@@ -150,6 +150,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.13.2
+- Fix: outdated comment threads that are not resolved are no longer folded. Only resolved threads start folded, in the review page and in the text diff. Outdated threads still show the *outdated* label.
+
 ### 0.13.1
 - README: a link to the Marketplace listing, and the two ways to open a pull request (the Command Palette, or a clone of the repository) at the top.
 

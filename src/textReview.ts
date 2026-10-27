@@ -230,7 +230,8 @@ export class TextReview implements vscode.Disposable {
     ].filter(Boolean).join(' ');
     thread.canReply = true;
     thread.state = gh.isResolved ? vscode.CommentThreadState.Resolved : vscode.CommentThreadState.Unresolved;
-    thread.collapsibleState = !ownPending && (gh.isResolved || gh.isOutdated)
+    // Only resolved threads fold. An outdated thread that is not resolved stays open, because its discussion is not finished.
+    thread.collapsibleState = !ownPending && gh.isResolved
       ? vscode.CommentThreadCollapsibleState.Collapsed
       : vscode.CommentThreadCollapsibleState.Expanded;
     this.shown.push(thread);

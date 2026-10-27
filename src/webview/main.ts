@@ -964,7 +964,7 @@ function renderOutput(c: CellVM, side: Side, o: OutputVM): HTMLElement {
 // Threads and composers ------------------------------------------------------------------------
 
 function renderThread(t: ThreadVM): HTMLElement {
-  const open = ui.threadOpen[t.id] ?? !(t.resolved || t.outdated);
+  const open = ui.threadOpen[t.id] ?? !t.resolved;
   const el = h('div', { class: `thread${t.resolved ? ' resolved' : ''}${t.draft ? ' draft' : ''}${open ? '' : ' closed'}`, data: { thread: t.id } });
   el.append(h('div', { class: 'thread-head', role: 'button', tabindex: '0', onclick: () => { ui.threadOpen[t.id] = !open; persist(); render(); } },
     icon(open ? 'chevron-down' : 'chevron-right'),
