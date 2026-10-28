@@ -290,13 +290,18 @@ export class ReviewState {
         }
       }
     }
-    const previous = new Map([...all].map(p => [p, s.viewed.get(p) ?? false]));
-    for (const p of all) {
+    // A folder is usually partly viewed already: only the files that change are sent.
+    const changing = [...all].filter(p => (s.viewed.get(p) ?? false) !== viewed);
+    if (!changing.length) {
+      return;
+    }
+    const previous = new Map(changing.map(p => [p, s.viewed.get(p) ?? false]));
+    for (const p of changing) {
       s.viewed.set(p, viewed);
     }
     this.changed.fire({ viewed: true });
     try {
-      await Promise.all([...all].map(p => s.gh.setViewed(s.pr.nodeId, p, viewed)));
+      await s.gh.setViewed(s.pr.nodeId, changing, viewed);
     } catch (e) {
       for (const [p, v] of previous) {
         s.viewed.set(p, v);

@@ -5,6 +5,9 @@ import { REACTIONS, type ReactionContent } from './core/reactions.ts';
 
 export type { ReactionContent };
 
+/** Files marked viewed per request. */
+const VIEWED_BATCH = 50;
+
 export interface PrInfo {
   owner: string;
   repo: string;
@@ -359,12 +362,21 @@ export class GitHub {
     return files.flatMap((f: any) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]);
   }
 
-  async setViewed(prNodeId: string, path: string, viewed: boolean): Promise<void> {
+  /**
+   * Marks files viewed or not. GitHub has one mutation per file, so a folder's files go as aliased
+   * mutations in a few requests rather than one request each.
+   */
+  async setViewed(prNodeId: string, paths: string[], viewed: boolean): Promise<void> {
     const mutation = viewed ? 'markFileAsViewed' : 'unmarkFileAsViewed';
-    const input = viewed ? 'MarkFileAsViewedInput' : 'UnmarkFileAsViewedInput';
-    await this.graphql(`mutation($input:${input}!){${mutation}(input:$input){clientMutationId}}`, {
-      input: { pullRequestId: prNodeId, path },
-    });
+    for (let i = 0; i < paths.length; i += VIEWED_BATCH) {
+      const chunk = paths.slice(i, i + VIEWED_BATCH);
+      const fields = chunk.map((_, j) => `f${j}:${mutation}(input:{pullRequestId:$pr,path:$p${j}}){clientMutationId}`);
+      const vars = chunk.map((_, j) => `$p${j}:String!`);
+      await this.graphql(`mutation($pr:ID!,${vars.join(',')}){${fields.join(' ')}}`, {
+        pr: prNodeId,
+        ...Object.fromEntries(chunk.map((p, j) => [`p${j}`, p])),
+      });
+    }
   }
 
   /**

@@ -5,7 +5,8 @@ import { ReviewSession } from './session.ts';
 import { ReviewState } from './state.ts';
 import { TextReview } from './textReview.ts';
 import { VisualReview } from './visualReview.ts';
-import { FilesTree, fileLayout, initFileLayout, nodePath, onDidChangeFileLayout, reviewOrder, setFileLayout, type Node } from './tree.ts';
+import { FilesTree, fileLayout, initFileLayout, nodePath, nodePaths, onDidChangeFileLayout, reviewOrder, setFileLayout, type Node } from './tree.ts';
+import { allFolders } from './paths.ts';
 import { PrBadges, PrList, pickPullRequest, type RepoRef } from './prList.ts';
 
 let ctx: vscode.ExtensionContext;
@@ -70,11 +71,8 @@ export function activate(context: vscode.ExtensionContext): void {
     treeView.onDidChangeCheckboxState(e => {
       const byState = new Map<boolean, string[]>();
       for (const [node, checked] of e.items) {
-        const path = nodePath(node);
-        if (path) {
-          const viewed = checked === vscode.TreeItemCheckboxState.Checked;
-          byState.set(viewed, [...(byState.get(viewed) ?? []), path]);
-        }
+        const viewed = checked === vscode.TreeItemCheckboxState.Checked;
+        byState.set(viewed, [...(byState.get(viewed) ?? []), ...nodePaths(node)]);
       }
       for (const [viewed, paths] of byState) {
         state.setViewed(paths, viewed).catch(showError);
@@ -118,6 +116,8 @@ export function activate(context: vscode.ExtensionContext): void {
       request?.event ? submit(request) : submitInteractive().catch(showError)),
     vscode.commands.registerCommand('nbreview.markViewed', (arg?: vscode.Uri | string) => setActiveViewed(arg, true)),
     vscode.commands.registerCommand('nbreview.markNotViewed', (arg?: vscode.Uri | string) => setActiveViewed(arg, false)),
+    vscode.commands.registerCommand('nbreview.markFolderViewed', (node?: Node) => setFolderViewed(node, true).catch(showError)),
+    vscode.commands.registerCommand('nbreview.markFolderNotViewed', (node?: Node) => setFolderViewed(node, false).catch(showError)),
     vscode.commands.registerCommand('nbreview.nextFile', (arg?: vscode.Uri | string) => nextFile(arg).catch(showError)),
     vscode.window.onDidChangeActiveTextEditor(updateActiveContext),
     state.onDidChange(updateActiveContext),
@@ -219,6 +219,40 @@ function updateLayoutContext(): void {
 function setActiveViewed(arg: vscode.Uri | string | undefined, viewed: boolean): Promise<void> | undefined {
   const path = reviewPath(arg);
   return path ? state.setViewed([path], viewed).catch(showError) : undefined;
+}
+
+/**
+ * Marks every file in a folder, at any depth. From the Review panel the folder is the node; from
+ * the Command Palette it is picked from every folder with changed files, notebooks and others
+ * together, which also works in the list layout.
+ */
+async function setFolderViewed(node: Node | undefined, viewed: boolean): Promise<void> {
+  const s = state.session;
+  if (!s) {
+    return;
+  }
+  let paths = node ? nodePaths(node) : undefined;
+  if (!paths) {
+    const count = (files: string[]) => files.filter(p => state.isViewed(p)).length;
+    const folders = allFolders(s.files.map(f => f.filename))
+      .filter(f => (viewed ? count(f.files) < f.files.length : count(f.files) > 0));
+    if (!folders.length) {
+      void vscode.window.showInformationMessage(viewed ? 'Every folder is already marked viewed.' : 'No folder has files marked viewed.');
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      folders.map(f => ({
+        label: `$(folder) ${f.path}`,
+        description: `${count(f.files)}/${f.files.length} viewed`,
+        files: f.files,
+      })),
+      { placeHolder: viewed ? 'Mark every file in a folder as viewed' : 'Unmark every file in a folder' },
+    );
+    paths = picked?.files;
+  }
+  if (paths?.length) {
+    await state.setViewed(paths, viewed);
+  }
 }
 
 /** Opens the next file not marked viewed, in the panel's order, after the given one. */

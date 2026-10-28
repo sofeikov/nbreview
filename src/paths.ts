@@ -66,3 +66,14 @@ export function buildFolderTree(paths: string[]): FolderNode {
 export function treeOrder(node: FolderNode): string[] {
   return [...node.folders.flatMap(treeOrder), ...node.files];
 }
+
+/** Every folder at every level that holds changed files, by path, with all the files below it. */
+export function allFolders(paths: string[]): { path: string; files: string[] }[] {
+  const folders = new Map<string, string[]>();
+  for (const path of paths) {
+    for (let dir = dirname(path); dir; dir = dirname(dir)) {
+      folders.set(dir, [...(folders.get(dir) ?? []), path]);
+    }
+  }
+  return [...folders].map(([path, files]) => ({ path, files })).sort((a, b) => a.path.localeCompare(b.path));
+}

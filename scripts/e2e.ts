@@ -162,8 +162,7 @@ try {
   log('file comment edited and deleted');
 
   // A review, then a new commit: what changed since.
-  await gh.setViewed(s.pr.nodeId, NOTEBOOK, true);
-  await gh.setViewed(s.pr.nodeId, NOTES, true);
+  await gh.setViewed(s.pr.nodeId, [NOTEBOOK, NOTES], true);
   await gh.submitReview(s.pr, undefined, 'COMMENT', 'e2e: reviewed');
   s = await eventually('the review', async () => {
     const x = await load();

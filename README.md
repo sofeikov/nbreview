@@ -39,7 +39,7 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 - **Edit, delete and react.** Edit or delete your own comments after they are posted, not only pending ones, and react to any comment with GitHub's 👍 👎 😄 🎉 😕 ❤️ 🚀 👀.
 - **Changes since your last review.** When the author pushes after you reviewed, files changed since your review are marked *new*. The review page's **Since your review** switch, or the history button next to a file, shows only what changed since then, not the whole pull request again.
 - **The whole pull request, not just notebooks.** Every other changed file (Python modules, configs, tests, the README) opens in the same review page with the same toolbar: highlighted code (Python, YAML, TOML, JSON, SQL, shell, Dockerfile, Makefile, JavaScript, TypeScript, HTML, CSS, R), Markdown rendered with the changed words marked, line and file comments, threads, reactions, **Viewed**, **Next file**, **Since your review** and **Submit review**. **Text diff** opens VS Code's own diff of the file, with the same comments.
-- **"Viewed" checkboxes and "Next file".** Mark files as viewed, synced with GitHub's own "Viewed" flags, and step to the next file you haven't viewed.
+- **"Viewed" checkboxes and "Next file".** Mark files as viewed, synced with GitHub's own "Viewed" flags, and step to the next file you haven't viewed. Folders have a checkbox too: tick `tests/` to mark every test as viewed at once, at any depth.
 - **Text diff too.** A line-by-line text view of the notebook in VS Code's diff editor, with VS Code's comment widgets, cell headers, outline, sticky scroll and folding. Both views share the same comments.
 
 ![Commenting on a line of a notebook code cell; the box shows where the comment will land on GitHub](images/comment.png)
@@ -83,7 +83,7 @@ code --install-extension nbreview.vsix
    - **Created by me**: your own open pull requests.
 
    The badge on each pull request is the number of notebooks it changes, and its tooltip lists them. Click a pull request to review it. To find one that isn't listed, use the search button (or **Notebook Review: Open Pull Request…**): type to search by title, number, author or branch, or paste a number, `owner/repo#123` or a pull request URL.
-2. Click any changed file, a notebook or not, to open it in the review page (the diff icon next to it opens VS Code's text diff instead). The page's toolbar has **Viewed**, **Next file** and **Submit review**, so you can go through the whole pull request file by file; in a text diff they are the icons in the title bar. The **Review** panel shows the files grouped into folders; its **View as List** button (next to Collapse All) switches to a flat list, and **View as Tree** switches back.
+2. Click any changed file, a notebook or not, to open it in the review page (the diff icon next to it opens VS Code's text diff instead). The page's toolbar has **Viewed**, **Next file** and **Submit review**, so you can go through the whole pull request file by file; in a text diff they are the icons in the title bar. The **Review** panel shows the files grouped into folders; its **View as List** button (next to Collapse All) switches to a flat list, and **View as Tree** switches back. Tick a folder, or **Notebooks** or **Other files**, to mark every file in it as viewed (right-click for **Mark Folder as Viewed** and **Mark Folder as Not Viewed**); in the list layout, run **Notebook Review: Mark Folder as Viewed** from the Command Palette and pick the folder.
 3. Comment with `+` or the comment buttons, then choose **Start a review** (`Ctrl+Enter`) to add it to your pending review on GitHub, or **Add single comment** to post it now. Your comments can be edited and deleted, pending or posted; deleting the last pending one discards the empty review. Replies to existing threads work the same way. **Resolve conversation** under a thread marks it resolved on GitHub, and the smiley button adds a reaction.
 4. Back on a pull request you have reviewed before, files changed since your review are marked *new* in the Review panel. Click the history button next to one, or **Since your review** in the review page, to see only those changes. Comments go on the new side; the old side shows your last review, which is not part of the pull request.
 5. Click **Submit review** (in the page, the panel title or the status bar), write an optional summary and choose **Comment**, **Approve** or **Request changes**. **Discard review** (in the same box, or **Notebook Review: Discard Pending Review…**) deletes the pending review and its comments.
@@ -149,6 +149,10 @@ The core does not use the VS Code API and is in `src/core/`:
 - Binary files and files over 2 MB are not shown in the review page; **Open text diff** shows them in VS Code's diff.
 
 ## Changelog
+
+### 0.15.0
+- **Mark a whole folder as viewed.** Folders in the Review panel, and the **Notebooks** and **Other files** groups, have a Viewed checkbox: tick one to mark every file below it as viewed on GitHub, at any depth, for example all the tests at once. It is ticked when every file below is viewed. Right-click a folder for **Mark Folder as Viewed** or **Mark Folder as Not Viewed**; from the Command Palette the same commands let you pick any folder, which also works in the list layout.
+- Marking many files viewed takes a few requests to GitHub instead of one per file.
 
 ### 0.14.1
 - Fix: a suggestion on several lines, of which only the last is in the pull request's diff, is now posted as a plain code block. Before, committing it on GitHub replaced only the last line with all the selected lines, so the lines above it appeared twice. The same applies to a cell whose source is stored as one string in the notebook.

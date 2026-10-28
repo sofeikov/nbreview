@@ -43,6 +43,8 @@ const RUN = [
   { command: 'nbreview.openOnGitHub' },
   { command: 'nbreview.markViewed' },
   { command: 'nbreview.markNotViewed' },
+  { command: 'nbreview.markFolderViewed' },
+  { command: 'nbreview.markFolderNotViewed' },
   { command: 'nbreview.discardReview' },
   { command: 'nbreview.close' },
 ];

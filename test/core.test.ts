@@ -230,7 +230,7 @@ test('threads on ordinary files go on their own line', () => {
   assert.deepEqual(locateFileThread({ ...base, line: null, subjectType: 'FILE' }), { side: 'RIGHT', docLine: 0, note: 'file comment' });
 });
 
-import { buildFolderTree, treeOrder } from '../src/paths.ts';
+import { allFolders, buildFolderTree, treeOrder } from '../src/paths.ts';
 
 test('changed files group into folders, single-folder chains merged', () => {
   const root = buildFolderTree([
@@ -244,5 +244,15 @@ test('changed files group into folders, single-folder chains merged', () => {
   assert.deepEqual(pkg.files, ['src/pkg/trainer.py']);
   assert.deepEqual(treeOrder(root), [
     'configs/a.yaml', 'nbs/steps/val.ipynb', 'src/pkg/models/gnn.py', 'src/pkg/models/graph.py', 'src/pkg/trainer.py', 'tests/test_x.py', 'pyproject.toml',
+  ]);
+});
+
+test('every folder at every level, with all the files below it', () => {
+  const folders = allFolders(['tests/unit/test_a.py', 'tests/unit/test_b.py', 'tests/test_c.ipynb', 'src/pkg/m.py', 'README.md']);
+  assert.deepEqual(folders, [
+    { path: 'src', files: ['src/pkg/m.py'] },
+    { path: 'src/pkg', files: ['src/pkg/m.py'] },
+    { path: 'tests', files: ['tests/unit/test_a.py', 'tests/unit/test_b.py', 'tests/test_c.ipynb'] },
+    { path: 'tests/unit', files: ['tests/unit/test_a.py', 'tests/unit/test_b.py'] },
   ]);
 });

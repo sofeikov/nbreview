@@ -230,3 +230,18 @@ test('viewed flags, and the files GitHub unchecked because they changed', async 
     fake.restore();
   }
 });
+
+test('marking many files viewed sends them as aliased mutations, 50 to a request', async () => {
+  const fake = fakeGraphql(() => ({}));
+  try {
+    const paths = Array.from({ length: 51 }, (_, i) => `tests/t${i}.py`);
+    await new GitHub('t').setViewed('PR_1', paths, true);
+    assert.equal(fake.calls.length, 2);
+    assert.match(fake.calls[0].query, /f49:markFileAsViewed\(input:\{pullRequestId:\$pr,path:\$p49\}\)/);
+    assert.deepEqual(fake.calls[1].variables, { pr: 'PR_1', p0: 'tests/t50.py' });
+    await new GitHub('t').setViewed('PR_1', ['a.py'], false);
+    assert.match(fake.calls[2].query, /^mutation\(\$pr:ID!,\$p0:String!\)\{f0:unmarkFileAsViewed/);
+  } finally {
+    fake.restore();
+  }
+});

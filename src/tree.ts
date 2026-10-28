@@ -106,6 +106,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         const viewed = node.paths.filter(p => this.state.isViewed(p)).length;
         item.description = viewed ? `${viewed}/${node.paths.length} viewed` : String(node.paths.length);
         item.iconPath = new vscode.ThemeIcon(node.id === 'notebooks' ? 'notebook' : 'files');
+        this.folderViewed(item, 'group', viewed, node.paths.length);
         return item;
       }
       case 'folder': {
@@ -118,6 +119,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         item.tooltip = folder.path;
         item.iconPath = vscode.ThemeIcon.Folder;
         item.resourceUri = vscode.Uri.file(`/${folder.path}`);
+        this.folderViewed(item, 'folder', viewed, files.length);
         return item;
       }
       case 'notebook': {
@@ -168,6 +170,18 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
     }
   }
 
+  /**
+   * A folder's checkbox is ticked when every file below it is viewed, and ticking it marks them
+   * all. The context value says which of the folder's two menu commands apply.
+   */
+  private folderViewed(item: vscode.TreeItem, kind: 'group' | 'folder', viewed: number, total: number): void {
+    if (!total) {
+      return;
+    }
+    item.checkboxState = viewed === total ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
+    item.contextValue = [kind, viewed < total && 'canView', viewed > 0 && 'canUnview'].filter(Boolean).join(' ');
+  }
+
   private checkbox(path: string): vscode.TreeItemCheckboxState {
     return this.state.isViewed(path) ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
   }
@@ -195,6 +209,18 @@ export function reviewOrder(state: ReviewState): string[] {
 
 export function nodePath(node: Node): string | undefined {
   return node.kind === 'notebook' ? node.entry.path : node.kind === 'file' ? node.other.file.filename : undefined;
+}
+
+/** The files a node stands for: itself, or everything below a folder or group. */
+export function nodePaths(node: Node): string[] {
+  if (node.kind === 'group') {
+    return node.paths;
+  }
+  if (node.kind === 'folder') {
+    return treeOrder(node.folder);
+  }
+  const path = nodePath(node);
+  return path ? [path] : [];
 }
 
 /**
