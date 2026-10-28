@@ -150,6 +150,10 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.14.1
+- Fix: a suggestion on several lines, of which only the last is in the pull request's diff, is now posted as a plain code block. Before, committing it on GitHub replaced only the last line with all the selected lines, so the lines above it appeared twice. The same applies to a cell whose source is stored as one string in the notebook.
+- Fix: a suggestion keeps its `$` signs. Before, `$$` (as in LaTeX in a Markdown cell) became `$`.
+
 ### 0.14.0
 - **Comment on each list item.** In rendered Markdown, every list item (nested items too) and every paragraph in a quote has its own `+`. Before, a list or a quote had one `+` for all of it.
 - A comment on rendered Markdown no longer lands on the blank line after a list: it goes on the last line of the item's own text.

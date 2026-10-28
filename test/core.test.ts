@@ -106,6 +106,47 @@ test('suggestion on a middle line keeps newline and comma', () => {
   assert.match(plan.body, /```suggestion\n {4}"def loss\(x, y, \*, eps=1e-9\):\\n",\n```/);
 });
 
+test('a suggestion on lines only partly in the diff is not committable', () => {
+  // Only the last line can carry the comment, and committing would replace it with all three.
+  const cell = head.cells[1];
+  const partial = { left: new Set<number>(), right: new Set([cell.jsonLines[2]]) };
+  const plan = planComment({
+    doc: headDoc, path: PATH, side: 'RIGHT', commentable: partial,
+    startDocLine: docLineForSource(headDoc, 'loss-def', 0)!, endDocLine: docLineForSource(headDoc, 'loss-def', 2)!,
+    text: '```suggestion\n#| export\ndef loss(x, y):\n    return (x - y) ** 2\n```',
+  });
+  assert.equal(plan.line, cell.jsonLines[2]);
+  assert.equal(plan.startLine, undefined);
+  assert.doesNotMatch(plan.body, /```suggestion/);
+  assert.match(plan.body, /```python\n#\| export\ndef loss/);
+});
+
+const inlineNotebook = (source: string | string[]) => parseNotebook(JSON.stringify({
+  cells: [{ cell_type: 'markdown', id: 'md', metadata: {}, source }],
+  metadata: {}, nbformat: 4, nbformat_minor: 5,
+}, null, 1));
+const allLines = (nb: ReturnType<typeof parseNotebook>) => ({ left: new Set<number>(), right: new Set(nb.rawLines.map((_, i) => i + 1)) });
+
+test('a suggestion keeps the dollar signs it was written with', () => {
+  const nb = inlineNotebook(['$$a + b$$\n', 'Cost in $&.']);
+  const doc = buildReviewDoc(nb);
+  const docLine = docLineForSource(doc, 'md', 0)!;
+  const text = '```suggestion\n$$a - b$$ and $& and $1\n```';
+  const plan = planComment({ doc, path: PATH, side: 'RIGHT', startDocLine: docLine, endDocLine: docLine, commentable: allLines(nb), text });
+  assert.ok(plan.body.includes('```suggestion\n    "$$a - b$$ and $& and $1\\n",\n```'));
+  assert.equal(parseBody(plan.body).text, text);
+});
+
+test('a suggestion on a cell stored as one string is not committable', () => {
+  // The whole source is on one raw line, so committing would replace every line of the cell.
+  const nb = inlineNotebook('a = 1\nb = 2\n');
+  const doc = buildReviewDoc(nb);
+  const docLine = docLineForSource(doc, 'md', 1)!;
+  const plan = planComment({ doc, path: PATH, side: 'RIGHT', startDocLine: docLine, endDocLine: docLine, commentable: allLines(nb), text: '```suggestion\nb = 3\n```' });
+  assert.equal(plan.subjectType, 'LINE');
+  assert.doesNotMatch(plan.body, /```suggestion/);
+});
+
 test('threads are put back on their cell by marker, by JSON line, or at the top', () => {
   const docLine = docLineForSource(headDoc, 'loss-def', 1)!;
   const plan = planComment({ doc: headDoc, path: PATH, side: 'RIGHT', startDocLine: docLine, endDocLine: docLine, commentable, text: 'hi' });

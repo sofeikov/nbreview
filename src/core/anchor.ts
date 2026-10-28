@@ -74,7 +74,11 @@ export function planComment(args: {
     if (allowed.has(jsonEnd)) {
       const multi = jsonStart !== jsonEnd && rangeAllowed(allowed, jsonStart, jsonEnd);
       const fromJson = multi ? jsonStart : jsonEnd;
-      const text = convertSuggestion(args.text, doc, cell, multi ? start : end, end, side);
+      // A suggestion replaces the lines the comment is on. When only the last selected line can
+      // carry the comment, committing it would replace that one line with the whole selection.
+      const text = multi || start === end
+        ? convertSuggestion(args.text, doc, cell, start, end, side)
+        : defuseSuggestion(args.text);
       return {
         path,
         side,
@@ -194,7 +198,7 @@ function convertSuggestion(text: string, doc: ReviewDoc, cell: NbCell, start: nu
   }
   const jsonLines = cell.jsonLines.slice(start, end + 1);
   const distinct = new Set(jsonLines);
-  if (distinct.size !== jsonLines.length) {
+  if (distinct.size !== jsonLines.length || cell.jsonLines.filter(l => distinct.has(l)).length !== jsonLines.length) {
     // The cell source is one multi-line string, so lines can't be replaced one by one.
     return defuseSuggestion(text);
   }
@@ -212,7 +216,8 @@ function convertSuggestion(text: string, doc: ReviewDoc, cell: NbCell, start: nu
         const last = isLast && i === replacement.length - 1;
         return indent + JSON.stringify(last ? line : line + '\n') + (last ? '' : ',');
       });
-  return text.replace(SUGGESTION_RE, '```suggestion\n' + encoded.join('\n') + (encoded.length ? '\n' : '') + '```');
+  // A function, so a `$` in the code isn't read as a replacement pattern (`$$` in LaTeX, say).
+  return text.replace(SUGGESTION_RE, () => '```suggestion\n' + encoded.join('\n') + (encoded.length ? '\n' : '') + '```');
 }
 
 /** Turns a suggestion stored as notebook JSON lines back into the code it replaces the lines with. */
@@ -228,7 +233,7 @@ function decodeSuggestion(text: string): string {
   }
   try {
     const code = lines.map(l => (JSON.parse(JSON_LINE.exec(l)![1]) as string).replace(/\n$/, ''));
-    return text.replace(SUGGESTION_RE, '```suggestion\n' + code.join('\n') + '\n```');
+    return text.replace(SUGGESTION_RE, () => '```suggestion\n' + code.join('\n') + '\n```');
   } catch {
     return text;
   }
