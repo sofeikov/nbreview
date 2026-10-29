@@ -77,3 +77,17 @@ export function allFolders(paths: string[]): { path: string; files: string[] }[]
   }
   return [...folders].map(([path, files]) => ({ path, files })).sort((a, b) => a.path.localeCompare(b.path));
 }
+
+/**
+ * The review page's tab title. An updated extension finds the file a tab of the previous version
+ * shows from it, so its format has to stay the same.
+ */
+export function pageTitle(path: string, notebook: boolean, pr: number | undefined): string {
+  return `${notebook ? '📓' : '📄'} ${basename(path)} · #${pr ?? ''}`;
+}
+
+/** The file a review tab shows, from its title: the one file of the pull request it fits, if just one does. */
+export function pathFromPageTitle(title: string, pr: number, files: { path: string; notebook: boolean }[]): string | undefined {
+  const matches = files.filter(f => pageTitle(f.path, f.notebook, pr) === title);
+  return matches.length === 1 ? matches[0].path : undefined;
+}

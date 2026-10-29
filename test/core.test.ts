@@ -231,7 +231,7 @@ test('threads on ordinary files go on their own line', () => {
   assert.deepEqual(locateFileThread({ ...base, line: null, subjectType: 'FILE' }), { side: 'RIGHT', docLine: 0, note: 'file comment' });
 });
 
-import { allFolders, buildFolderTree, treeOrder } from '../src/paths.ts';
+import { allFolders, buildFolderTree, pageTitle, pathFromPageTitle, treeOrder } from '../src/paths.ts';
 
 test('changed files group into folders, single-folder chains merged', () => {
   const root = buildFolderTree([
@@ -278,4 +278,21 @@ test('threads with a pending comment of the viewer show whatever the filter', ()
 
 test('only the three Comments filters are accepted', () => {
   assert.deepEqual(['all', 'unresolved', 'none', 'resolved', undefined, 1].map(isCommentFilter), [true, true, true, false, false, false]);
+});
+
+test('a review tab title leads back to its file', () => {
+  const files = [
+    { path: 'nbs/train.ipynb', notebook: true },
+    { path: 'src/train.py', notebook: false },
+    { path: 'a/__init__.py', notebook: false },
+    { path: 'b/__init__.py', notebook: false },
+  ];
+  assert.equal(pageTitle('nbs/train.ipynb', true, 14), '📓 train.ipynb · #14');
+  for (const f of files.slice(0, 2)) {
+    assert.equal(pathFromPageTitle(pageTitle(f.path, f.notebook, 14), 14, files), f.path);
+  }
+  // Two files with the same name, another pull request, or a title that isn't a review page: no file.
+  assert.equal(pathFromPageTitle(pageTitle('a/__init__.py', false, 14), 14, files), undefined);
+  assert.equal(pathFromPageTitle(pageTitle('src/train.py', false, 9), 14, files), undefined);
+  assert.equal(pathFromPageTitle('train.ipynb', 14, files), undefined);
 });

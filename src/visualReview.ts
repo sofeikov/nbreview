@@ -8,10 +8,13 @@ import type { Anchor } from './webview/protocol.ts';
 import type { TextReview } from './textReview.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
 import type { HostMessage, SinceState, ViewModel, WebviewMessage } from './webview/protocol.ts';
-import { basename } from './paths.ts';
+import { pageTitle, pathFromPageTitle } from './paths.ts';
 
 export class VisualReview implements vscode.Disposable {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
+  /** Tabs from before a reload that VS Code has handed back, while they wait for the pull request. */
+  private readonly reviving = new Set<vscode.WebviewPanel>();
+  private staleTimer?: ReturnType<typeof setTimeout>;
   /** Notebooks shown compared with the viewer's last review instead of the pull request's base. */
   private readonly sinceOn = new Set<string>();
   private readonly disposables: vscode.Disposable[] = [];
@@ -25,6 +28,9 @@ export class VisualReview implements vscode.Disposable {
       vscode.window.registerWebviewPanelSerializer('nbreview.visual', {
         deserializeWebviewPanel: (panel, saved) => this.restore(panel, saved),
       }),
+      vscode.window.tabGroups.onDidChangeTabs(() => this.checkStaleTabs()),
+      vscode.window.tabGroups.onDidChangeTabGroups(() => this.checkStaleTabs()),
+      { dispose: () => clearTimeout(this.staleTimer) },
       // Changing the setting takes over from the last switch in a page.
       vscode.workspace.onDidChangeConfiguration(e => {
         if (e.affectsConfiguration('nbreview.hideNoise')) {
@@ -44,6 +50,7 @@ export class VisualReview implements vscode.Disposable {
         }
       }),
     );
+    this.checkStaleTabs();
   }
 
   dispose(): void {
@@ -53,7 +60,7 @@ export class VisualReview implements vscode.Disposable {
     vscode.Disposable.from(...this.disposables).dispose();
   }
 
-  open(nbPath: string, revealCellId?: string, options: { since?: boolean } = {}): void {
+  open(nbPath: string, revealCellId?: string, options: { since?: boolean; viewColumn?: vscode.ViewColumn } = {}): void {
     if (options.since !== undefined) {
       this.setSince(nbPath, options.since);
     }
@@ -74,7 +81,7 @@ export class VisualReview implements vscode.Disposable {
     const panel = vscode.window.createWebviewPanel(
       'nbreview.visual',
       '',
-      { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
+      { viewColumn: options.viewColumn ?? vscode.ViewColumn.Active, preserveFocus: false },
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [this.dist()], enableFindWidget: true },
     );
     this.adopt(panel, nbPath, revealCellId);
@@ -82,7 +89,12 @@ export class VisualReview implements vscode.Disposable {
 
   /** Brings back review tabs that were open when VS Code was reloaded. */
   private async restore(panel: vscode.WebviewPanel, saved: unknown): Promise<void> {
-    await this.state.restoring;
+    this.reviving.add(panel);
+    try {
+      await this.state.restoring;
+    } finally {
+      this.reviving.delete(panel);
+    }
     const nbPath = (saved as { path?: string } | undefined)?.path;
     if (nbPath && this.reviewable(nbPath) && !this.panels.has(nbPath)) {
       panel.webview.options = { enableScripts: true, localResourceRoots: [this.dist()] };
@@ -92,8 +104,45 @@ export class VisualReview implements vscode.Disposable {
     }
   }
 
+  private checkStaleTabs(): void {
+    clearTimeout(this.staleTimer);
+    // A tab restored with the window goes to the serializer as soon as it is shown; this leaves
+    // time for that before a tab nobody owns counts as stale.
+    this.staleTimer = setTimeout(() => void this.replaceStaleTabs(), 2000);
+  }
+
+  /**
+   * After an update with Restart Extensions, review tabs that were open keep the old version's
+   * page, which nothing answers any more: VS Code hands an extension back only the tabs restored
+   * with the window. A shown review tab this extension doesn't own is such a page, so it is
+   * closed and its file opened again in its place.
+   */
+  private async replaceStaleTabs(): Promise<void> {
+    await this.state.restoring;
+    const s = this.state.session;
+    if (!s) {
+      return;
+    }
+    const ours = [...this.panels.values(), ...this.reviving];
+    const files = [...new Set([...s.notebooks.keys(), ...s.files.map(f => f.filename)])].map(path => ({ path, notebook: s.notebooks.has(path) }));
+    for (const group of vscode.window.tabGroups.all) {
+      const tab = group.activeTab;
+      if (!(tab?.input instanceof vscode.TabInputWebview) || !tab.input.viewType.endsWith('nbreview.visual')) {
+        continue;
+      }
+      if (ours.some(p => p.visible && p.viewColumn === group.viewColumn)) {
+        continue;
+      }
+      const path = pathFromPageTitle(tab.label, s.pr.number, files);
+      await vscode.window.tabGroups.close(tab, true);
+      if (path) {
+        this.open(path, undefined, { viewColumn: group.viewColumn });
+      }
+    }
+  }
+
   private title(path: string): string {
-    return `${this.state.entry(path) ? '📓' : '📄'} ${basename(path)} · #${this.state.session?.pr.number ?? ''}`;
+    return pageTitle(path, !!this.state.entry(path), this.state.session?.pr.number);
   }
 
   /** A notebook or another file of the pull request under review. */
