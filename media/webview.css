@@ -551,3 +551,21 @@ textarea {
 .submit-options .option input { margin: 3px 0 0; accent-color: var(--accent); }
 .submit-options .option > span { display: flex; flex-direction: column; }
 .submit-error { margin-top: 6px; color: var(--vscode-errorForeground); font-size: 12px; }
+
+/* --- Comments filter ----------------------------------------------------------------------- */
+
+.filter-wrap { position: relative; }
+.filter-box {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  width: min(300px, calc(100vw - 24px));
+  padding: 6px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--vscode-editorWidget-background, var(--card));
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.45));
+  z-index: 20;
+}
+.filter-box .submit-options { margin: 0 0 6px; }
+.filter-box > .muted { padding: 0 6px; font-size: 11px; }

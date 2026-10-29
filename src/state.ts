@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import type { ReviewSession, NotebookEntry } from './session.ts';
 import { parseBody, planComment, replaceBodyText, type GhThreadTarget, type Side } from './core/anchor.ts';
 import { planFileComment } from './core/fileComments.ts';
+import { isCommentFilter, showsThread, type CommentFilter } from './core/commentFilter.ts';
 import type { GhThread, ReactionContent } from './github.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
 
@@ -51,6 +52,8 @@ export interface ChangeEvent {
   drafts?: boolean;
   threads?: boolean;
   viewed?: boolean;
+  /** Which threads are shown changed. */
+  filter?: boolean;
 }
 
 export class ReviewState {
@@ -260,6 +263,28 @@ export class ReviewState {
       throw new Error('No pull request is open.');
     }
     return this.session;
+  }
+
+  // --- Which threads are shown --------------------------------------------------------------
+
+  /**
+   * All threads, the unresolved ones, or none. The last choice is remembered for every pull
+   * request; the setting gives the default. (Commands don't write settings: right after an
+   * update VS Code may not have registered a new one yet.)
+   */
+  commentFilter(): CommentFilter {
+    const chosen = this.ctx.globalState.get('commentFilter') ?? vscode.workspace.getConfiguration('nbreview').get('showComments');
+    return isCommentFilter(chosen) ? chosen : 'all';
+  }
+
+  /** Sets which threads are shown; `undefined` goes back to the setting. */
+  async setCommentFilter(filter: CommentFilter | undefined): Promise<void> {
+    await this.ctx.globalState.update('commentFilter', filter);
+    this.changed.fire({ filter: true });
+  }
+
+  shows(thread: GhThread): boolean {
+    return showsThread(this.commentFilter(), thread);
   }
 
   // --- GitHub threads and viewed state ----------------------------------------------------

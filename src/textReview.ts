@@ -114,7 +114,7 @@ export class TextReview implements vscode.Disposable {
             }
           }
         }
-        if (e.drafts || e.threads || e.session) {
+        if (e.drafts || e.threads || e.session || e.filter) {
           this.renderThreads();
         }
       }),
@@ -206,11 +206,12 @@ export class TextReview implements vscode.Disposable {
     if (!s) {
       return;
     }
-    for (const p of s.placed) {
+    // Threads left out by the Comments filter aren't drawn at all, as with VS Code's own commenting switch.
+    for (const p of s.placed.filter(p => this.state.shows(p.gh))) {
       this.showThread(p.gh, this.reviewUri(p.nbPath, p.side), p.startDocLine ?? p.docLine, p.docLine, p);
     }
     for (const list of s.fileThreads.values()) {
-      for (const f of list) {
+      for (const f of list.filter(f => this.state.shows(f.gh))) {
         this.showThread(f.gh, this.rawUri(f.path, f.side), f.startDocLine ?? f.docLine, f.docLine, f);
       }
     }

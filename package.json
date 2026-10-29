@@ -2,7 +2,7 @@
   "name": "nbreview",
   "displayName": "Notebook Review for GitHub Pull Requests (Jupyter .ipynb)",
   "description": "Review Jupyter notebooks (.ipynb) in GitHub pull requests inside VS Code: rendered cell-by-cell diffs of code, Markdown, LaTeX and outputs, with line comments on any cell that post to GitHub as a normal PR review.",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "publisher": "KonstantinSofeikov",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -123,6 +123,21 @@
         "title": "View as List",
         "category": "Notebook Review",
         "icon": "$(list-flat)"
+      },
+      {
+        "command": "nbreview.showAllComments",
+        "title": "Show All Comments",
+        "category": "Notebook Review"
+      },
+      {
+        "command": "nbreview.showUnresolvedComments",
+        "title": "Show Unresolved Comments Only",
+        "category": "Notebook Review"
+      },
+      {
+        "command": "nbreview.hideComments",
+        "title": "Hide All Comments",
+        "category": "Notebook Review"
       },
       {
         "command": "nbreview.close",
@@ -302,6 +317,21 @@
           "group": "navigation@4"
         },
         {
+          "submenu": "nbreview.commentsAll",
+          "when": "view == nbreview.files && nbreview.active && nbreview.commentFilter != unresolved && nbreview.commentFilter != none",
+          "group": "navigation@5"
+        },
+        {
+          "submenu": "nbreview.commentsUnresolved",
+          "when": "view == nbreview.files && nbreview.active && nbreview.commentFilter == unresolved",
+          "group": "navigation@5"
+        },
+        {
+          "submenu": "nbreview.commentsNone",
+          "when": "view == nbreview.files && nbreview.active && nbreview.commentFilter == none",
+          "group": "navigation@5"
+        },
+        {
           "command": "nbreview.close",
           "when": "view == nbreview.files && nbreview.active",
           "group": "more@2"
@@ -368,6 +398,21 @@
         {
           "command": "nbreview.nextFile",
           "when": "nbreview.active && resourceScheme =~ /^nbreview(-raw)?$/",
+          "group": "navigation@3"
+        },
+        {
+          "submenu": "nbreview.commentsAll",
+          "when": "nbreview.active && resourceScheme =~ /^nbreview(-raw)?$/ && nbreview.commentFilter != unresolved && nbreview.commentFilter != none",
+          "group": "navigation@3"
+        },
+        {
+          "submenu": "nbreview.commentsUnresolved",
+          "when": "nbreview.active && resourceScheme =~ /^nbreview(-raw)?$/ && nbreview.commentFilter == unresolved",
+          "group": "navigation@3"
+        },
+        {
+          "submenu": "nbreview.commentsNone",
+          "when": "nbreview.active && resourceScheme =~ /^nbreview(-raw)?$/ && nbreview.commentFilter == none",
           "group": "navigation@3"
         },
         {
@@ -481,6 +526,36 @@
           "when": "commentController == nbreview && commentThread =~ /\\bcanUnresolve\\b/",
           "group": "inline@1"
         }
+      ],
+      "nbreview.commentsAll": [
+        {
+          "command": "nbreview.showUnresolvedComments",
+          "group": "filter@2"
+        },
+        {
+          "command": "nbreview.hideComments",
+          "group": "filter@3"
+        }
+      ],
+      "nbreview.commentsUnresolved": [
+        {
+          "command": "nbreview.showAllComments",
+          "group": "filter@1"
+        },
+        {
+          "command": "nbreview.hideComments",
+          "group": "filter@3"
+        }
+      ],
+      "nbreview.commentsNone": [
+        {
+          "command": "nbreview.showAllComments",
+          "group": "filter@1"
+        },
+        {
+          "command": "nbreview.showUnresolvedComments",
+          "group": "filter@2"
+        }
       ]
     },
     "languages": [
@@ -518,6 +593,21 @@
           "type": "boolean",
           "default": false,
           "description": "In the review page, fold cells whose only change is their outputs (a notebook run again) or whitespace in their source, as if unchanged. The page's Hide noise switch changes it and remembers the choice. Execution counts and metadata are always left out."
+        },
+        "nbreview.showComments": {
+          "type": "string",
+          "enum": [
+            "all",
+            "unresolved",
+            "none"
+          ],
+          "enumDescriptions": [
+            "Every conversation; resolved ones start folded.",
+            "Only conversations not yet resolved.",
+            "No conversations, and no comment counts in the Review panel."
+          ],
+          "default": "all",
+          "markdownDescription": "Which comment threads the review page and the text diff show by default. Your own pending comments always show. The Comments filter in the review page, the Review panel and the text diff changes it and remembers the choice."
         },
         "nbreview.fileLayout": {
           "type": "string",
@@ -569,7 +659,24 @@
         "editor.wordWrap": "on",
         "editor.stickyScroll.enabled": true
       }
-    }
+    },
+    "submenus": [
+      {
+        "id": "nbreview.commentsAll",
+        "label": "Comments: All",
+        "icon": "$(filter)"
+      },
+      {
+        "id": "nbreview.commentsUnresolved",
+        "label": "Comments: Unresolved Only",
+        "icon": "$(filter-filled)"
+      },
+      {
+        "id": "nbreview.commentsNone",
+        "label": "Comments: Hidden",
+        "icon": "$(filter-filled)"
+      }
+    ]
   },
   "scripts": {
     "build": "node scripts/build.mjs",

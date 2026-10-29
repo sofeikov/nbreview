@@ -1,5 +1,6 @@
 // Messages and data shared by the extension host and the visual review page.
 import type { ReactionContent } from '../core/reactions.ts';
+import type { CommentFilter } from '../core/commentFilter.ts';
 
 export type Side = 'LEFT' | 'RIGHT';
 
@@ -126,6 +127,8 @@ export interface PanelState {
   pending: number;
   /** The viewer has a pending review; GitHub doesn't take single comments next to one. */
   pendingReview: boolean;
+  /** Which threads are shown; the page gets all of them and leaves the others out. */
+  comments: CommentFilter;
   /** Comparing with the viewer's last review: possible for this notebook, and switched on. */
   since?: SinceState;
 }
@@ -160,6 +163,7 @@ export type WebviewMessage =
   | { type: 'react'; commentId: string; content: ReactionContent; add: boolean }
   | { type: 'setSince'; on: boolean }
   | { type: 'setHideNoise'; on: boolean }
+  | { type: 'setCommentFilter'; filter: CommentFilter }
   | { type: 'discardReview' }
   | { type: 'nextFile' }
   | { type: 'plan'; anchor: Anchor; requestId: number }

@@ -198,6 +198,9 @@ export class VisualReview implements vscode.Disposable {
       case 'setHideNoise':
         await this.setHideNoise(msg.on);
         return;
+      case 'setCommentFilter':
+        await this.state.setCommentFilter(msg.filter);
+        return;
       case 'setSince':
         this.setSince(nbPath, msg.on);
         await this.sync(panel, nbPath, { model: true, threads: true });
@@ -344,6 +347,7 @@ export class VisualReview implements vscode.Disposable {
         viewed: this.state.isViewed(nbPath),
         pending: this.state.pendingCount(),
         pendingReview: this.state.hasPendingReview(),
+        comments: this.state.commentFilter(),
         since: this.since(nbPath),
       },
     };

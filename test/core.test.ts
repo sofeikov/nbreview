@@ -13,6 +13,7 @@ import {
   parseBody,
   planComment,
 } from '../src/core/anchor.ts';
+import { isCommentFilter, showsThread } from '../src/core/commentFilter.ts';
 
 const fx = (name: string) => readFileSync(join(process.cwd(), 'test', 'fixtures', name), 'utf8');
 const base = parseNotebook(fx('small.base.ipynb'));
@@ -255,4 +256,26 @@ test('every folder at every level, with all the files below it', () => {
     { path: 'tests', files: ['tests/unit/test_a.py', 'tests/unit/test_b.py', 'tests/test_c.ipynb'] },
     { path: 'tests/unit', files: ['tests/unit/test_a.py', 'tests/unit/test_b.py'] },
   ]);
+});
+
+test('the Comments filter shows all threads, the unresolved ones, or none', () => {
+  const thread = (isResolved: boolean, ...pending: boolean[]) => ({ isResolved, comments: pending.map(p => ({ pending: p })) });
+  const open = thread(false, false);
+  const resolved = thread(true, false, false);
+  assert.deepEqual([open, resolved].map(t => showsThread('all', t)), [true, true]);
+  assert.deepEqual([open, resolved].map(t => showsThread('unresolved', t)), [true, false]);
+  assert.deepEqual([open, resolved].map(t => showsThread('none', t)), [false, false]);
+});
+
+test('threads with a pending comment of the viewer show whatever the filter', () => {
+  const newThread = { isResolved: false, comments: [{ pending: true }] };
+  const replyToResolved = { isResolved: true, comments: [{ pending: false }, { pending: true }] };
+  for (const filter of ['all', 'unresolved', 'none'] as const) {
+    assert.equal(showsThread(filter, newThread), true);
+    assert.equal(showsThread(filter, replyToResolved), true);
+  }
+});
+
+test('only the three Comments filters are accepted', () => {
+  assert.deepEqual(['all', 'unresolved', 'none', 'resolved', undefined, 1].map(isCommentFilter), [true, true, true, false, false, false]);
 });

@@ -35,6 +35,9 @@ const vscodeVersion = flag('--vscode', 'stable');
 const RUN = [
   { command: 'nbreview.viewAsList' },
   { command: 'nbreview.viewAsTree' },
+  { command: 'nbreview.hideComments' },
+  { command: 'nbreview.showUnresolvedComments' },
+  { command: 'nbreview.showAllComments' },
   { command: 'nbreview.refresh' },
   { command: 'nbreview.openVisual' },
   { command: 'nbreview.openNotebookDiff' },

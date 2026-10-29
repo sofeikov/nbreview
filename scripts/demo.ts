@@ -154,11 +154,16 @@ html {
 // Messages are delivered synchronously so the page is fully drawn when the load event fires
 // (headless screenshots are taken then).
 const deliver = data => window.dispatchEvent(new MessageEvent('message', { data }));
+const panelState = { viewed: false, pending: 1, pendingReview: true, comments: 'all' };
 window.acquireVsCodeApi = () => ({
   postMessage(m) {
     // Answer like the extension does, so a new comment shows where it will land on GitHub.
     if (m.type === 'plan') {
       deliver({ type: 'plan', requestId: m.requestId, describe: 'Will post as a line comment · cell line 2 → ${path} L41' });
+    }
+    if (m.type === 'setCommentFilter') {
+      panelState.comments = m.filter;
+      deliver({ type: 'state', state: panelState });
     }
   },
   getState() { return undefined; },
@@ -173,7 +178,7 @@ window.acquireVsCodeApi = () => ({
 const scene = location.hash.slice(1);
 deliver({ type: 'model', model: scene === 'file' ? window.__FILE_MODEL__ : window.__MODEL__ });
 deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : window.__THREADS__ });
-deliver({ type: 'state', state: { viewed: false, pending: 1, pendingReview: true } });
+deliver({ type: 'state', state: panelState });
 // Headless Firefox captures from the top of the page, so a scene hides the cells above its subject.
 const scrollTo = el => {
   const card = el && el.closest('main > *');

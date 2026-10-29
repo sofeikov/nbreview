@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import type { NotebookChanges, NotebookEntry, OtherFile } from './session.ts';
 import type { ReviewState } from './state.ts';
 import type { GhThread } from './github.ts';
+import type { CommentFilter } from './core/commentFilter.ts';
 import { basename, buildFolderTree, dirname, shortPath, treeOrder, type FolderNode } from './paths.ts';
 
 export type Node =
@@ -129,7 +130,8 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         const fresh = freshness(this.state, entry.path);
         const item = new vscode.TreeItem(fileLayout() === 'tree' ? basename(entry.path) : shortPath(entry.path, [...s.notebooks.keys()]));
         const changes = s.notebookChanges(entry.path);
-        item.description = [fresh && 'new', unresolved(threads), drafts ? `✎${drafts}` : '', changeCounts(changes)]
+        const filter = this.state.commentFilter();
+        item.description = [fresh && 'new', unresolved(threads, filter), drafts ? `✎${drafts}` : '', changeCounts(changes)]
           .filter(Boolean)
           .join(' ');
         item.tooltip = [
@@ -138,7 +140,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
           changesSummary(changes),
           `In the .ipynb file on GitHub: +${entry.file.additions} −${entry.file.deletions} lines`,
           fresh,
-          threadSummary(threads),
+          threadSummary(threads, filter),
           entry.error && `⚠ ${entry.error}`,
         ].filter(Boolean).join('\n');
         item.iconPath = new vscode.ThemeIcon('notebook', statusColor(entry.file.status));
@@ -153,14 +155,15 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         const threads = (s.fileThreads.get(other.file.filename) ?? []).map(f => f.gh);
         const pending = threads.reduce((n, t) => n + t.comments.filter(c => c.pending).length, 0);
         const fresh = freshness(this.state, other.file.filename);
+        const filter = this.state.commentFilter();
         item.description = [
           fresh && 'new',
-          unresolved(threads),
+          unresolved(threads, filter),
           pending ? `✎${pending}` : '',
           `+${other.file.additions} −${other.file.deletions}`,
           fileLayout() === 'list' ? dirname(other.file.filename) : '',
         ].filter(Boolean).join(' ');
-        item.tooltip = [other.file.filename, fresh, threadSummary(threads)].filter(Boolean).join('\n');
+        item.tooltip = [other.file.filename, fresh, threadSummary(threads, filter)].filter(Boolean).join('\n');
         item.iconPath = new vscode.ThemeIcon('file', statusColor(other.file.status));
         item.contextValue = s.changedSince(other.file.filename) ? 'file since' : 'file';
         item.checkboxState = this.checkbox(other.file.filename);
@@ -249,16 +252,29 @@ function changesSummary(c: NotebookChanges | undefined): string {
   return parts.length ? `Changed: ${parts.join('; ')}` : 'Only execution counts or metadata changed';
 }
 
-/** "💬2": the threads on GitHub still waiting to be resolved. */
-function unresolved(threads: GhThread[]): string {
+/** "💬2": the threads on GitHub still waiting to be resolved, unless comments are hidden. */
+function unresolved(threads: GhThread[], filter: CommentFilter): string {
+  if (filter === 'none') {
+    return '';
+  }
   const n = threads.filter(t => !t.isResolved && t.comments.some(c => !c.pending)).length;
   return n ? `💬${n}` : '';
 }
 
-function threadSummary(threads: GhThread[]): string {
+function threadSummary(threads: GhThread[], filter: CommentFilter): string {
   const published = threads.filter(t => t.comments.some(c => !c.pending));
   const resolved = published.filter(t => t.isResolved).length;
-  return published.length ? `${published.length - resolved} unresolved, ${resolved} resolved conversation${published.length === 1 ? '' : 's'}` : '';
+  const plural = (n: number) => `conversation${n === 1 ? '' : 's'}`;
+  if (!published.length) {
+    return '';
+  }
+  if (filter === 'none') {
+    return `${published.length} ${plural(published.length)}, hidden`;
+  }
+  if (filter === 'unresolved' && resolved) {
+    return `${published.length - resolved} unresolved ${plural(published.length - resolved)}; ${resolved} resolved, hidden`;
+  }
+  return `${published.length - resolved} unresolved, ${resolved} resolved ${plural(published.length)}`;
 }
 
 /** Why a file is marked new: it changed after the viewer's last review, or after they marked it viewed. */

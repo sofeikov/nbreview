@@ -66,6 +66,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nbreview.viewAsTree', () => setFileLayout('tree')),
     vscode.commands.registerCommand('nbreview.viewAsList', () => setFileLayout('list')),
     onDidChangeFileLayout(updateLayoutContext),
+    vscode.commands.registerCommand('nbreview.showAllComments', () => state.setCommentFilter('all')),
+    vscode.commands.registerCommand('nbreview.showUnresolvedComments', () => state.setCommentFilter('unresolved')),
+    vscode.commands.registerCommand('nbreview.hideComments', () => state.setCommentFilter('none')),
+    state.onDidChange(e => e.filter && updateFilterContext()),
+    // Changing the setting takes over from the last choice.
+    vscode.workspace.onDidChangeConfiguration(e => e.affectsConfiguration('nbreview.showComments') && void state.setCommentFilter(undefined)),
     // "Add Single Comment" is hidden while a review is pending, as on github.com.
     state.onDidChange(() => void vscode.commands.executeCommand('setContext', 'nbreview.pendingReview', state.hasPendingReview())),
     treeView.onDidChangeCheckboxState(e => {
@@ -144,6 +150,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   updateLayoutContext();
+  updateFilterContext();
   refreshIfStale();
   watchBranch(context);
 
@@ -214,6 +221,11 @@ function updateActiveContext(): void {
 
 function updateLayoutContext(): void {
   void vscode.commands.executeCommand('setContext', 'nbreview.fileLayout', fileLayout());
+}
+
+/** Picks the title bar's Comments button for the choice in force: its tooltip names it, and its menu offers the other two. */
+function updateFilterContext(): void {
+  void vscode.commands.executeCommand('setContext', 'nbreview.commentFilter', state.commentFilter());
 }
 
 function setActiveViewed(arg: vscode.Uri | string | undefined, viewed: boolean): Promise<void> | undefined {

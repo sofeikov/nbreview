@@ -3,6 +3,7 @@
 import DOMPurify from 'dompurify';
 import type { Anchor, CellVM, CommentVM, HostMessage, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
 import { REACTIONS, REACTION_NAMES, type ReactionContent } from '../core/reactions.ts';
+import { showsThread, type CommentFilter } from '../core/commentFilter.ts';
 import { diffPixels, pairImages, type ImagePair } from './imageDiff.ts';
 
 declare function acquireVsCodeApi(): {
@@ -21,8 +22,6 @@ interface UiState {
   expanded: Record<string, boolean>;
   /** Threads opened or closed by hand (resolved ones start closed). */
   threadOpen: Record<string, boolean>;
-  /** Leave resolved threads out of the page. */
-  hideResolved?: boolean;
   /** How a changed plot is compared with its old version. */
   imageMode?: ImageMode;
   scrollY?: number;
@@ -40,9 +39,11 @@ const saved = (vscode.getState() ?? {}) as Partial<UiState>;
 const ui: UiState = { showAll: false, mdSource: {}, expanded: {}, threadOpen: {}, ...saved };
 let model: ViewModel | undefined;
 let threads: ThreadVM[] = [];
-/** The threads on the page: all of them, or the unresolved ones. */
+/** The threads on the page: those the Comments filter lets through. */
 let shown: ThreadVM[] = [];
-let panel: PanelState = { viewed: false, pending: 0, pendingReview: false };
+let panel: PanelState = { viewed: false, pending: 0, pendingReview: false, comments: 'all' };
+/** The Comments filter's menu is open. */
+let filterOpen = false;
 let requestSeq = 0;
 const composers = new Map<string, Composer>();
 const replies = new Map<string, { text: string; saving?: number; savingMode?: 'review' | 'single' }>();
@@ -151,7 +152,7 @@ function render(): void {
   focusKey = active?.dataset.focusKey;
   const caret = active instanceof HTMLTextAreaElement ? active.selectionStart : undefined;
 
-  shown = ui.hideResolved ? threads.filter(t => !t.resolved) : threads;
+  shown = threads.filter(t => showsThread(panel.comments, { isResolved: t.resolved, comments: t.comments }));
   app.replaceChildren(renderToolbar(model), renderCells(model), h('div', { class: 'toast', id: 'toast' }));
   scheduleChangeMap();
   if (!restoredScroll) {
@@ -220,15 +221,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
       h('div', { class: 'segmented' },
         button(icon('arrow-up'), () => jump(-1), { title: 'Previous change (p)' }),
         button(icon('arrow-down'), () => jump(1), { title: 'Next change (n)' })),
-      threads.length > 0 && h('div', { class: 'segmented' },
-        button([icon('comment-discussion'), threadCount()], () => jumpThread(1), {
-          title: 'Next comment (c). The count is of unresolved threads, out of all of them.',
-        }),
-        threads.some(t => t.resolved) && button(icon(ui.hideResolved ? 'filter-filled' : 'filter'), () => { ui.hideResolved = !ui.hideResolved; persist(); render(); }, {
-          class: ui.hideResolved ? 'on' : '',
-          title: ui.hideResolved ? 'Show resolved threads' : 'Hide resolved threads',
-          'aria-pressed': ui.hideResolved ? 'true' : 'false',
-        })),
+      commentControls(),
       button([icon('diff'), 'Text diff'], () => post({ type: 'openTextDiff' }), { class: 'ghost', title: 'Open the line-by-line text diff' }),
       button([icon('arrow-right'), 'Next file'], () => post({ type: 'nextFile' }), { class: 'ghost', title: 'Open the next file not marked viewed' }),
       h('label', { class: 'viewed', title: 'Mark this notebook as viewed on GitHub' },
@@ -276,10 +269,57 @@ function noiseButton(m: ViewModel): HTMLElement | false {
   });
 }
 
-/** "3" when every thread is open, "2/5" when some are resolved. */
+/** "3" when every thread shown is open, "2/5" when some are resolved. */
 function threadCount(): string {
-  const open = threads.filter(t => !t.resolved).length;
-  return open === threads.length ? String(open) : `${open}/${threads.length}`;
+  const open = shown.filter(t => !t.resolved).length;
+  return open === shown.length ? String(open) : `${open}/${shown.length}`;
+}
+
+const FILTERS: [CommentFilter, string, string][] = [
+  ['all', 'All comments', 'Every conversation; resolved ones start folded.'],
+  ['unresolved', 'Unresolved only', 'Leave resolved conversations out.'],
+  ['none', 'No comments', 'Leave every conversation out.'],
+];
+
+/**
+ * The thread count, which jumps to the next thread, and the Comments filter: all threads, the
+ * unresolved ones, or none. The filter is shared with the text diff and the Review panel.
+ */
+function commentControls(): HTMLElement | false {
+  if (!threads.length) {
+    return false;
+  }
+  const filter = panel.comments;
+  const hidden = threads.length - shown.length;
+  const name = FILTERS.find(([value]) => value === filter)![1];
+  const filtering = filter !== 'all';
+  return h('div', { class: 'filter-wrap' },
+    h('div', { class: 'segmented' },
+      shown.length > 0 && button([icon('comment-discussion'), threadCount()], () => jumpThread(1), {
+        title: 'Next comment (c). The count is of unresolved threads, out of all those shown.',
+      }),
+      button([icon(filtering ? 'filter-filled' : 'filter'), hidden ? `${hidden} hidden` : null, icon('chevron-down')], () => { filterOpen = !filterOpen; render(); }, {
+        class: filtering ? 'on' : '',
+        title: `Comments: ${name}${hidden ? ` (${hidden} of ${threads.length} conversations hidden)` : ''}`,
+        'aria-haspopup': 'true',
+        'aria-expanded': filterOpen ? 'true' : 'false',
+      })),
+    filterOpen && renderFilterBox());
+}
+
+function renderFilterBox(): HTMLElement {
+  const pick = (value: CommentFilter) => {
+    filterOpen = false;
+    panel = { ...panel, comments: value };
+    post({ type: 'setCommentFilter', filter: value });
+    render();
+  };
+  return h('div', { class: 'filter-box', role: 'dialog', 'aria-label': 'Show comments' },
+    h('div', { class: 'submit-options' }, ...FILTERS.map(([value, label, hint]) =>
+      h('label', { class: `option${panel.comments === value ? ' on' : ''}` },
+        h('input', { type: 'radio', name: 'comment-filter', value, checked: panel.comments === value, onchange: () => pick(value) }),
+        h('span', {}, h('b', { text: label }), h('span', { class: 'muted', text: hint }))))),
+    h('div', { class: 'muted', text: 'Your pending comments always show. The text diff and the Review panel’s counts follow this too.' }));
 }
 
 /** Comments can't be made on the old side when it shows the last review: it isn't part of the pull request. */
@@ -1411,6 +1451,10 @@ window.addEventListener('click', e => {
 }, true);
 
 window.addEventListener('mousedown', e => {
+  if (filterOpen && !(e.target as HTMLElement).closest('.filter-wrap')) {
+    filterOpen = false;
+    render();
+  }
   if (submitBox.open && !submitBox.sending && !(e.target as HTMLElement).closest('.submit-wrap')) {
     submitBox.open = false;
     render();
@@ -1419,6 +1463,11 @@ window.addEventListener('mousedown', e => {
 
 window.addEventListener('keydown', e => {
   const target = e.target as HTMLElement;
+  if (e.key === 'Escape' && filterOpen) {
+    filterOpen = false;
+    render();
+    return;
+  }
   if (target.closest('textarea, input') || e.ctrlKey || e.metaKey || e.altKey) {
     return;
   }
