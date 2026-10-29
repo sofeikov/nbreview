@@ -152,7 +152,7 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ### 0.15.0
 - **Mark a whole folder as viewed.** Folders in the Review panel, and the **Notebooks** and **Other files** groups, have a Viewed checkbox: tick one to mark every file below it as viewed on GitHub, at any depth, for example all the tests at once. It is ticked when every file below is viewed. Right-click a folder for **Mark Folder as Viewed** or **Mark Folder as Not Viewed**; from the Command Palette the same commands let you pick any folder, which also works in the list layout.
-- Marking many files viewed takes a few requests to GitHub instead of one per file.
+- Marking many files viewed takes a few requests to GitHub instead of one per file. The checkboxes change at once; while GitHub saves them, the Review panel shows its progress bar, and the status bar says how many files are being marked.
 
 ### 0.14.1
 - Fix: a suggestion on several lines, of which only the last is in the pull request's diff, is now posted as a plain code block. Before, committing it on GitHub replaced only the last line with all the selected lines, so the lines above it appeared twice. The same applies to a cell whose source is stored as one string in the notebook.

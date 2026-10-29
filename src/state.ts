@@ -300,8 +300,12 @@ export class ReviewState {
       s.viewed.set(p, viewed);
     }
     this.changed.fire({ viewed: true });
+    // The checkboxes change at once; the Review panel's progress bar, and for several files a
+    // status bar message, show that GitHub hasn't saved them yet.
+    const send = () => vscode.window.withProgress({ location: { viewId: 'nbreview.files' } }, () => s.gh.setViewed(s.pr.nodeId, changing, viewed));
+    const title = `${viewed ? 'Marking' : 'Unmarking'} ${changing.length} files as viewed`;
     try {
-      await s.gh.setViewed(s.pr.nodeId, changing, viewed);
+      await (changing.length > 1 ? vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title }, send) : send());
     } catch (e) {
       for (const [p, v] of previous) {
         s.viewed.set(p, v);
