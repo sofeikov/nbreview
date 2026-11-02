@@ -4,6 +4,7 @@
 import * as vscode from 'vscode';
 import type { NewFileComment, ReviewState } from './state.ts';
 import { planFileComment } from './core/fileComments.ts';
+import { imageMime } from './core/binary.ts';
 import type { Anchor } from './webview/protocol.ts';
 import type { TextReview } from './textReview.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
@@ -353,6 +354,10 @@ export class VisualReview implements vscode.Disposable {
     const s = this.state.session!;
     const file = s.files.find(f => f.filename === path)!;
     const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
+    const mime = imageMime(path);
+    if (mime && mime !== 'image/svg+xml') {
+      return this.imageModel(vm, path, since);
+    }
     const [base, head] = await Promise.all([s.content(path, 'LEFT'), s.content(path, 'RIGHT')]);
     let old = base;
     if (since?.on && s.lastReview) {
@@ -366,6 +371,23 @@ export class VisualReview implements vscode.Disposable {
       return { ...vm.buildFileViewModel(file, undefined, undefined, pr), notice };
     }
     return vm.buildFileViewModel(file, old, head, pr, since?.on ? { label: since.label } : undefined, { hideNoise: this.hideNoise() });
+  }
+
+  /** An image file as its old and new pictures. */
+  private async imageModel(vm: typeof import('./viewModel.ts'), path: string, since: SinceState | undefined): Promise<ViewModel> {
+    const s = this.state.session!;
+    const file = s.files.find(f => f.filename === path)!;
+    const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
+    const [base, head] = await Promise.all([s.bytes(path, 'LEFT'), s.bytes(path, 'RIGHT')]);
+    let old = base;
+    if (since?.on && s.lastReview) {
+      old = (await s.bytesAt(path, s.lastReview.sha)) ?? (file.previousFilename ? await s.bytesAt(file.previousFilename, s.lastReview.sha) : undefined);
+    }
+    // The pictures go to the page inside its data, as base64.
+    if ([old, head].some(b => b && b.length > 10_000_000)) {
+      return { ...vm.buildFileViewModel(file, undefined, undefined, pr), notice: 'This image is too large to show here.' };
+    }
+    return vm.buildImageViewModel(file, old, head, pr, since?.on ? { label: since.label } : undefined);
   }
 
   /** Whether the file can be, and is, compared with the viewer's last review. */

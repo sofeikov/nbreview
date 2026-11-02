@@ -14,6 +14,7 @@ import {
   planComment,
 } from '../src/core/anchor.ts';
 import { isCommentFilter, showsThread } from '../src/core/commentFilter.ts';
+import { formatSize, imageMime, imageSize, isBinary } from '../src/core/binary.ts';
 
 const fx = (name: string) => readFileSync(join(process.cwd(), 'test', 'fixtures', name), 'utf8');
 const base = parseNotebook(fx('small.base.ipynb'));
@@ -295,4 +296,26 @@ test('a review tab title leads back to its file', () => {
   assert.equal(pathFromPageTitle(pageTitle('a/__init__.py', false, 14), 14, files), undefined);
   assert.equal(pathFromPageTitle(pageTitle('src/train.py', false, 9), 14, files), undefined);
   assert.equal(pathFromPageTitle('train.ipynb', 14, files), undefined);
+});
+
+test('images are recognised by extension, binary files by a NUL byte', () => {
+  assert.equal(imageMime('docs/figures/fig-1.PNG'), 'image/png');
+  assert.equal(imageMime('a/photo.jpeg'), 'image/jpeg');
+  assert.equal(imageMime('logo.svg'), 'image/svg+xml');
+  assert.equal(imageMime('report.pdf'), undefined);
+  assert.equal(imageMime('dir.png/README'), undefined);
+  assert.equal(isBinary(Uint8Array.from([0x89, 0x50, 0, 1])), true);
+  assert.equal(isBinary(new TextEncoder().encode('plain text')), false);
+});
+
+test('image sizes are read from PNG, GIF and JPEG headers', () => {
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x02, 0x80, 0, 0, 0x01, 0xe0]);
+  assert.deepEqual(imageSize(png), { w: 640, h: 480 });
+  const gif = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x20, 0x03, 0x58, 0x02]);
+  assert.deepEqual(imageSize(gif), { w: 800, h: 600 });
+  // SOI, an APP0 segment of 4 bytes, then a baseline frame header.
+  const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 17, 8, 0, 100, 0, 200, 3, 0, 0, 0, 0, 0]);
+  assert.deepEqual(imageSize(jpeg), { w: 200, h: 100 });
+  assert.equal(imageSize(new TextEncoder().encode('not an image')), undefined);
+  assert.deepEqual([formatSize(812), formatSize(53_000), formatSize(1_500_000)], ['812 B', '52 KB', '1.4 MB']);
 });

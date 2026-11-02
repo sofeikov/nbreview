@@ -187,6 +187,12 @@ export class GitHub {
 
   /** Raw file content at a commit, or undefined when the file doesn't exist there. */
   async getContent(owner: string, repo: string, path: string, ref: string): Promise<string | undefined> {
+    const bytes = await this.getBytes(owner, repo, path, ref);
+    return bytes && new TextDecoder().decode(bytes);
+  }
+
+  /** The file's bytes at a commit, which images and other binary files need: text would garble them. */
+  async getBytes(owner: string, repo: string, path: string, ref: string): Promise<Uint8Array | undefined> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     const res = await this.request(`/repos/${owner}/${repo}/contents/${encoded}?ref=${ref}`, { accept: 'application/vnd.github.raw' });
     if (res.status === 404) {
@@ -195,7 +201,7 @@ export class GitHub {
     if (!res.ok) {
       throw new Error(`GitHub ${res.status} fetching ${path}@${ref.slice(0, 7)}`);
     }
-    return await res.text();
+    return new Uint8Array(await res.arrayBuffer());
   }
 
   /**

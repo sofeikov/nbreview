@@ -2,7 +2,8 @@
 // file as a single code (or Markdown) cell, with its threads and pending comments.
 import type { FileThread, NotebookEntry, PlacedThread } from './session.ts';
 import type { GhThread, PrFile } from './github.ts';
-import type { NbCell, NbOutput } from './core/notebook.ts';
+import { fnv, type NbCell, type NbOutput } from './core/notebook.ts';
+import { formatSize, imageMime, imageSize } from './core/binary.ts';
 import { diffCells, onlyWhitespaceDiffers } from './core/cellDiff.ts';
 import { anchorForDocLines, type ReviewDoc } from './core/reviewDoc.ts';
 import { parseBody } from './core/anchor.ts';
@@ -70,6 +71,8 @@ export function buildFileViewModel(
   options: { hideNoise?: boolean } = {},
 ): ViewModel {
   const language = fileLanguage(file.filename);
+  // An SVG is shown as its source and, below it, as the picture.
+  const svg = imageMime(file.filename) === 'image/svg+xml';
   const cell = (text: string | undefined): NbCell[] => (text === undefined ? [] : [{
     index: 0,
     id: 'file',
@@ -77,7 +80,7 @@ export function buildFileViewModel(
     source: text.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n'),
     jsonLines: [],
     cellJsonLine: 0,
-    outputs: [],
+    outputs: svg ? [{ kind: 'image', label: `SVG · ${formatSize(new TextEncoder().encode(text).length)}`, textLines: [], mime: 'image/svg+xml', data: text, hash: fnv(text) }] : [],
   }]);
   return modelFromCells({
     kind: 'file',
@@ -90,6 +93,70 @@ export function buildFileViewModel(
     since,
     hideNoise: !!options.hideNoise,
   });
+}
+
+/**
+ * The page's data for an image file (not an SVG, whose source is text): one cell with the old and
+ * the new picture, so a changed image gets the same comparison as a changed plot.
+ */
+export function buildImageViewModel(
+  file: PrFile,
+  base: Uint8Array | undefined,
+  head: Uint8Array | undefined,
+  pr: { number: number; title: string; url: string },
+  since?: { label: string },
+): ViewModel {
+  const mime = imageMime(file.filename) ?? 'application/octet-stream';
+  const picture = (bytes: Uint8Array | undefined): OutputVM[] => {
+    if (!bytes) {
+      return [];
+    }
+    const data = Buffer.from(bytes).toString('base64');
+    const size = imageSize(bytes);
+    const type = file.filename.slice(file.filename.lastIndexOf('.') + 1).toUpperCase();
+    return [{
+      index: 0,
+      hash: fnv(data),
+      kind: 'image',
+      label: [type, size && `${size.w}×${size.h}`, formatSize(bytes.length)].filter(Boolean).join(' · '),
+      imageSrc: `data:${mime};base64,${data}`,
+    }];
+  };
+  const baseOutputs = picture(base);
+  const headOutputs = picture(head);
+  const status: CellVM['status'] = !base ? 'added' : !head ? 'removed' : baseOutputs[0].hash === headOutputs[0].hash ? 'unchanged' : 'modified';
+  const cell: CellVM = {
+    key: head ? 'file' : 'file:removed',
+    status,
+    moved: false,
+    sourceChanged: false,
+    outputsChanged: status === 'modified',
+    type: 'raw',
+    baseId: base && 'file',
+    headId: head && 'file',
+    baseNumber: base && 1,
+    headNumber: head && 1,
+    baseLines: [],
+    headLines: [],
+    baseSource: [],
+    headSource: [],
+    ops: [],
+    baseOutputs,
+    headOutputs,
+    title: '',
+  };
+  return {
+    pr,
+    path: file.filename,
+    kind: 'file',
+    image: true,
+    ...(since ? { since: { label: since.label } } : {}),
+    hideNoise: false,
+    noise: { cells: 0, outputs: 0, whitespace: 0 },
+    fileStats: { additions: file.additions, deletions: file.deletions },
+    stats: { additions: 0, deletions: 0, modified: status === 'modified' ? 1 : 0, added: status === 'added' ? 1 : 0, removed: status === 'removed' ? 1 : 0, moved: 0 },
+    cells: base || head ? [cell] : [],
+  };
 }
 
 function modelFromCells(args: {
@@ -114,18 +181,20 @@ function modelFromCells(args: {
     // Counted whether or not it is hidden, so the page can say how much there is to hide.
     const whitespace = !!p.base && !!p.head && p.base.type === p.head.type && onlyWhitespaceDiffers(p.base.source, p.head.source);
     const sourceChanged = p.sourceChanged && !(hide && whitespace);
-    const outputsOnly = !!p.base && !!p.head && !sourceChanged && !whitespace && p.outputsChanged;
-    noise.outputs += outputsOnly || (whitespace && p.outputsChanged) ? 1 : 0;
+    // A file's only output is its own picture (an SVG), which changes with its source: never noise.
+    const outputNoise = p.outputsChanged && args.kind === 'notebook';
+    const outputsOnly = !!p.base && !!p.head && !sourceChanged && !whitespace && outputNoise;
+    noise.outputs += outputsOnly || (whitespace && outputNoise) ? 1 : 0;
     noise.whitespace += whitespace ? 1 : 0;
     noise.cells += outputsOnly || whitespace ? 1 : 0;
-    const hidden = hide && !!p.base && !!p.head && !sourceChanged && (p.outputsChanged || whitespace);
+    const hidden = hide && !!p.base && !!p.head && !sourceChanged && (outputNoise || whitespace);
     return {
       key: (p.head ?? p.base)!.id + (p.head ? '' : ':removed'),
       status: hidden ? 'unchanged' : p.status,
       moved: p.moved,
       sourceChanged,
       outputsChanged: p.outputsChanged && !hidden,
-      ...(hidden ? { noiseHidden: p.outputsChanged && whitespace ? 'outputs and whitespace' : p.outputsChanged ? 'outputs' : 'whitespace' } : {}),
+      ...(hidden ? { noiseHidden: outputNoise && whitespace ? 'outputs and whitespace' : outputNoise ? 'outputs' : 'whitespace' } : {}),
       type: any.type,
       baseId: p.base?.id,
       headId: p.head?.id,

@@ -7,7 +7,7 @@ import { diffCells, diffLines, notebookChanges, onlyWhitespaceDiffers } from '..
 import { anchorForDocLines, buildReviewDoc, docLineForSource, docLinesForAnchor } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
 import { highlightLines, renderMarkdownCell } from '../src/render.ts';
-import { buildFileThreads, buildFileViewModel, buildThreads, buildViewModel, fileLanguage } from '../src/viewModel.ts';
+import { buildFileThreads, buildFileViewModel, buildImageViewModel, buildThreads, buildViewModel, fileLanguage } from '../src/viewModel.ts';
 import { planFileComment } from '../src/core/fileComments.ts';
 import { diffPixels, pairImages } from '../src/webview/imageDiff.ts';
 import type { NotebookEntry } from '../src/session.ts';
@@ -352,6 +352,37 @@ test('a changed file is one cell, with its lines diffed and counted', () => {
   assert.equal(quiet.cells[0].noiseHidden, 'whitespace');
   const since = buildFileViewModel(file, 'a\n', 'b\n', pr, { label: 'your review' });
   assert.deepEqual(since.since, { label: 'your review' });
+});
+
+test('an image file is one cell with the old and new pictures, compared like a changed plot', () => {
+  const pr = { number: 7, title: 't', url: 'u' };
+  const file = { filename: 'docs/fig.png', status: 'modified' as const, additions: 0, deletions: 0, patch: undefined };
+  const png = (w: number) => Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, w, 0, 0, 0, 20]);
+  const vm = buildImageViewModel(file, png(10), png(30), pr);
+  assert.deepEqual([vm.kind, vm.image, vm.cells.length], ['file', true, 1]);
+  const [c] = vm.cells;
+  assert.deepEqual([c.status, c.sourceChanged, c.outputsChanged, c.headSource], ['modified', false, true, []]);
+  assert.equal(c.headOutputs[0].label, 'PNG · 30×20 · 24 B');
+  assert.match(c.headOutputs[0].imageSrc!, /^data:image\/png;base64,/);
+  assert.equal(pairImages(c.baseOutputs, c.headOutputs).length, 1, 'a changed image gets the comparison');
+
+  assert.equal(buildImageViewModel(file, png(10), png(10), pr).cells[0].status, 'unchanged');
+  const added = buildImageViewModel({ ...file, status: 'added' }, undefined, png(10), pr).cells[0];
+  assert.deepEqual([added.status, added.baseOutputs.length, added.headOutputs.length], ['added', 0, 1]);
+  const removed = buildImageViewModel({ ...file, status: 'removed' }, png(10), undefined, pr).cells[0];
+  assert.deepEqual([removed.status, removed.baseId, removed.headId], ['removed', 'file', undefined]);
+});
+
+test('an SVG file shows its source and its picture; a whitespace change to it is not output noise', () => {
+  const pr = { number: 7, title: 't', url: 'u' };
+  const file = { filename: 'logo.svg', status: 'modified' as const, additions: 1, deletions: 1, patch: '' };
+  const vm = buildFileViewModel(file, '<svg><rect width="1"/></svg>\n', '<svg><rect width="2"/></svg>\n', pr);
+  const [c] = vm.cells;
+  assert.deepEqual([c.status, c.sourceChanged, c.outputsChanged], ['modified', true, true]);
+  assert.match(c.headOutputs[0].imageSrc!, /^data:image\/svg\+xml/);
+  const quiet = buildFileViewModel(file, '<svg><rect/></svg>\n', '<svg>  <rect/></svg>\n', pr, undefined, { hideNoise: true });
+  assert.deepEqual([quiet.cells[0].noiseHidden, quiet.noise.outputs, quiet.cells[0].outputsChanged], ['whitespace', 0, false]);
+  assert.equal(buildFileViewModel({ ...file, filename: 'a.xml' }, '<a/>', '<b/>', pr).cells[0].headOutputs.length, 0);
 });
 
 test('threads on a file sit on their lines; file comments on the whole file', () => {

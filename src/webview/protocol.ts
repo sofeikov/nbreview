@@ -11,6 +11,8 @@ export interface ViewModel {
   kind: 'notebook' | 'file';
   /** For files: the language they are highlighted in (`markdown` ones are rendered). */
   language?: string;
+  /** An image file: its one cell has the old and new pictures as outputs, and no lines. */
+  image?: boolean;
   /** Why the file isn't shown (binary, too large), instead of its cells. */
   notice?: string;
   /**

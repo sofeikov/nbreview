@@ -79,6 +79,7 @@ export class ReviewSession {
   sinceReviewProblem?: string;
   private readonly sinceDocs = new Map<string, Promise<ReviewDoc>>();
   private readonly changes = new Map<string, NotebookChanges>();
+  private readonly raw = new Map<string, Promise<Uint8Array | undefined>>();
   private readonly contents = new Map<string, Promise<string | undefined>>();
   private readonly commentables = new Map<string, CommentableLines>();
 
@@ -164,13 +165,22 @@ export class ReviewSession {
 
   /** Cached raw content of a changed file on one side of the PR. */
   content(path: string, side: Side): Promise<string | undefined> {
+    return this.at(path, side, (p, ref) => this.contentAt(p, ref));
+  }
+
+  /** Cached bytes of a changed file on one side of the PR, for images and other binary files. */
+  bytes(path: string, side: Side): Promise<Uint8Array | undefined> {
+    return this.at(path, side, (p, ref) => this.bytesAt(p, ref));
+  }
+
+  private at<T>(path: string, side: Side, read: (path: string, ref: string) => Promise<T | undefined>): Promise<T | undefined> {
     const file = this.files.find(f => f.filename === path);
     const ref = side === 'LEFT' ? this.pr.baseSha : this.pr.headSha;
     const at = side === 'LEFT' ? file?.previousFilename ?? path : path;
     if ((side === 'LEFT' && file?.status === 'added') || (side === 'RIGHT' && file?.status === 'removed')) {
       return Promise.resolve(undefined);
     }
-    return this.contentAt(at, ref);
+    return read(at, ref);
   }
 
   /** Cached raw content of a file at a commit. */
@@ -178,8 +188,19 @@ export class ReviewSession {
     const key = `${ref}:${path}`;
     let p = this.contents.get(key);
     if (!p) {
-      p = this.gh.getContent(this.pr.owner, this.pr.repo, path, ref);
+      p = this.bytesAt(path, ref).then(bytes => bytes && new TextDecoder().decode(bytes));
       this.contents.set(key, p);
+    }
+    return p;
+  }
+
+  /** Cached bytes of a file at a commit. */
+  bytesAt(path: string, ref: string): Promise<Uint8Array | undefined> {
+    const key = `${ref}:${path}`;
+    let p = this.raw.get(key);
+    if (!p) {
+      p = this.gh.getBytes(this.pr.owner, this.pr.repo, path, ref);
+      this.raw.set(key, p);
     }
     return p;
   }

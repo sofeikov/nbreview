@@ -9,9 +9,61 @@ import { parseBody, type Side } from './core/anchor.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
 import type { NewComment, NewFileComment, ReviewState } from './state.ts';
 import { basename } from './paths.ts';
+import { imageMime, isBinary } from './core/binary.ts';
 
 export const SCHEME = 'nbreview';
 export const RAW_SCHEME = 'nbreview-raw';
+/** Binary files, as `/<commit>/<path>`. */
+export const BINARY_SCHEME = 'nbreview-bin';
+
+/**
+ * Binary files served as bytes, so that VS Code opens them in its own viewer (images in its image
+ * preview) rather than as garbled text, which is all a text document provider can give. A commit
+ * never changes, so neither do these files.
+ */
+class BinaryFiles implements vscode.FileSystemProvider {
+  readonly onDidChangeFile = new vscode.EventEmitter<vscode.FileChangeEvent[]>().event;
+
+  constructor(private readonly state: ReviewState) {}
+
+  watch(): vscode.Disposable {
+    return new vscode.Disposable(() => undefined);
+  }
+
+  async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
+    const bytes = await this.readFile(uri);
+    return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: bytes.length, permissions: vscode.FilePermission.Readonly };
+  }
+
+  async readFile(uri: vscode.Uri): Promise<Uint8Array> {
+    const [, ref, ...path] = uri.path.split('/');
+    const bytes = await this.state.session?.bytesAt(path.join('/'), ref);
+    if (!bytes) {
+      throw vscode.FileSystemError.FileNotFound(uri);
+    }
+    return bytes;
+  }
+
+  readDirectory(uri: vscode.Uri): never {
+    throw vscode.FileSystemError.NoPermissions(uri);
+  }
+
+  createDirectory(uri: vscode.Uri): never {
+    throw vscode.FileSystemError.NoPermissions(uri);
+  }
+
+  writeFile(uri: vscode.Uri): never {
+    throw vscode.FileSystemError.NoPermissions(uri);
+  }
+
+  delete(uri: vscode.Uri): never {
+    throw vscode.FileSystemError.NoPermissions(uri);
+  }
+
+  rename(uri: vscode.Uri): never {
+    throw vscode.FileSystemError.NoPermissions(uri);
+  }
+}
 
 class NbComment implements vscode.Comment {
   mode = vscode.CommentMode.Preview;
@@ -94,6 +146,7 @@ export class TextReview implements vscode.Disposable {
       this.outputDeco,
       vscode.workspace.registerTextDocumentContentProvider(SCHEME, provider),
       vscode.workspace.registerTextDocumentContentProvider(RAW_SCHEME, provider),
+      vscode.workspace.registerFileSystemProvider(BINARY_SCHEME, new BinaryFiles(state), { isReadonly: true }),
       vscode.languages.registerHoverProvider({ scheme: SCHEME }, new ReviewHover(uri => this.docFor(uri), ctx)),
       vscode.languages.registerDocumentSymbolProvider({ scheme: SCHEME }, symbols),
       vscode.languages.registerFoldingRangeProvider({ scheme: SCHEME }, symbols),
@@ -179,6 +232,14 @@ export class TextReview implements vscode.Disposable {
     if (!s) {
       return;
     }
+    const file = s.files.find(f => f.filename === path);
+    const [base, head] = await Promise.all([s.bytes(path, 'LEFT'), s.bytes(path, 'RIGHT')]);
+    if (this.binary(path, base, head)) {
+      const left = base && this.binaryUri(file?.previousFilename ?? path, s.pr.baseSha);
+      const right = head && this.binaryUri(path, s.pr.headSha);
+      await this.openBinaryDiff(left, right, `${basename(path)} (#${s.pr.number})`);
+      return;
+    }
     await vscode.commands.executeCommand('vscode.diff', this.rawUri(path, 'LEFT'), this.rawUri(path, 'RIGHT'), `${basename(path)} (#${s.pr.number})`, {
       preview: false,
     });
@@ -187,12 +248,40 @@ export class TextReview implements vscode.Disposable {
   /** The file as it was at the viewer's last review, against the pull request's version. */
   async openSinceReviewDiff(path: string): Promise<void> {
     const s = this.state.session;
-    if (!s?.lastReview) {
+    const last = s?.lastReview;
+    if (!s || !last) {
       return;
     }
-    await vscode.commands.executeCommand('vscode.diff', this.rawUri(path, 'SINCE'), this.rawUri(path, 'RIGHT'), `${basename(path)} (since your review, #${s.pr.number})`, {
+    const title = `${basename(path)} (since your review, #${s.pr.number})`;
+    const previous = s.files.find(f => f.filename === path)?.previousFilename;
+    const oldPath = (await s.bytesAt(path, last.sha)) || !previous ? path : previous;
+    const [old, head] = await Promise.all([s.bytesAt(oldPath, last.sha), s.bytes(path, 'RIGHT')]);
+    if (this.binary(path, old, head)) {
+      await this.openBinaryDiff(old && this.binaryUri(oldPath, last.sha), head && this.binaryUri(path, s.pr.headSha), title);
+      return;
+    }
+    await vscode.commands.executeCommand('vscode.diff', this.rawUri(path, 'SINCE'), this.rawUri(path, 'RIGHT'), title, {
       preview: false,
     });
+  }
+
+  /** Images (but SVGs, which are text and take line comments) and other files with binary content. */
+  private binary(path: string, ...sides: (Uint8Array | undefined)[]): boolean {
+    const mime = imageMime(path);
+    return (!!mime && mime !== 'image/svg+xml') || sides.some(b => b && isBinary(b));
+  }
+
+  binaryUri(path: string, ref: string): vscode.Uri {
+    return vscode.Uri.from({ scheme: BINARY_SCHEME, path: `/${ref}/${path}` });
+  }
+
+  /** VS Code's own diff of a binary file, or the one version there is when it was added or removed. */
+  private async openBinaryDiff(left: vscode.Uri | undefined, right: vscode.Uri | undefined, title: string): Promise<void> {
+    if (left && right) {
+      await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: false });
+    } else if (left ?? right) {
+      await vscode.commands.executeCommand('vscode.open', left ?? right, { preview: false });
+    }
   }
 
   // --- Comment threads ------------------------------------------------------------------------

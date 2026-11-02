@@ -327,6 +327,11 @@ function commentable(side: Side): boolean {
   return !(model?.since && side === 'LEFT');
 }
 
+/** Outputs of a notebook cell take comments; the picture of an image file is the file, commented on as a whole. */
+function outputCommentable(side: Side): boolean {
+  return model?.kind !== 'file' && commentable(side);
+}
+
 // "Finish your review", like on GitHub: a summary, how to submit, and the pending count.
 const submitBox: { open: boolean; text: string; event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'; sending: boolean; error?: string } = {
   open: false,
@@ -477,10 +482,10 @@ function renderCell(c: CellVM): HTMLElement {
     h('span', { class: `type ${c.type}`, text: file ? fileType(model!) : c.type }),
     !file && h('span', { class: 'num', text: `cell ${number}${renumbered}` }),
     !file && h('span', { class: 'id', text: c.headId ?? c.baseId }),
-    c.status !== 'unchanged' && h('span', { class: `status ${c.status}`, text: c.status === 'modified' && !c.sourceChanged ? 'outputs changed' : c.status }),
+    c.status !== 'unchanged' && h('span', { class: `status ${c.status}`, text: c.status === 'modified' && !c.sourceChanged && !file ? 'outputs changed' : c.status }),
     c.moved && h('span', { class: 'status moved', text: 'moved' }),
     c.noiseHidden && h('span', { class: 'status noise', text: `${c.noiseHidden} changed`, title: 'Hidden as noise. Switch "Noise hidden" off in the toolbar to see the change.' }),
-    c.sourceChanged && c.outputsChanged && c.status === 'modified' && h('span', { class: 'status outputs', text: 'outputs changed' }),
+    !file && c.sourceChanged && c.outputsChanged && c.status === 'modified' && h('span', { class: 'status outputs', text: 'outputs changed' }),
     h('span', { class: 'spacer' }),
     isMd && h('div', { class: 'segmented small' },
       button('Rendered', () => { delete ui.mdSource[c.key]; persist(); render(); }, { class: rendered ? 'on' : '' }),
@@ -494,7 +499,9 @@ function renderCell(c: CellVM): HTMLElement {
   if (cellThreads.length || cellComposers.length) {
     card.append(h('div', { class: 'cell-threads' }, ...cellThreads.map(renderThread), ...cellComposers.map(renderComposer)));
   }
-  card.append(rendered ? renderMarkdown(c) : renderSource(c));
+  if (!model?.image) {
+    card.append(rendered ? renderMarkdown(c) : renderSource(c));
+  }
   const outputs = renderOutputs(c);
   if (outputs) {
     card.append(outputs);
@@ -911,7 +918,7 @@ function renderImageCompare(c: CellVM, { base, head }: ImagePair): HTMLElement {
     return h('span', { class: `compare-end ${side === 'LEFT' ? 'before' : 'after'}` },
       h('span', { class: 'col-label', text: side === 'LEFT' ? 'Before' : 'After' }),
       h('span', { class: 'output-label', text: o.label }),
-      commentable(side) && button(icon('comment'), () => openComposer({ side, cellId, kind: 'output', outputIndex: o.index }), {
+      outputCommentable(side) && button(icon('comment'), () => openComposer({ side, cellId, kind: 'output', outputIndex: o.index }), {
         class: 'icon-btn',
         title: `Comment on the ${side === 'LEFT' ? 'old' : 'new'} plot`,
       }));
@@ -1031,7 +1038,7 @@ function renderOutput(c: CellVM, side: Side, o: OutputVM): HTMLElement {
     h('div', { class: 'output-head' },
       h('span', { text: o.label }),
       h('span', { class: 'spacer' }),
-      commentable(side) && button(icon('comment'), () => openComposer(anchor), { class: 'icon-btn', title: 'Comment on this output' })),
+      outputCommentable(side) && button(icon('comment'), () => openComposer(anchor), { class: 'icon-btn', title: 'Comment on this output' })),
     h('div', { class: 'output-body' }, content),
     ...ts.map(renderThread),
     ...cs.map(renderComposer));
