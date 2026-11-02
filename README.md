@@ -154,6 +154,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.17.1
+- Images and plots in the review page are shown whole, fitted to the page, instead of at full size in a box that scrolls. An image file's picture sits in the middle of its card.
+
 ### 0.17.0
 - **Images in the review page.** A changed image file (PNG, JPEG, GIF, WebP, BMP, ICO, AVIF) shows as a picture instead of "This is a binary file". A changed image gets the same Side by side, Swipe, Onion skin and Difference views as a changed plot, with its type, size in pixels and file size; an added or removed one shows as it is. Comment on the image with the file's comment button. An SVG file shows its source diff as before, and its picture below.
 - **Images and binary files in the text diff.** **Text diff** opens an image in VS Code's own image preview, old and new side by side, and any other binary file in whatever VS Code shows it with, instead of the file's bytes as garbled text.

@@ -359,6 +359,13 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .output-body img { max-width: 100%; background: #fff; border-radius: 3px; }
 .output-body pre { margin: 2px 0; font-family: var(--code-font); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 .output-body pre.error { color: var(--vscode-errorForeground); }
+/* Pictures are shown whole, fitted to the page, rather than in a box that scrolls. */
+.output.image .output-body { max-height: none; overflow: visible; }
+.output.image .output-body img, .compare-body img { max-height: 80vh; }
+/* An image file is the picture itself, so it sits in the middle of its card. */
+.cell.image-file .output-body, .cell.image-file .compare-body { text-align: center; }
+.cell.image-file .compare-side-by-side img { justify-self: center; }
+.cell.image-file .onion-slider { justify-content: center; }
 .html-output table { border-collapse: collapse; font-size: 12px; }
 .html-output th, .html-output td { border: 1px solid var(--border); padding: 2px 8px; text-align: right; }
 /* A changed plot: side by side, swipe, onion skin or the changed pixels. */

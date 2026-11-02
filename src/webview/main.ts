@@ -493,7 +493,7 @@ function renderCell(c: CellVM): HTMLElement {
     commentable(cellAnchor().side) && button(icon('comment'), () => openComposer(cellAnchor()), { class: 'icon-btn', title: file ? 'Comment on the whole file' : 'Comment on this cell' }),
     c.headId && button(icon('diff'), () => post({ type: 'openTextDiff', cellId: file ? undefined : c.headId }), { class: 'icon-btn', title: 'Show in text diff' }),
   );
-  const card = h('section', { class: `cell ${c.status}${c.moved ? ' moved' : ''}`, data: { key: c.key, head: c.headId, base: c.baseId } }, head);
+  const card = h('section', { class: `cell ${c.status}${c.moved ? ' moved' : ''}${model?.image ? ' image-file' : ''}`, data: { key: c.key, head: c.headId, base: c.baseId } }, head);
   const cellThreads = threadsFor(t => t.anchor.kind === 'cell' && matchesCell(t.anchor, c));
   const cellComposers = [...composers.values()].filter(x => x.anchor.kind === 'cell' && matchesCell(x.anchor, c));
   if (cellThreads.length || cellComposers.length) {
