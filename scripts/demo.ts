@@ -273,10 +273,35 @@ const scenes: Record<string, Partial<GhOverview>> = {
     checks: [check('test (3.12)', 'CI', 'pending', 0, { required: true, description: 'In progress' }), check('lint', 'CI', 'success', 1)] as any,
   },
   merged: { state: 'MERGED', mergedBy: 'maria', mergedAt: hoursAgo(0.5), reviewDecision: 'APPROVED' },
+  draft: { isDraft: true, mergeStateStatus: 'DRAFT', reviewDecision: undefined, reviewers: [] },
+  behind: {
+    reviewDecision: 'APPROVED', mergeStateStatus: 'BEHIND',
+    reviewers: [{ ...people.maria, state: 'APPROVED', submittedAt: hoursAgo(1) }],
+    checks: [check('test (3.12)', 'CI', 'success', 4, { required: true }), check('lint', 'CI', 'success', 1)] as any,
+  },
 };
-const scene = scenes[process.env.OVERVIEW_SCENE ?? ''] ?? {};
+const HEAD_SHA = 'd4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5';
+// OVERVIEW_SCENE=ready-pushed is "ready" with commits pushed after the files were loaded.
+const sceneName = process.env.OVERVIEW_SCENE ?? '';
+(session.pr as { headSha: string }).headSha = sceneName.endsWith('-pushed') ? 'a1b2c3d4e5f6' : HEAD_SHA;
+const scene = scenes[sceneName.replace(/-pushed$/, '')] ?? {};
 const overview: GhOverview = {
   viewer: 'you',
+  nodeId: 'PR_42',
+  headSha: HEAD_SHA,
+  headRefId: 'REF_1',
+  canMerge: true,
+  canPushHead: true,
+  canUpdate: true,
+  merge: {
+    methods: ['MERGE', 'SQUASH', 'REBASE'],
+    preferred: 'SQUASH',
+    squashTitle: 'COMMIT_OR_PR_TITLE',
+    squashMessage: 'COMMIT_MESSAGES',
+    mergeTitle: 'MERGE_MESSAGE',
+    mergeMessage: 'PR_TITLE',
+  },
+  lastCommit: { headline: 'Read C from configs/xg.toml', body: 'The notebook and the pipeline now share one value.' },
   title: 'Add a body-part term to the xG model',
   url: 'https://github.com/',
   state: 'OPEN',

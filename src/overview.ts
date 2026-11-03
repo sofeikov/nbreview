@@ -1,13 +1,14 @@
 // The pull request Overview: one webview tab with where the open pull request stands (reviews,
-// checks, conflicts), the reviewer's progress, the description and the conversation. It also
-// keeps the short status the Review panel shows on the pull request's row.
+// checks, conflicts), the reviewer's progress, the description and the conversation, with a merge
+// box that merges it. It also keeps the short status the Review panel shows on the pull
+// request's row.
 import * as vscode from 'vscode';
 import type { ReviewState } from './state.ts';
 import type { VisualReview } from './visualReview.ts';
 import type { GhOverview } from './github.ts';
 import { mergeVerdict, summarizeChecks, summarizeReviews, type StatusLine } from './core/prStatus.ts';
 import { reviewOrder } from './tree.ts';
-import type { OverviewHostMessage, OverviewMessage, ProgressVM } from './webview/overviewProtocol.ts';
+import type { MergeAction, OverviewHostMessage, OverviewMessage, ProgressVM } from './webview/overviewProtocol.ts';
 
 /** How often the page asks GitHub again while checks run or mergeability is being worked out. */
 const POLL_MS = 15_000;
@@ -71,6 +72,8 @@ export class OverviewPage implements vscode.Disposable {
         }
       }),
     );
+    // Right after Restart Extensions no tab changes, but a tab of the old version may be showing.
+    this.checkStaleTabs();
   }
 
   dispose(): void {
@@ -212,12 +215,56 @@ export class OverviewPage implements vscode.Disposable {
       case 'submitReview':
         await vscode.commands.executeCommand('nbreview.submitReview');
         return;
+      case 'merge':
+        await this.act('merge', o => this.state.session!.gh.mergePullRequest(o.nodeId, msg));
+        // It leaves the lists of pull requests to review.
+        void vscode.commands.executeCommand('nbreview.refreshPrs');
+        return;
+      case 'markReady':
+        await this.act('markReady', o => this.state.session!.gh.markReadyForReview(o.nodeId));
+        return;
+      case 'updateBranch':
+        if (await this.act('updateBranch', o => this.state.session!.gh.updateBranch(o.nodeId, msg.expectedHeadOid), false)) {
+          // The branch has a new commit: the files are loaded again, and the page with them.
+          await vscode.commands.executeCommand('nbreview.refresh');
+        }
+        return;
+      case 'reloadPr':
+        await vscode.commands.executeCommand('nbreview.refresh');
+        return;
+      case 'deleteBranch':
+        await this.act('deleteBranch', o => (o.headRefId ? this.state.session!.gh.deleteBranch(o.headRefId) : Promise.resolve()));
+        return;
       case 'openExternal':
         if (/^https?:\/\//.test(msg.url)) {
           await vscode.env.openExternal(vscode.Uri.parse(msg.url));
         }
         return;
     }
+  }
+
+  /**
+   * Runs one of the merge box's actions on the pull request the page shows, tells the page how it
+   * went, and (unless `refetch` is false) asks GitHub for the new state.
+   */
+  private async act(action: MergeAction, run: (o: GhOverview) => Promise<void>, refetch = true): Promise<boolean> {
+    const o = this.data?.overview;
+    if (!o || this.data?.key !== this.state.prKey()) {
+      this.post({ type: 'done', action, ok: false, message: 'The pull request changed; look again before trying.' });
+      return false;
+    }
+    try {
+      await run(o);
+    } catch (e) {
+      const message = (e instanceof Error ? e.message : String(e)).replace(/^GitHub GraphQL: /, '');
+      this.post({ type: 'done', action, ok: false, message });
+      return false;
+    }
+    this.post({ type: 'done', action, ok: true });
+    if (refetch) {
+      await this.fetch(true);
+    }
+    return true;
   }
 
   /**

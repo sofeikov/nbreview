@@ -5,9 +5,10 @@
 //
 // It makes a throwaway branch and a draft pull request in that repository (changing the demo
 // notebook in docs/demo/ and adding a file), comments, reacts, resolves and reviews there through
-// the extension's own session and state code, then closes the pull request and deletes the
-// branch. The comments stay on the closed pull request, visible to anyone who can see the
-// repository: use a repository where that is fine. The token comes from GH_TOKEN or `gh auth token`.
+// the extension's own session and state code. Then it moves the pull request onto a scratch base
+// branch, marks it ready, merges it there (main is never touched) and deletes both branches. The
+// comments stay on the merged pull request, visible to anyone who can see the repository: use a
+// repository where that is fine. The token comes from GH_TOKEN or `gh auth token`.
 // --keep leaves the pull request open, to look at in VS Code; close it and delete its branch after.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -75,6 +76,9 @@ const main = await api('GET', '/git/ref/heads/main');
 await api('POST', '/git/refs', { ref: `refs/heads/${branch}`, sha: main.object.sha });
 log(`branch ${branch}`);
 let prNumber: number | undefined;
+/** The branch the pull request is merged into, instead of main. */
+let scratch: string | undefined;
+let merged = false;
 let failed = false;
 try {
   // Commit 1: the demo notebook's change, and a new ordinary file.
@@ -187,6 +191,42 @@ try {
   assert.deepEqual(vm.cells.filter(c => c.status !== 'unchanged').map(c => c.key), ['fit'], 'since the review, only the fit cell changed');
   assert.deepEqual([vm.stats.additions, vm.stats.deletions], [1, 1]);
   log('since the review: only the notebook, only its fit cell; the notebook is no longer marked viewed');
+
+  // Merging, into a scratch branch: ready for review, a merge GitHub must refuse because the
+  // branch has moved on since the commit given, the merge itself, and deleting the branch.
+  // --keep leaves the pull request open instead.
+  if (keep) {
+    log('not merging, to keep the pull request open');
+  } else {
+    scratch = `${branch}-base`;
+    await api('POST', '/git/refs', { ref: `refs/heads/${scratch}`, sha: main.object.sha });
+    await api('PATCH', `/pulls/${pr.number}`, { base: scratch });
+    const overview = () => gh.getOverview(owner, repo, pr.number);
+    let o = await overview();
+    assert.equal(o.isDraft, true);
+    assert.ok(o.canMerge && o.canUpdate, 'the token can merge and edit');
+    assert.ok(o.merge.methods.includes('SQUASH'), 'the repository allows squash merges');
+    await gh.markReadyForReview(o.nodeId);
+    o = await eventually('ready for review and mergeable', async () => {
+      const x = await overview();
+      return !x.isDraft && x.baseRef === scratch && x.mergeable === 'MERGEABLE' && x.mergeStateStatus !== 'UNKNOWN' && x;
+    });
+    assert.equal(o.headSha, s.pr.headSha);
+    await assert.rejects(gh.mergePullRequest(o.nodeId, { method: 'SQUASH', expectedHeadOid: first }), /modified|head/i, 'a merge at an old head is refused');
+    const title = 'nbreview e2e: squash-merged into a scratch branch';
+    await gh.mergePullRequest(o.nodeId, { method: 'SQUASH', expectedHeadOid: o.headSha, title });
+    merged = true;
+    o = await eventually('the merge', async () => {
+      const x = await overview();
+      return x.state === 'MERGED' && x;
+    });
+    const tip = await api('GET', `/git/ref/heads/${scratch}`);
+    assert.equal((await api('GET', `/git/commits/${tip.object.sha}`)).message.split('\n')[0], title, 'the commit title given is used');
+    assert.ok(o.headRefId, 'the merged branch is still there');
+    await gh.deleteBranch(o.headRefId!);
+    await eventually('the branch deleted', async () => !(await overview()).headRefId);
+    log('merging: marked ready, a merge at an old head refused, squash-merged into a scratch branch with its title, branch deleted');
+  }
 } catch (e) {
   failed = true;
   console.error(e);
@@ -201,9 +241,14 @@ console.log(failed ? 'E2E FAILED' : 'E2E OK');
 process.exit(failed ? 1 : 0);
 
 async function cleanUp(): Promise<void> {
-  if (prNumber) {
+  if (prNumber && !merged) {
     await api('PATCH', `/pulls/${prNumber}`, { state: 'closed' }).catch(e => console.error('closing the pull request:', e.message));
   }
-  await api('DELETE', `/git/refs/heads/${branch}`).catch(e => console.error('deleting the branch:', e.message));
-  log(`closed #${prNumber ?? '?'} and deleted ${branch}`);
+  for (const ref of [branch, scratch]) {
+    // The test deletes the merged branch itself; a 422 here means it already has.
+    if (ref) {
+      await api('DELETE', `/git/refs/heads/${ref}`).catch(e => /422/.test(e.message) || console.error(`deleting ${ref}:`, e.message));
+    }
+  }
+  log(`${merged ? 'merged' : 'closed'} #${prNumber ?? '?'} and deleted ${[branch, scratch].filter(Boolean).join(' and ')}`);
 }

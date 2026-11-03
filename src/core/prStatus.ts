@@ -271,3 +271,112 @@ export function mergeVerdict(o: MergeInput): StatusLine {
   }
   return { tone: 'success', title: 'Ready to merge', detail: `Every requirement is met: it can be merged into ${o.baseRef}.` };
 }
+
+// --- Merging -------------------------------------------------------------------------------------
+
+export type MergeMethod = 'MERGE' | 'SQUASH' | 'REBASE';
+
+/** How the repository lets pull requests be merged, and what GitHub writes in the commit by default. */
+export interface MergeSettings {
+  methods: MergeMethod[];
+  /** The method the viewer used last, which github.com offers first. */
+  preferred?: MergeMethod;
+  squashTitle?: 'PR_TITLE' | 'COMMIT_OR_PR_TITLE';
+  squashMessage?: 'PR_BODY' | 'COMMIT_MESSAGES' | 'BLANK';
+  mergeTitle?: 'PR_TITLE' | 'MERGE_MESSAGE';
+  mergeMessage?: 'PR_BODY' | 'PR_TITLE' | 'BLANK';
+}
+
+export const MERGE_METHODS: Record<MergeMethod, { label: string; confirm: string; describe: (commits: number, base: string) => string }> = {
+  MERGE: {
+    label: 'Create a merge commit',
+    confirm: 'Confirm merge',
+    describe: (n, base) => `All ${n === 1 ? 'the commit' : `${n} commits`} from this branch will be added to ${base} with a merge commit.`,
+  },
+  SQUASH: {
+    label: 'Squash and merge',
+    confirm: 'Confirm squash and merge',
+    describe: (n, base) => `${n === 1 ? 'The commit' : `The ${n} commits`} from this branch will be combined into one commit on ${base}.`,
+  },
+  REBASE: {
+    label: 'Rebase and merge',
+    confirm: 'Confirm rebase and merge',
+    describe: (n, base) => `${n === 1 ? 'The commit' : `The ${n} commits`} from this branch will be rebased and added to ${base}, without a merge commit.`,
+  },
+};
+
+/** The method offered first: the viewer's last one when the repository still allows it. */
+export function defaultMergeMethod(s: MergeSettings): MergeMethod | undefined {
+  return s.preferred && s.methods.includes(s.preferred) ? s.preferred : s.methods[0];
+}
+
+export interface CommitSource {
+  number: number;
+  title: string;
+  body: string;
+  /** `owner/branch`, as in GitHub's "Merge pull request #1 from owner/branch". */
+  head: string;
+  /** Headlines and bodies of the pull request's commits, oldest first; the last one at least. */
+  commits: { headline: string; body: string }[];
+  commitCount: number;
+}
+
+/**
+ * The commit title and description GitHub would write, following the repository's settings, so
+ * the form can start from them. A rebase writes no commit of its own.
+ */
+export function defaultCommitMessage(method: MergeMethod, s: MergeSettings, pr: CommitSource): { title: string; body: string } | undefined {
+  if (method === 'REBASE') {
+    return undefined;
+  }
+  if (method === 'SQUASH') {
+    const one = pr.commitCount === 1 ? pr.commits[pr.commits.length - 1] : undefined;
+    const title = s.squashTitle === 'PR_TITLE' || !one ? pr.title : one.headline;
+    const body = s.squashMessage === 'BLANK' ? ''
+      : s.squashMessage === 'PR_BODY' ? pr.body
+        : one ? one.body
+          : pr.commits.map(c => `* ${c.headline}${c.body ? `\n\n${c.body}` : ''}`).join('\n\n');
+    return { title: `${title} (#${pr.number})`, body };
+  }
+  if (s.mergeTitle === 'PR_TITLE') {
+    return { title: `${pr.title} (#${pr.number})`, body: s.mergeMessage === 'BLANK' ? '' : pr.body };
+  }
+  const body = s.mergeMessage === 'BLANK' ? '' : s.mergeMessage === 'PR_BODY' ? pr.body : pr.title;
+  return { title: `Merge pull request #${pr.number} from ${pr.head}`, body };
+}
+
+export interface MergeState {
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  isDraft: boolean;
+  mergeStateStatus?: MergeStateStatus;
+  /** The viewer may merge into the base repository (write access or more). */
+  canMerge: boolean;
+}
+
+/**
+ * Why the pull request can't be merged now, or undefined when it can. GitHub's merge state says
+ * whether every rule is met; a merge it lets through with failing checks (UNSTABLE) is allowed,
+ * as on github.com.
+ */
+export function mergeBlocker(o: MergeState, verdict: StatusLine): string | undefined {
+  if (o.state !== 'OPEN') {
+    return o.state === 'MERGED' ? 'It is already merged.' : 'It is closed.';
+  }
+  if (!o.canMerge) {
+    return 'Only people with write access to the repository can merge it.';
+  }
+  if (o.isDraft) {
+    return 'A draft can’t be merged: mark it ready for review first.';
+  }
+  switch (o.mergeStateStatus) {
+    case 'CLEAN':
+    case 'HAS_HOOKS':
+    case 'UNSTABLE':
+      return undefined;
+    case 'UNKNOWN':
+    case undefined:
+      return 'GitHub is still working out whether it can be merged.';
+    default:
+      return verdict.detail;
+  }
+}

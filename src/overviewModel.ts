@@ -4,8 +4,11 @@
 import type { GhOverview, GhReaction, GhThread, GhTimelineItem, GhUser } from './github.ts';
 import type { FileThread, PlacedThread, ReviewSession } from './session.ts';
 import type { ReactionVM } from './webview/protocol.ts';
-import type { OverviewVM, OvThreadVM, SnippetVM, TimelineVM } from './webview/overviewProtocol.ts';
-import { mergeVerdict, summarizeBranch, summarizeChecks, summarizeReviews, type Check } from './core/prStatus.ts';
+import type { MergeVM, OverviewVM, OvThreadVM, SnippetVM, TimelineVM } from './webview/overviewProtocol.ts';
+import {
+  MERGE_METHODS, defaultCommitMessage, mergeBlocker, mergeVerdict, summarizeBranch, summarizeChecks, summarizeReviews,
+  type Check, type MergeMethod, type StatusLine,
+} from './core/prStatus.ts';
 import { parseBody } from './core/anchor.ts';
 import { escapeHtml, highlightLines, renderCommentBody, renderGitHubMarkdown } from './render.ts';
 import { fileLanguage } from './viewModel.ts';
@@ -20,6 +23,7 @@ export async function buildOverview(o: GhOverview, s: ReviewSession, now = new D
   const input = { ...o, checks };
   const threads = await threadIndex(s);
   const author = o.author.login;
+  const verdict = mergeVerdict(input);
   return {
     pr: {
       number: s.pr.number,
@@ -43,7 +47,7 @@ export async function buildOverview(o: GhOverview, s: ReviewSession, now = new D
     viewer: o.viewer,
     bodyHtml: o.body.trim() ? renderGitHubMarkdown(o.body, repoUrl) : '',
     bodyReactions: reactionVMs(o.reactions),
-    verdict: mergeVerdict(input),
+    verdict,
     reviews: { ...summarizeReviews(o.reviewDecision, o.reviewers), reviewers: o.reviewers },
     checks: { ...checks, list: o.checks.map(checkVM) },
     branch: summarizeBranch(input),
@@ -53,7 +57,41 @@ export async function buildOverview(o: GhOverview, s: ReviewSession, now = new D
     closingIssues: o.closingIssues,
     timeline: buildTimeline(o.timeline, threads, { author, repoUrl, headRef: o.headRef, baseRef: o.baseRef }),
     timelineMissing: o.timelineMissing,
+    merge: mergeVM(o, verdict, { number: s.pr.number, owner: s.pr.owner, sessionHead: s.pr.headSha }),
     fetchedAt: now.toISOString(),
+  };
+}
+
+export function mergeVM(o: GhOverview, verdict: StatusLine, pr: { number: number; owner: string; sessionHead: string }): MergeVM {
+  const commits = o.timeline.flatMap(t => (t.kind === 'commit' ? [{ headline: t.message, body: '' }] : []));
+  // Only the last commit's description is fetched; the others go in by their headlines.
+  if (o.lastCommit) {
+    commits.splice(Math.max(0, commits.length - 1), 1, o.lastCommit);
+  }
+  const source = { number: pr.number, title: o.title, body: o.body, head: `${o.headOwner ?? pr.owner}/${o.headRef}`, commits, commitCount: o.commits };
+  const messages: MergeVM['messages'] = {};
+  for (const m of o.merge.methods) {
+    const msg = defaultCommitMessage(m, o.merge, source);
+    if (msg) {
+      messages[m] = msg;
+    }
+  }
+  const open = o.state === 'OPEN';
+  return {
+    headSha: o.headSha,
+    methods: o.merge.methods.map((method: MergeMethod) => ({
+      method,
+      label: MERGE_METHODS[method].label,
+      confirm: MERGE_METHODS[method].confirm,
+      describe: MERGE_METHODS[method].describe(o.commits, o.baseRef),
+    })),
+    preferred: o.merge.preferred,
+    blocker: mergeBlocker(o, verdict),
+    messages,
+    newCommits: open && !!pr.sessionHead && pr.sessionHead !== o.headSha,
+    canUpdateBranch: open && o.mergeStateStatus === 'BEHIND' && o.canPushHead,
+    canMarkReady: open && o.isDraft && o.canUpdate,
+    canDeleteBranch: !open && !!o.headRefId && o.canPushHead,
   };
 }
 
@@ -207,6 +245,7 @@ const EVENT_TEXT: Record<Extract<GhTimelineItem, { kind: 'event' }>['event'], [i
   ready: ['eye', () => 'marked this as ready for review'],
   draft: ['git-pull-request-draft', () => 'marked this as a draft'],
   forcePushed: ['repo-force-push', (_, r) => `force-pushed the ${r.headRef} branch`],
+  branchDeleted: ['trash', (s, r) => `deleted the ${s || r.headRef} branch`],
   reviewRequested: ['person', s => `asked ${s ? `@${s}` : 'someone'} to review`],
   reviewDismissed: ['circle-slash', s => `dismissed ${s ? `@${s}’s` : 'a'} review`],
   renamed: ['edit', s => `changed the title from “${s}”`],

@@ -1,10 +1,11 @@
 // The pull request Overview page: whether it can be merged and what is in the way (reviews,
 // checks, conflicts), the reviewer's own progress, the description, and the whole conversation
-// with each review's threads, as on github.com's Conversation tab. It only reads; every change is
-// made from the review pages or on GitHub.
+// with each review's threads, as on github.com's Conversation tab. Its merge box merges, marks a
+// draft ready, updates the branch and deletes it after the merge; comments are made from the
+// review pages.
 import type { ReactionVM } from './protocol.ts';
-import type { CheckVM, OverviewHostMessage, OverviewMessage, OverviewVM, OvCommentVM, OvThreadVM, ProgressVM, TimelineVM, UserVM } from './overviewProtocol.ts';
-import type { Reviewer, StatusLine, Tone } from '../core/prStatus.ts';
+import type { CheckVM, MergeAction, OverviewHostMessage, OverviewMessage, OverviewVM, OvCommentVM, OvThreadVM, ProgressVM, TimelineVM, UserVM } from './overviewProtocol.ts';
+import type { MergeMethod, Reviewer, StatusLine, Tone } from '../core/prStatus.ts';
 import { REACTIONS, REACTION_NAMES } from '../core/reactions.ts';
 import { button, h, icon, timeAgo, type Child } from './dom.ts';
 
@@ -21,6 +22,8 @@ interface UiState {
   hideResolved: boolean;
   /** Sections and threads opened or closed by hand. */
   open: Record<string, boolean>;
+  /** The merge method last picked here. */
+  method?: MergeMethod;
   scrollY?: number;
 }
 
@@ -140,6 +143,10 @@ function branch(name: string): HTMLElement {
 
 function render(): void {
   const scroll = window.scrollY;
+  // A refresh while the commit message is being written keeps the cursor where it was.
+  const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+  const focusKey = active?.dataset?.focusKey;
+  const caret = focusKey ? [active!.selectionStart, active!.selectionEnd] : undefined;
   if (!vm) {
     app.replaceChildren(error ? renderError(error) : renderSkeleton());
     return;
@@ -153,6 +160,13 @@ function render(): void {
     h('div', { class: 'toast', id: 'toast' })));
   firstPaint = false;
   watchHeader();
+  if (focusKey) {
+    const el = app.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-focus-key="${focusKey}"]`);
+    el?.focus({ preventScroll: true });
+    if (el && caret?.[0] !== null && caret?.[0] !== undefined) {
+      el.setSelectionRange(caret[0], caret[1] ?? caret[0]);
+    }
+  }
   if (!restoredScroll) {
     restoredScroll = true;
     window.scrollTo(0, ui.scrollY ?? 0);
@@ -262,13 +276,182 @@ function renderVerdict(m: OverviewVM): HTMLElement {
   return h('section', { class: `card verdict tone-${v.tone}`, 'aria-label': 'Merge status' },
     h('div', { class: 'verdict-head' },
       h('span', { class: 'verdict-icon' }, ic),
-      h('div', { class: 'verdict-text' }, h('div', { class: 'verdict-title', text: v.title }), h('div', { class: 'verdict-detail', text: v.detail })),
-      open && (v.tone === 'success' || v.title.startsWith('Ready'))
-        && button(['Merge on GitHub', icon('link-external')], () => post({ type: 'openExternal', url: m.pr.url }), { class: 'primary', title: 'Open the pull request on github.com to merge it' })),
+      h('div', { class: 'verdict-text' }, h('div', { class: 'verdict-title', text: v.title }), h('div', { class: 'verdict-detail', text: v.detail }))),
     open && h('div', { class: 'rows' },
       statusRow('reviews', m.reviews, m.reviews.reviewers.length > 0, false, () => renderReviewers(m.reviews.reviewers, 'row')),
       statusRow('checks', m.checks, m.checks.list.length > 0, m.checks.tone === 'danger', () => renderChecks(m.checks.list), checksMeter(m)),
-      statusRow('branch', m.branch, false, false, () => h('div'))));
+      statusRow('branch', m.branch, false, false, () => h('div'))),
+    renderMergeBox(m));
+}
+
+// --- Merging -----------------------------------------------------------------------------------
+
+/** The merge box's own state: the confirm form, the method menu, and the action under way. */
+const box: {
+  menu: boolean;
+  confirming: boolean;
+  /** The commit message being written, per method; unset means GitHub's default. */
+  title: Partial<Record<MergeMethod, string>>;
+  body: Partial<Record<MergeMethod, string>>;
+  busy?: MergeAction;
+  error?: string;
+  /** Delete branch was clicked once and waits for the second click. */
+  armed?: boolean;
+} = { menu: false, confirming: false, title: {}, body: {} };
+
+function chosenMethod(m: OverviewVM): MergeMethod | undefined {
+  const allowed = m.merge.methods.map(x => x.method);
+  return [ui.method, m.merge.preferred, allowed[0]].find((x): x is MergeMethod => !!x && allowed.includes(x));
+}
+
+function act(action: MergeAction, msg: OverviewMessage): void {
+  box.busy = action;
+  box.error = undefined;
+  post(msg);
+  render();
+}
+
+function renderMergeBox(m: OverviewVM): HTMLElement | false {
+  const g = m.merge;
+  const open = m.pr.state === 'OPEN';
+  const parts: Child[] = [];
+  if (open && g.newCommits) {
+    parts.push(h('div', { class: 'mb-note tone-warning' }, toneIcon('warning'),
+      h('span', { class: 'mb-text' }, h('b', { text: 'New commits were pushed' }), ' after you loaded the files. Merging includes them.'),
+      button([icon('refresh'), 'Load them'], () => post({ type: 'reloadPr' }), { class: 'ghost' })));
+  }
+  if (g.canMarkReady) {
+    parts.push(h('div', { class: 'mb-row' },
+      h('span', { class: 'mb-text' }, h('b', { text: 'This is a draft.' }), ' Mark it ready when it can be reviewed and merged; reviewers asked are notified.'),
+      button(box.busy === 'markReady' ? [spinner(), 'Marking…'] : [icon('eye'), 'Ready for review'], () => act('markReady', { type: 'markReady' }), { class: 'ghost', disabled: !!box.busy })));
+  }
+  const method = chosenMethod(m);
+  if (open && method && !m.pr.isDraft) {
+    parts.push(box.confirming ? renderConfirm(m, method) : renderMergeButton(m, method));
+  } else if (open && !g.methods.length) {
+    parts.push(h('div', { class: 'mb-row muted' }, 'This repository doesn’t allow any way of merging that GitHub’s API offers.'));
+  }
+  if (g.canDeleteBranch) {
+    parts.push(h('div', { class: 'mb-row' },
+      h('span', { class: 'mb-text' }, 'The ', branch(m.pr.headRef), ` branch is ${m.pr.state === 'MERGED' ? 'merged' : 'no longer needed'} and can be deleted.`),
+      button(box.busy === 'deleteBranch' ? [spinner(), 'Deleting…'] : box.armed ? [icon('trash'), 'Click again to delete'] : [icon('trash'), 'Delete branch'], () => {
+        if (!box.armed) {
+          box.armed = true;
+          render();
+          setTimeout(() => { box.armed = false; render(); }, 4000);
+          return;
+        }
+        box.armed = false;
+        act('deleteBranch', { type: 'deleteBranch' });
+      }, { class: `ghost danger${box.armed ? ' armed' : ''}`, disabled: !!box.busy, title: 'github.com can restore it afterwards' })));
+  }
+  if (box.error && !box.confirming) {
+    parts.push(h('div', { class: 'mb-error', role: 'alert' }, toneIcon('danger'), h('span', { text: box.error })));
+  }
+  return parts.length > 0 && h('div', { class: 'merge-box' }, ...parts);
+}
+
+function spinner(): HTMLElement {
+  const el = icon('loading');
+  el.classList.add('spin');
+  return el;
+}
+
+function renderMergeButton(m: OverviewVM, method: MergeMethod): HTMLElement {
+  const g = m.merge;
+  const chosen = g.methods.find(x => x.method === method)!;
+  const blocked = !!g.blocker;
+  const many = g.methods.length > 1;
+  return h('div', { class: 'mb-merge' },
+    h('div', { class: 'mb-actions' },
+      h('div', { class: `split${blocked ? ' blocked' : ''}` },
+        button([icon('git-merge'), chosen.label], () => {
+          box.confirming = true;
+          box.menu = false;
+          box.error = undefined;
+          render();
+          app.querySelector<HTMLElement>('[data-focus-key="merge-title"], .mb-confirm button.merge-btn')?.focus();
+        }, { class: 'merge-btn', disabled: blocked, title: blocked ? g.blocker : chosen.describe }),
+        many && button(icon(box.menu ? 'chevron-up' : 'chevron-down'), () => { box.menu = !box.menu; render(); }, {
+          class: 'merge-btn caret',
+          title: 'Choose how to merge',
+          'aria-haspopup': 'menu',
+          'aria-expanded': String(box.menu),
+        })),
+      g.canUpdateBranch && button(box.busy === 'updateBranch' ? [spinner(), 'Updating…'] : [icon('repo-pull'), 'Update branch'],
+        () => act('updateBranch', { type: 'updateBranch', expectedHeadOid: g.headSha }),
+        { class: 'ghost', disabled: !!box.busy, title: `Merge ${m.pr.baseRef} into ${m.pr.headRef}` }),
+      h('span', { class: 'mb-hint', text: !blocked ? chosen.describe
+        // The verdict above already says why; repeating it here says nothing new.
+        : g.blocker !== m.verdict.detail ? g.blocker!
+          : g.canUpdateBranch ? `Update the branch with ${m.pr.baseRef}, then merge.` : 'Merging opens up once that is sorted.' })),
+    box.menu && h('div', { class: 'mb-menu', role: 'menu' }, ...g.methods.map(x => button([
+      h('span', { class: 'mb-check' }, x.method === method && icon('check')),
+      h('span', { class: 'mb-option' }, h('b', { text: x.label }), h('span', { class: 'muted', text: x.describe }))],
+    () => { ui.method = x.method; box.menu = false; persist(); render(); },
+    { class: 'mb-item', role: 'menuitemradio', 'aria-checked': String(x.method === method) }))));
+}
+
+function renderConfirm(m: OverviewVM, method: MergeMethod): HTMLElement {
+  const g = m.merge;
+  const chosen = g.methods.find(x => x.method === method)!;
+  const defaults = g.messages[method];
+  const busy = box.busy === 'merge';
+  const confirm = () => {
+    if (busy || g.blocker) {
+      return;
+    }
+    // Only what was changed is sent; the rest is GitHub's own default.
+    const title = box.title[method];
+    const body = box.body[method];
+    act('merge', {
+      type: 'merge',
+      method,
+      expectedHeadOid: g.headSha,
+      ...(title !== undefined && title !== defaults?.title ? { title } : {}),
+      ...(body !== undefined && body !== defaults?.body ? { body } : {}),
+    });
+  };
+  const cancel = () => { box.confirming = false; box.error = undefined; render(); };
+  const keys = (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      confirm();
+    } else if (e.key === 'Escape') {
+      cancel();
+    }
+  };
+  return h('div', { class: 'mb-confirm', onkeydown: keys },
+    h('div', { class: 'mb-confirm-head' }, icon('git-merge'), h('b', { text: chosen.label }), h('span', { class: 'muted', text: ` into ${m.pr.baseRef}` })),
+    defaults
+      ? h('div', { class: 'mb-fields' },
+        h('input', {
+          type: 'text',
+          class: 'mb-title',
+          'aria-label': 'Commit title',
+          value: box.title[method] ?? defaults.title,
+          disabled: busy,
+          data: { focusKey: 'merge-title' },
+          oninput: (e: Event) => { box.title[method] = (e.target as HTMLInputElement).value; },
+        }),
+        h('textarea', {
+          class: 'mb-body',
+          rows: '5',
+          'aria-label': 'Commit description',
+          placeholder: 'Add an optional description',
+          disabled: busy,
+          data: { focusKey: 'merge-body' },
+          oninput: (e: Event) => { box.body[method] = (e.target as HTMLTextAreaElement).value; },
+        }, box.body[method] ?? defaults.body))
+      : h('div', { class: 'mb-text muted', text: chosen.describe }),
+    h('div', { class: 'mb-meta muted' },
+      `${plural(m.pr.commits, 'commit')} at `, h('code', { class: 'sha', text: g.headSha.slice(0, 7) }),
+      ' · GitHub refuses the merge if anything is pushed before it goes through.'),
+    box.error && h('div', { class: 'mb-error', role: 'alert' }, toneIcon('danger'), h('span', { text: box.error })),
+    h('div', { class: 'mb-actions' },
+      button(busy ? [spinner(), 'Merging…'] : [icon('git-merge'), chosen.confirm], confirm, { class: 'merge-btn', disabled: busy || !!g.blocker }),
+      button('Cancel', cancel, { class: 'ghost', disabled: busy }),
+      h('span', { class: 'mb-hint', text: 'Ctrl+Enter to confirm' })));
 }
 
 function statusRow(key: string, line: StatusLine, expandable: boolean, openByDefault: boolean, body: () => HTMLElement, extra?: Child): HTMLElement {
@@ -557,12 +740,13 @@ function renderCommits(t: Extract<TimelineVM, { kind: 'commits' }>): HTMLElement
 
 // --- Events ------------------------------------------------------------------------------------
 
-function toast(message: string): void {
+function toast(message: string, kind: 'error' | 'success' = 'error'): void {
   const el = document.getElementById('toast');
   if (!el) {
     return;
   }
   el.textContent = message;
+  el.classList.toggle('success', kind === 'success');
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 6000);
 }
@@ -580,6 +764,14 @@ window.addEventListener('click', e => {
     post({ type: 'openExternal', url: href });
   }
 }, true);
+
+// The merge method menu closes on a click elsewhere, or Escape.
+window.addEventListener('mousedown', e => {
+  if (box.menu && !(e.target as HTMLElement).closest('.mb-merge')) {
+    box.menu = false;
+    render();
+  }
+});
 
 let scrollTimer: number | undefined;
 window.addEventListener('scroll', () => {
@@ -599,7 +791,12 @@ setInterval(() => {
 }, 60_000);
 
 window.addEventListener('keydown', e => {
-  if (e.key === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey && !(e.target instanceof HTMLInputElement)) {
+  if (e.key === 'Escape' && box.menu) {
+    box.menu = false;
+    render();
+    return;
+  }
+  if (e.key === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) {
     post({ type: 'refresh' });
   }
 });
@@ -629,6 +826,23 @@ window.addEventListener('message', (event: MessageEvent<OverviewHostMessage>) =>
           fetched.textContent = loading ? 'Updating…' : `Updated ${timeAgo(vm.fetchedAt)}`;
         }
       }
+      break;
+    case 'done':
+      box.busy = undefined;
+      if (msg.ok) {
+        box.error = undefined;
+        if (msg.action === 'merge') {
+          box.confirming = false;
+          box.title = {};
+          box.body = {};
+          toast(`Merged into ${vm?.pr.baseRef ?? 'the base branch'}.`, 'success');
+        } else if (msg.action === 'deleteBranch') {
+          toast('Branch deleted.', 'success');
+        }
+      } else {
+        box.error = msg.message ?? 'GitHub refused.';
+      }
+      render();
       break;
     case 'error':
       if (vm) {

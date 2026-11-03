@@ -4,7 +4,7 @@ import type { Side } from './core/anchor.ts';
 import { REACTIONS, type ReactionContent } from './core/reactions.ts';
 import {
   checkRunState, latestChecks, mergeReviewers, sortChecks, statusContextState,
-  type Check, type MergeStateStatus, type ReviewDecision, type Reviewer, type ReviewState,
+  type Check, type MergeMethod, type MergeSettings, type MergeStateStatus, type ReviewDecision, type Reviewer, type ReviewState,
 } from './core/prStatus.ts';
 
 export type { ReactionContent };
@@ -120,6 +120,19 @@ export interface GhUser {
 /** The pull request's status, people, description and conversation, for the Overview page. */
 export interface GhOverview {
   viewer: string;
+  nodeId: string;
+  /** The commit the pull request's branch is at; a merge is refused if it has moved on. */
+  headSha: string;
+  /** The head branch, while it exists (it is deleted after a merge, by hand or by GitHub). */
+  headRefId?: string;
+  /** The viewer may merge into the base repository, and push to (so delete) the head branch. */
+  canMerge: boolean;
+  canPushHead: boolean;
+  /** The viewer may edit the pull request, so mark it ready for review. */
+  canUpdate: boolean;
+  merge: MergeSettings;
+  /** The last commit's message, for the default squash commit message. */
+  lastCommit?: { headline: string; body: string };
   title: string;
   url: string;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
@@ -170,10 +183,10 @@ export type GhTimelineItem =
   | { kind: 'commit'; oid: string; message: string; author: GhUser; createdAt: string; url: string }
   | {
     kind: 'event';
-    event: 'merged' | 'closed' | 'reopened' | 'ready' | 'draft' | 'forcePushed' | 'reviewRequested' | 'reviewDismissed' | 'renamed' | 'baseChanged';
+    event: 'merged' | 'closed' | 'reopened' | 'ready' | 'draft' | 'forcePushed' | 'branchDeleted' | 'reviewRequested' | 'reviewDismissed' | 'renamed' | 'baseChanged';
     actor: GhUser;
     createdAt: string;
-    /** Who was asked to review, the old title, the new base branch. */
+    /** Who was asked to review, the old title, the new base branch, the deleted branch. */
     subject?: string;
   };
 
@@ -181,7 +194,7 @@ export type GhTimelineItem =
 const TIMELINE_PAGES = 5;
 
 const TIMELINE_TYPES = [
-  'ISSUE_COMMENT', 'PULL_REQUEST_REVIEW', 'PULL_REQUEST_COMMIT', 'HEAD_REF_FORCE_PUSHED_EVENT', 'MERGED_EVENT', 'CLOSED_EVENT',
+  'ISSUE_COMMENT', 'PULL_REQUEST_REVIEW', 'PULL_REQUEST_COMMIT', 'HEAD_REF_FORCE_PUSHED_EVENT', 'HEAD_REF_DELETED_EVENT', 'MERGED_EVENT', 'CLOSED_EVENT',
   'REOPENED_EVENT', 'READY_FOR_REVIEW_EVENT', 'CONVERT_TO_DRAFT_EVENT', 'REVIEW_REQUESTED_EVENT', 'REVIEW_DISMISSED_EVENT',
   'RENAMED_TITLE_EVENT', 'BASE_REF_CHANGED_EVENT',
 ].join(',');
@@ -193,6 +206,7 @@ const TIMELINE_FIELDS = `pageInfo{hasNextPage endCursor} totalCount nodes{__type
   ... on PullRequestReview{id state createdAt submittedAt body url author{login avatarUrl} ${REACTION_FIELDS} comments(first:100){nodes{id}}}
   ... on PullRequestCommit{url commit{oid messageHeadline committedDate author{name user{login avatarUrl}}}}
   ... on HeadRefForcePushedEvent{createdAt actor{login avatarUrl}}
+  ... on HeadRefDeletedEvent{createdAt actor{login avatarUrl} headRefName}
   ... on MergedEvent{createdAt actor{login avatarUrl}}
   ... on ClosedEvent{createdAt actor{login avatarUrl}}
   ... on ReopenedEvent{createdAt actor{login avatarUrl}}
@@ -245,6 +259,8 @@ export function timelineItem(n: any): GhTimelineItem | undefined {
     }
     case 'HeadRefForcePushedEvent':
       return event('forcePushed');
+    case 'HeadRefDeletedEvent':
+      return event('branchDeleted', n.headRefName);
     case 'MergedEvent':
       return event('merged');
     case 'ClosedEvent':
@@ -545,7 +561,11 @@ export class GitHub {
    */
   async getOverview(owner: string, repo: string, number: number, timeline = true): Promise<GhOverview> {
     const data: any = await this.graphql(
-      `query($o:String!,$r:String!,$n:Int!,$t:Boolean!){viewer{login} repository(owner:$o,name:$r){pullRequest(number:$n){
+      `query($o:String!,$r:String!,$n:Int!,$t:Boolean!){viewer{login} repository(owner:$o,name:$r){
+        viewerPermission mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed viewerDefaultMergeMethod
+        squashMergeCommitTitle squashMergeCommitMessage mergeCommitTitle mergeCommitMessage
+        pullRequest(number:$n){
+        id headRefOid headRef{id} headRepository{viewerPermission} viewerCanUpdate
         title url state isDraft createdAt body baseRefName headRefName headRepositoryOwner{login} repository{owner{login}}
         additions deletions changedFiles mergeable mergeStateStatus reviewDecision mergedAt mergedBy{login} closedAt
         author{login avatarUrl} ${REACTION_FIELDS}
@@ -556,7 +576,7 @@ export class GitHub {
         reviewRequests(first:30){nodes{requestedReviewer{__typename ... on User{login avatarUrl} ... on Team{name avatarUrl} ... on Bot{login avatarUrl}}}}
         latestOpinionatedReviews(first:50){nodes{state submittedAt author{login avatarUrl}}}
         latestReviews(first:50){nodes{state submittedAt author{login avatarUrl}}}
-        commits(last:1){totalCount nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename
+        commits(last:1){totalCount nodes{commit{messageHeadline messageBody statusCheckRollup{contexts(first:100){nodes{__typename
           ... on CheckRun{name title status conclusion detailsUrl startedAt completedAt isRequired(pullRequestNumber:$n)
             checkSuite{app{name} workflowRun{workflow{name}}}}
           ... on StatusContext{context state description targetUrl createdAt isRequired(pullRequestNumber:$n)}}}}}}}
@@ -564,7 +584,13 @@ export class GitHub {
       }}}`,
       { o: owner, r: repo, n: number, t: timeline },
     );
-    const pr = data.repository.pullRequest;
+    const repository = data.repository;
+    const pr = repository.pullRequest;
+    const writes = (permission: string | null | undefined) => permission === 'ADMIN' || permission === 'MAINTAIN' || permission === 'WRITE';
+    const methods = ([['MERGE', repository.mergeCommitAllowed], ['SQUASH', repository.squashMergeAllowed], ['REBASE', repository.rebaseMergeAllowed]] as [MergeMethod, boolean][])
+      .filter(([, allowed]) => allowed)
+      .map(([m]) => m);
+    const last = pr.commits?.nodes?.[0]?.commit;
     const reviewer = (r: any): Reviewer => ({ ...user(r.author), state: r.state, submittedAt: r.submittedAt ?? undefined });
     const requested = (pr.reviewRequests?.nodes ?? []).map((n: any): Reviewer | undefined => {
       const who = n.requestedReviewer;
@@ -597,6 +623,21 @@ export class GitHub {
     const headOwner = pr.headRepositoryOwner?.login;
     return {
       viewer: data.viewer.login,
+      nodeId: pr.id,
+      headSha: pr.headRefOid,
+      headRefId: pr.headRef?.id ?? undefined,
+      canMerge: writes(repository.viewerPermission),
+      canPushHead: writes(pr.headRepository?.viewerPermission),
+      canUpdate: !!pr.viewerCanUpdate,
+      merge: {
+        methods,
+        preferred: repository.viewerDefaultMergeMethod ?? undefined,
+        squashTitle: repository.squashMergeCommitTitle ?? undefined,
+        squashMessage: repository.squashMergeCommitMessage ?? undefined,
+        mergeTitle: repository.mergeCommitTitle ?? undefined,
+        mergeMessage: repository.mergeCommitMessage ?? undefined,
+      },
+      ...(last ? { lastCommit: { headline: last.messageHeadline ?? '', body: last.messageBody ?? '' } } : {}),
       title: pr.title,
       url: pr.url,
       state: pr.state,
@@ -631,6 +672,41 @@ export class GitHub {
       timeline: items,
       timelineMissing: Math.max(0, missing),
     };
+  }
+
+  /**
+   * Merges the pull request. GitHub refuses if its branch is no longer at `expectedHeadOid`, so
+   * commits pushed after the reviewer last looked are never merged unseen. A title or body left
+   * out is GitHub's own default.
+   */
+  async mergePullRequest(prNodeId: string, o: { method: MergeMethod; expectedHeadOid: string; title?: string; body?: string }): Promise<void> {
+    await this.graphql(`mutation($input:MergePullRequestInput!){mergePullRequest(input:$input){pullRequest{state}}}`, {
+      input: {
+        pullRequestId: prNodeId,
+        mergeMethod: o.method,
+        expectedHeadOid: o.expectedHeadOid,
+        ...(o.title !== undefined ? { commitHeadline: o.title } : {}),
+        ...(o.body !== undefined ? { commitBody: o.body } : {}),
+      },
+    });
+  }
+
+  async markReadyForReview(prNodeId: string): Promise<void> {
+    await this.graphql(`mutation($input:MarkPullRequestReadyForReviewInput!){markPullRequestReadyForReview(input:$input){pullRequest{isDraft}}}`, {
+      input: { pullRequestId: prNodeId },
+    });
+  }
+
+  /** Merges the base branch into the pull request's branch, as github.com's "Update branch" does. */
+  async updateBranch(prNodeId: string, expectedHeadOid: string): Promise<void> {
+    await this.graphql(`mutation($input:UpdatePullRequestBranchInput!){updatePullRequestBranch(input:$input){pullRequest{headRefOid}}}`, {
+      input: { pullRequestId: prNodeId, expectedHeadOid, updateMethod: 'MERGE' },
+    });
+  }
+
+  /** Deletes a branch, such as a merged pull request's (github.com can restore it). */
+  async deleteBranch(refId: string): Promise<void> {
+    await this.graphql(`mutation($input:DeleteRefInput!){deleteRef(input:$input){clientMutationId}}`, { input: { refId } });
   }
 
   /**

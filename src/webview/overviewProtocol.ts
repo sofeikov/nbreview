@@ -1,6 +1,6 @@
 // Messages and data shared by the extension host and the pull request Overview page.
 import type { ReactionVM } from './protocol.ts';
-import type { ChecksSummary, CheckState, Reviewer, StatusLine } from '../core/prStatus.ts';
+import type { ChecksSummary, CheckState, MergeMethod, Reviewer, StatusLine } from '../core/prStatus.ts';
 
 export interface UserVM {
   login: string;
@@ -41,9 +41,31 @@ export interface OverviewVM {
   closingIssues: { number: number; title: string; url: string; state: 'OPEN' | 'CLOSED' }[];
   timeline: TimelineVM[];
   timelineMissing: number;
+  merge: MergeVM;
   /** ISO time the data was fetched from GitHub. */
   fetchedAt: string;
 }
+
+/** What the merge box offers: merging, and what clears the way for it. */
+export interface MergeVM {
+  /** The commit the branch is at, sent back with a merge so GitHub refuses one that moved on. */
+  headSha: string;
+  methods: { method: MergeMethod; label: string; confirm: string; describe: string }[];
+  preferred?: MergeMethod;
+  /** Why it can't be merged now; undefined when it can. */
+  blocker?: string;
+  /** The default commit title and description for each method that writes a commit. */
+  messages: Partial<Record<MergeMethod, { title: string; body: string }>>;
+  /** Commits were pushed after the review session was loaded: the files shown are older. */
+  newCommits: boolean;
+  /** The base branch has moved on and is required: "Update branch" merges it in. */
+  canUpdateBranch: boolean;
+  canMarkReady: boolean;
+  /** The pull request is merged or closed and its branch can still be deleted. */
+  canDeleteBranch: boolean;
+}
+
+export type MergeAction = 'merge' | 'markReady' | 'updateBranch' | 'deleteBranch';
 
 export interface CheckVM {
   name: string;
@@ -119,7 +141,9 @@ export type OverviewHostMessage =
   | { type: 'overview'; overview: OverviewVM }
   | { type: 'progress'; progress: ProgressVM }
   | { type: 'loading'; loading: boolean }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  /** How a merge box action went; the new state follows as an `overview` message. */
+  | { type: 'done'; action: MergeAction; ok: boolean; message?: string };
 
 export type OverviewMessage =
   | { type: 'ready' }
@@ -127,4 +151,10 @@ export type OverviewMessage =
   | { type: 'openFile'; path: string; cellKey?: string }
   | { type: 'nextFile' }
   | { type: 'submitReview' }
+  | { type: 'merge'; method: MergeMethod; expectedHeadOid: string; title?: string; body?: string }
+  | { type: 'markReady' }
+  | { type: 'updateBranch'; expectedHeadOid: string }
+  | { type: 'deleteBranch' }
+  /** Loads the pull request's files again, after new commits. */
+  | { type: 'reloadPr' }
   | { type: 'openExternal'; url: string };

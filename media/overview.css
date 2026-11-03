@@ -219,7 +219,8 @@ button.more:hover { background: none; text-decoration: underline; }
 
 /* --- Verdict ---------------------------------------------------------------------------------- */
 
-.verdict { overflow: hidden; --tone: var(--neutral); border-left: 3px solid var(--tone); }
+/* No overflow: hidden here, or the merge method menu would be cut off. */
+.verdict { --tone: var(--neutral); border-left: 3px solid var(--tone); }
 .verdict.tone-success { --tone: var(--success); }
 .verdict.tone-danger { --tone: var(--danger); }
 .verdict.tone-warning { --tone: var(--warning); }
@@ -230,6 +231,7 @@ button.more:hover { background: none; text-decoration: underline; }
   align-items: center;
   gap: 14px;
   padding: 16px 18px;
+  border-radius: 0 var(--radius) 0 0;
   background: linear-gradient(100deg, color-mix(in srgb, var(--tone) 11%, transparent), transparent 70%);
 }
 .verdict-icon {
@@ -312,6 +314,89 @@ button.row-head:hover { background: color-mix(in srgb, var(--vscode-toolbar-hove
 .reviewer .who { font-weight: 500; color: var(--vscode-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reviewer .who:hover { color: var(--link); }
 .reviewers.row .reviewer { padding: 3px 0; }
+
+/* --- Merge box -------------------------------------------------------------------------------- */
+
+.merge-box { border-top: 1px solid var(--border); padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; }
+.mb-row, .mb-note { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mb-text { flex: 1 1 260px; min-width: 0; }
+.mb-note { padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, var(--warning) 12%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent); }
+.mb-merge { position: relative; }
+.mb-actions { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.mb-hint { color: var(--muted); font-size: 0.92em; flex: 1 1 220px; min-width: 0; }
+
+.split { display: inline-flex; border-radius: 6px; box-shadow: var(--shadow); }
+button.merge-btn {
+  background: #1f883d;
+  color: #fff;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, #1f883d 80%, #000);
+}
+button.merge-btn:hover { background: #1a7f37; }
+button.merge-btn:disabled { opacity: 1; background: color-mix(in srgb, var(--muted) 22%, var(--bg)); color: var(--muted); border-color: var(--border); cursor: not-allowed; }
+.split button.merge-btn:first-child:not(:last-child) { border-radius: 6px 0 0 6px; }
+.split button.merge-btn.caret { border-radius: 0 6px 6px 0; border-left: 1px solid color-mix(in srgb, #000 25%, transparent); padding: 6px 8px; }
+.split.blocked button.merge-btn.caret { background: color-mix(in srgb, var(--muted) 22%, var(--bg)); color: var(--vscode-foreground); border-color: var(--border); }
+
+.mb-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 15;
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--vscode-editorWidget-background, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+  animation: open 0.14s ease both;
+}
+button.mb-item { justify-content: flex-start; align-items: flex-start; text-align: left; white-space: normal; padding: 8px 10px; gap: 8px; }
+.mb-check { width: 16px; flex: none; color: var(--accent); display: inline-flex; padding-top: 2px; }
+.mb-option { display: flex; flex-direction: column; gap: 2px; }
+.mb-option .muted { font-size: 0.92em; }
+
+.mb-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #1f883d 45%, var(--border));
+  background: color-mix(in srgb, #1f883d 6%, var(--card));
+  animation: open 0.18s ease both;
+}
+.mb-confirm-head { display: flex; align-items: center; gap: 8px; }
+.mb-confirm-head .codicon { color: var(--success); }
+.mb-fields { display: flex; flex-direction: column; gap: 8px; }
+.mb-fields input, .mb-fields textarea {
+  font: inherit;
+  width: 100%;
+  padding: 6px 9px;
+  border-radius: 6px;
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  background: var(--vscode-input-background, var(--bg));
+  border: 1px solid var(--vscode-input-border, var(--border));
+}
+.mb-fields input { font-weight: 600; }
+.mb-fields textarea { resize: vertical; min-height: 70px; font-family: var(--code-font); font-size: 0.92em; line-height: 1.5; }
+.mb-fields input:focus, .mb-fields textarea:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
+.mb-meta { font-size: 0.9em; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.mb-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+}
+button.danger { color: var(--danger); }
+button.danger.armed { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
 /* --- Avatars ---------------------------------------------------------------------------------- */
 
@@ -643,6 +728,7 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
   z-index: 100;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.success { border-color: var(--success); }
 
 /* A narrow editor: one column, with the verdict first, then the reviewer's progress and the
    people, then the description and the conversation. */

@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  checkRunState, failingText, latestChecks, mergeReviewers, mergeVerdict, sortChecks, statusContextState, summarizeBranch,
-  summarizeChecks, summarizeReviews, type Check, type MergeInput,
+  checkRunState, defaultCommitMessage, defaultMergeMethod, failingText, latestChecks, mergeBlocker, mergeReviewers, mergeVerdict,
+  sortChecks, statusContextState, summarizeBranch, summarizeChecks, summarizeReviews, type Check, type MergeInput, type MergeSettings,
 } from '../src/core/prStatus.ts';
-import { GitHub, checksFrom, timelineItem, type GhTimelineItem } from '../src/github.ts';
+import { GitHub, checksFrom, timelineItem, type GhOverview, type GhTimelineItem } from '../src/github.ts';
 import { renderGitHubMarkdown } from '../src/render.ts';
-import { buildTimeline, duration, labelColors, snippetLines } from '../src/overviewModel.ts';
+import { buildTimeline, duration, labelColors, mergeVM, snippetLines } from '../src/overviewModel.ts';
 
 const check = (name: string, state: Check['state'], extra: Partial<Check> = {}): Check => ({ name, state, required: false, ...extra });
 
@@ -109,6 +109,8 @@ test('timeline nodes from GraphQL, and checks from the status rollup', () => {
   const review = timelineItem({ __typename: 'PullRequestReview', id: 'R', state: 'APPROVED', createdAt: 'a', submittedAt: 'b', body: '', url: 'u', author: null, comments: { nodes: [{ id: 'C1' }] } });
   assert.deepEqual(review, { kind: 'review', id: 'R', author: { login: 'ghost', avatarUrl: undefined }, state: 'APPROVED', createdAt: 'b', body: '', url: 'u', reactions: [], commentIds: ['C1'] });
   assert.equal(timelineItem({ __typename: 'LabeledEvent' }), undefined);
+  assert.deepEqual(timelineItem({ __typename: 'HeadRefDeletedEvent', createdAt: 't', actor: { login: 'ann' }, headRefName: 'feat' }),
+    { kind: 'event', event: 'branchDeleted', actor: { login: 'ann', avatarUrl: undefined }, createdAt: 't', subject: 'feat' });
   const commit = timelineItem({ __typename: 'PullRequestCommit', url: 'u', commit: { oid: 'abc', messageHeadline: 'm', committedDate: 'd', author: { name: 'Bot Person', user: null } } });
   assert.deepEqual((commit as Extract<GhTimelineItem, { kind: 'commit' }>).author, { login: 'Bot Person' });
   const checks = checksFrom({ contexts: { nodes: [
@@ -192,4 +194,91 @@ test('label colours, durations and code snippets', () => {
   assert.ok(snippetLines(html, -1, 2).every(l => !l.marked));
   // html[0] is line `offset`.
   assert.deepEqual(snippetLines(['x', 'y'], 101, 101, 100).map(l => [l.number, l.html, l.marked]), [[101, 'x', false], [102, 'y', true]]);
+});
+
+test('merge method: the one the viewer used last, while it is still allowed', () => {
+  assert.equal(defaultMergeMethod({ methods: ['MERGE', 'SQUASH'], preferred: 'SQUASH' }), 'SQUASH');
+  assert.equal(defaultMergeMethod({ methods: ['MERGE', 'REBASE'], preferred: 'SQUASH' }), 'MERGE');
+  assert.equal(defaultMergeMethod({ methods: [] }), undefined);
+});
+
+test('default commit messages follow the settings of the repository', () => {
+  const pr = { number: 7, title: 'Add X', body: 'Why X.', head: 'ann/x', commits: [{ headline: 'a', body: '' }, { headline: 'b', body: 'more' }], commitCount: 2 };
+  const s: MergeSettings = { methods: ['MERGE', 'SQUASH', 'REBASE'] };
+  assert.deepEqual(defaultCommitMessage('SQUASH', { ...s, squashTitle: 'COMMIT_OR_PR_TITLE', squashMessage: 'COMMIT_MESSAGES' }, pr), { title: 'Add X (#7)', body: '* a\n\n* b\n\nmore' });
+  const one = { ...pr, commits: [{ headline: 'only', body: 'detail' }], commitCount: 1 };
+  assert.deepEqual(defaultCommitMessage('SQUASH', { ...s, squashTitle: 'COMMIT_OR_PR_TITLE', squashMessage: 'COMMIT_MESSAGES' }, one), { title: 'only (#7)', body: 'detail' });
+  assert.deepEqual(defaultCommitMessage('SQUASH', { ...s, squashTitle: 'PR_TITLE', squashMessage: 'PR_BODY' }, one), { title: 'Add X (#7)', body: 'Why X.' });
+  assert.equal(defaultCommitMessage('SQUASH', { ...s, squashMessage: 'BLANK' }, pr)!.body, '');
+  assert.deepEqual(defaultCommitMessage('MERGE', { ...s, mergeTitle: 'MERGE_MESSAGE', mergeMessage: 'PR_TITLE' }, pr), { title: 'Merge pull request #7 from ann/x', body: 'Add X' });
+  assert.deepEqual(defaultCommitMessage('MERGE', { ...s, mergeTitle: 'PR_TITLE', mergeMessage: 'PR_BODY' }, pr), { title: 'Add X (#7)', body: 'Why X.' });
+  assert.equal(defaultCommitMessage('REBASE', s, pr), undefined);
+});
+
+test('merge blocker: the merge state from GitHub decides, and failing checks it lets through are fine', () => {
+  const verdict = { tone: 'warning' as const, title: 'Merging is blocked', detail: 'A rule is not met.' };
+  const open = { state: 'OPEN' as const, isDraft: false, canMerge: true };
+  assert.equal(mergeBlocker({ ...open, mergeStateStatus: 'CLEAN' }, verdict), undefined);
+  assert.equal(mergeBlocker({ ...open, mergeStateStatus: 'UNSTABLE' }, verdict), undefined);
+  assert.equal(mergeBlocker({ ...open, mergeStateStatus: 'HAS_HOOKS' }, verdict), undefined);
+  assert.equal(mergeBlocker({ ...open, mergeStateStatus: 'BLOCKED' }, verdict), 'A rule is not met.');
+  assert.match(mergeBlocker({ ...open, mergeStateStatus: 'UNKNOWN' }, verdict)!, /still working out/);
+  assert.match(mergeBlocker({ ...open, isDraft: true, mergeStateStatus: 'DRAFT' }, verdict)!, /draft/);
+  assert.match(mergeBlocker({ ...open, canMerge: false, mergeStateStatus: 'CLEAN' }, verdict)!, /write access/);
+  assert.match(mergeBlocker({ ...open, state: 'MERGED', mergeStateStatus: 'CLEAN' }, verdict)!, /already merged/);
+});
+
+test('merge box: new commits, update branch, ready for review, delete branch', () => {
+  const o = {
+    title: 'T', body: '', url: 'u', state: 'OPEN', isDraft: false, headRef: 'feat', baseRef: 'main', commits: 1, headSha: 'h2',
+    headRefId: 'REF', canMerge: true, canPushHead: true, canUpdate: true, mergeStateStatus: 'BEHIND',
+    merge: { methods: ['SQUASH', 'REBASE'], preferred: 'SQUASH' }, lastCommit: { headline: 'c', body: '' }, timeline: [],
+  } as unknown as GhOverview;
+  const verdict = { tone: 'warning' as const, title: 'Out of date', detail: 'behind' };
+  const vm = mergeVM(o, verdict, { number: 3, owner: 'o', sessionHead: 'h1' });
+  assert.equal(vm.newCommits, true);
+  assert.equal(vm.canUpdateBranch, true);
+  assert.equal(vm.canMarkReady, false);
+  assert.equal(vm.canDeleteBranch, false);
+  assert.equal(vm.blocker, 'behind');
+  assert.deepEqual(vm.methods.map(m => m.method), ['SQUASH', 'REBASE']);
+  assert.deepEqual(Object.keys(vm.messages), ['SQUASH']);
+  assert.equal(vm.messages.SQUASH!.title, 'c (#3)');
+  assert.equal(mergeVM({ ...o, isDraft: true } as GhOverview, verdict, { number: 3, owner: 'o', sessionHead: 'h2' }).canMarkReady, true);
+  assert.equal(mergeVM({ ...o, isDraft: true, canUpdate: false } as GhOverview, verdict, { number: 3, owner: 'o', sessionHead: 'h2' }).canMarkReady, false);
+  const merged = mergeVM({ ...o, state: 'MERGED' } as GhOverview, verdict, { number: 3, owner: 'o', sessionHead: 'h1' });
+  assert.equal(merged.canDeleteBranch, true);
+  assert.equal(merged.newCommits, false);
+  assert.equal(mergeVM({ ...o, state: 'MERGED', headRefId: undefined } as GhOverview, verdict, { number: 3, owner: 'o', sessionHead: 'h1' }).canDeleteBranch, false);
+});
+
+test('merging sends the head GitHub must still be at, and only the message parts given', async () => {
+  const realFetch = globalThis.fetch;
+  const calls: { query: string; variables: any }[] = [];
+  globalThis.fetch = (async (_url: string, init: any) => {
+    calls.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ data: {} }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const gh = new GitHub('t');
+    await gh.mergePullRequest('PR_1', { method: 'SQUASH', expectedHeadOid: 'abc', title: 'T' });
+    await gh.mergePullRequest('PR_1', { method: 'REBASE', expectedHeadOid: 'abc' });
+    await gh.markReadyForReview('PR_1');
+    await gh.updateBranch('PR_1', 'abc');
+    await gh.deleteBranch('REF_1');
+    assert.deepEqual(calls.map(c => c.variables.input), [
+      { pullRequestId: 'PR_1', mergeMethod: 'SQUASH', expectedHeadOid: 'abc', commitHeadline: 'T' },
+      { pullRequestId: 'PR_1', mergeMethod: 'REBASE', expectedHeadOid: 'abc' },
+      { pullRequestId: 'PR_1' },
+      { pullRequestId: 'PR_1', expectedHeadOid: 'abc', updateMethod: 'MERGE' },
+      { refId: 'REF_1' },
+    ]);
+    assert.deepEqual(calls.map(c => /mutation\(\$input:(\w+)!\)\{(\w+)/.exec(c.query)?.slice(1)), [
+      ['MergePullRequestInput', 'mergePullRequest'], ['MergePullRequestInput', 'mergePullRequest'],
+      ['MarkPullRequestReadyForReviewInput', 'markPullRequestReadyForReview'],
+      ['UpdatePullRequestBranchInput', 'updatePullRequestBranch'], ['DeleteRefInput', 'deleteRef'],
+    ]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
