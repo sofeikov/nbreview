@@ -79,7 +79,7 @@ button.danger.armed { border-color: var(--vscode-errorForeground); }
 .toolbar .title { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 320px; }
 .toolbar .title .dir { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toolbar .title .file { font-weight: 600; white-space: nowrap; }
-.toolbar .title .pr { color: var(--vscode-textLink-foreground); text-decoration: none; margin-right: 6px; }
+.toolbar .title .pr { color: var(--vscode-textLink-foreground); margin-right: 6px; padding: 0 4px; }
 .toolbar .summary { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toolbar .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .chip { font-family: var(--code-font); font-size: 12px; font-weight: 600; }

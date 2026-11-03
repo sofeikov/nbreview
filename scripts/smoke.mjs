@@ -43,6 +43,7 @@ const RUN = [
   { command: 'nbreview.openNotebookDiff' },
   { command: 'nbreview.openFileDiff', args: ['README.md'] },
   { command: 'nbreview.openChangesSinceReview', args: ['README.md'] },
+  { command: 'nbreview.openOverview' },
   { command: 'nbreview.openOnGitHub' },
   { command: 'nbreview.markViewed' },
   { command: 'nbreview.markNotViewed' },

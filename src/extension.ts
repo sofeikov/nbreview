@@ -5,6 +5,7 @@ import { ReviewSession } from './session.ts';
 import { ReviewState } from './state.ts';
 import { TextReview } from './textReview.ts';
 import { VisualReview } from './visualReview.ts';
+import { OverviewPage } from './overview.ts';
 import { FilesTree, fileLayout, initFileLayout, nodePath, nodePaths, onDidChangeFileLayout, reviewOrder, setFileLayout, type Node } from './tree.ts';
 import { allFolders } from './paths.ts';
 import { PrBadges, PrList, pickPullRequest, type RepoRef } from './prList.ts';
@@ -14,6 +15,7 @@ let log: vscode.OutputChannel;
 let state: ReviewState;
 let text: TextReview;
 let visual: VisualReview;
+let overview: OverviewPage;
 let treeView: vscode.TreeView<Node>;
 let status: vscode.StatusBarItem;
 let prList: PrList;
@@ -24,9 +26,10 @@ export function activate(context: vscode.ExtensionContext): void {
   state = new ReviewState(context);
   text = new TextReview(state, context);
   visual = new VisualReview(state, text, context);
-  context.subscriptions.push(initFileLayout(context.globalState));
+  overview = new OverviewPage(state, visual, context);
+  context.subscriptions.push(initFileLayout(context.globalState), overview);
   treeView = vscode.window.createTreeView('nbreview.files', {
-    treeDataProvider: new FilesTree(state),
+    treeDataProvider: new FilesTree(state, overview),
     showCollapseAll: true,
     manageCheckboxStateManually: true,
   });
@@ -117,6 +120,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const view = vscode.workspace.getConfiguration('nbreview').get<string>('defaultView', 'visual');
       return state.session.notebooks.has(path) || view === 'visual' ? visual.open(path, undefined, { since: true }) : text.openSinceReviewDiff(path);
     }),
+    vscode.commands.registerCommand('nbreview.openOverview', () => overview.open()),
     vscode.commands.registerCommand('nbreview.openOnGitHub', () => state.session && vscode.env.openExternal(vscode.Uri.parse(state.session.pr.url))),
     vscode.commands.registerCommand('nbreview.submitReview', (request?: SubmitRequest) =>
       request?.event ? submit(request) : submitInteractive().catch(showError)),

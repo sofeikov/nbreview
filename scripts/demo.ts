@@ -1,12 +1,15 @@
-// Writes out/demo/index.html: the visual review page for the demo notebooks in docs/demo, with a
-// sample review thread, running outside VS Code. Used for the README screenshots and to work on
-// the page without a pull request. Run with `npm run demo`, then serve out/demo over HTTP.
+// Writes out/demo/index.html, the visual review page for the demo notebooks in docs/demo with
+// sample review threads, and out/demo/overview.html, the Overview page of the same made-up pull
+// request, both running outside VS Code. Used for the README screenshots and to work on the pages
+// without a pull request. Run with `npm run demo`, then serve out/demo over HTTP.
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { parseNotebook } from '../src/core/notebook.ts';
 import { buildReviewDoc, docLineForSource } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
 import { buildFileThreads, buildFileViewModel, buildThreads, buildViewModel } from '../src/viewModel.ts';
-import type { FileThread, NotebookEntry, PlacedThread } from '../src/session.ts';
+import type { FileThread, NotebookEntry, PlacedThread, ReviewSession } from '../src/session.ts';
+import type { GhOverview } from '../src/github.ts';
+import { buildOverview } from '../src/overviewModel.ts';
 
 const path = 'nbs/02_xg_model.ipynb';
 const patch = readFileSync('docs/demo/xg_model.patch', 'utf8');
@@ -113,6 +116,24 @@ const fileThreads = buildFileThreads([
   },
 ] as unknown as FileThread[], () => '');
 
+const THEME = `/* The theme variables VS Code gives a webview, from the Dark Modern theme. */
+html {
+  --vscode-font-family: system-ui, "Segoe UI", Ubuntu, sans-serif; --vscode-font-size: 13px;
+  --vscode-editor-font-family: "Droid Sans Mono", "DejaVu Sans Mono", monospace; --vscode-editor-font-size: 13px;
+  --vscode-foreground: #cccccc; --vscode-descriptionForeground: #9d9d9d; --vscode-editor-background: #1f1f1f;
+  --vscode-sideBar-background: #181818; --vscode-widget-border: #313131; --vscode-editorWidget-background: #202020;
+  --vscode-button-background: #0078d4; --vscode-button-foreground: #ffffff; --vscode-button-hoverBackground: #026ec1;
+  --vscode-button-secondaryBackground: #313131; --vscode-button-secondaryForeground: #cccccc;
+  --vscode-badge-background: #616161; --vscode-badge-foreground: #f8f8f8;
+  --vscode-diffEditor-insertedLineBackground: rgba(155, 185, 85, 0.2); --vscode-diffEditor-removedLineBackground: rgba(255, 0, 0, 0.2);
+  --vscode-textLink-foreground: #4daafc; --vscode-input-background: #313131; --vscode-input-border: #3c3c3c;
+  --vscode-input-foreground: #cccccc; --vscode-focusBorder: #0078d4; --vscode-textCodeBlock-background: #2b2b2b;
+  --vscode-editorLineNumber-foreground: #6e7681; --vscode-toolbar-hoverBackground: rgba(90, 93, 94, 0.31);
+  --vscode-textBlockQuote-background: #2b2b2b; --vscode-textBlockQuote-border: #616161;
+  --vscode-list-hoverBackground: #2a2d2e; --vscode-list-inactiveSelectionBackground: #37373d;
+  --vscode-errorForeground: #f85149; --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
+}`;
+
 mkdirSync('out/demo', { recursive: true });
 cpSync('dist', 'out/demo/dist', { recursive: true });
 writeFileSync('out/demo/data.js', [
@@ -129,23 +150,7 @@ writeFileSync('out/demo/index.html', `<!DOCTYPE html>
 <link rel="stylesheet" href="dist/katex/katex.min.css">
 <link rel="stylesheet" href="dist/webview.css">
 <style>
-/* The theme variables VS Code gives a webview, from the Dark Modern theme. */
-html {
-  --vscode-font-family: system-ui, "Segoe UI", Ubuntu, sans-serif; --vscode-font-size: 13px;
-  --vscode-editor-font-family: "Droid Sans Mono", "DejaVu Sans Mono", monospace; --vscode-editor-font-size: 13px;
-  --vscode-foreground: #cccccc; --vscode-descriptionForeground: #9d9d9d; --vscode-editor-background: #1f1f1f;
-  --vscode-sideBar-background: #181818; --vscode-widget-border: #313131; --vscode-editorWidget-background: #202020;
-  --vscode-button-background: #0078d4; --vscode-button-foreground: #ffffff; --vscode-button-hoverBackground: #026ec1;
-  --vscode-button-secondaryBackground: #313131; --vscode-button-secondaryForeground: #cccccc;
-  --vscode-badge-background: #616161; --vscode-badge-foreground: #f8f8f8;
-  --vscode-diffEditor-insertedLineBackground: rgba(155, 185, 85, 0.2); --vscode-diffEditor-removedLineBackground: rgba(255, 0, 0, 0.2);
-  --vscode-textLink-foreground: #4daafc; --vscode-input-background: #313131; --vscode-input-border: #3c3c3c;
-  --vscode-input-foreground: #cccccc; --vscode-focusBorder: #0078d4; --vscode-textCodeBlock-background: #2b2b2b;
-  --vscode-editorLineNumber-foreground: #6e7681; --vscode-toolbar-hoverBackground: rgba(90, 93, 94, 0.31);
-  --vscode-textBlockQuote-background: #2b2b2b; --vscode-textBlockQuote-border: #616161;
-  --vscode-list-hoverBackground: #2a2d2e; --vscode-list-inactiveSelectionBackground: #37373d;
-  --vscode-errorForeground: #f85149; --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
-}
+${THEME}
 </style>
 </head>
 <body class="vscode-dark" data-path="${path}">
@@ -212,3 +217,175 @@ if (scene === 'submit') {
 </html>
 `);
 console.log('wrote out/demo/index.html');
+
+// --- The Overview page ---------------------------------------------------------------------------
+
+const daysAgo = (d: number) => hoursAgo(d * 24);
+const people = {
+  maria: { login: 'maria', avatarUrl: undefined },
+  tom: { login: 'tom', avatarUrl: undefined },
+  priya: { login: 'priya', avatarUrl: undefined },
+};
+const resolvedThread = {
+  nbPath: path,
+  side: 'RIGHT',
+  docLine: docLineForSource(entry.head, 'load', 1)!,
+  gh: {
+    id: 'thread-3', isResolved: true, isOutdated: false, viewerCanResolve: false, viewerCanUnresolve: true, subjectType: 'LINE', path,
+    comments: [{
+      id: 'c-3', author: 'priya', body: 'Nit: `body_part` has `"Head"` capitalised in the 2023 data.', createdAt: daysAgo(1.2), url: 'https://github.com/',
+      pending: false, viewerCanUpdate: false, viewerCanDelete: false, reactions: [],
+    }, {
+      id: 'c-4', author: 'tom', body: 'Good catch, lower-cased it in the loader.', createdAt: daysAgo(1.1), url: 'https://github.com/',
+      pending: false, viewerCanUpdate: false, viewerCanDelete: false, reactions: [{ content: 'HEART', count: 1, viewerHasReacted: false }],
+    }],
+  },
+} as unknown as PlacedThread;
+const session = {
+  pr: { owner: 'example-org', repo: 'xg-models', number: 42, title: 'Add a body-part term to the xG model', url: 'https://github.com/' },
+  notebooks: new Map([[path, entry]]),
+  placed: [...placed, resolvedThread],
+  fileThreads: new Map([[trainFile.filename, [{
+    path: trainFile.filename, side: 'RIGHT', docLine: 7,
+    gh: {
+      id: 'file-thread-1', isResolved: false, isOutdated: false, viewerCanResolve: true, viewerCanUnresolve: false, subjectType: 'LINE', path: trainFile.filename,
+      comments: [{
+        id: 'fc-1', author: 'maria', body: 'Could `c` come from `configs/xg.toml` instead of a default here, so the notebook and the pipeline agree?',
+        createdAt: hoursAgo(3), url: 'https://github.com/', pending: false, viewerCanUpdate: false, viewerCanDelete: false,
+        reactions: [{ content: 'THUMBS_UP', count: 1, viewerHasReacted: true }],
+      }],
+    },
+  }]]]),
+  content: async () => trainHead,
+} as unknown as ReviewSession;
+const check = (name: string, workflow: string | undefined, state: string, minutes: number, extra: object = {}) =>
+  ({ name, workflow, state, required: false, startedAt: hoursAgo(2), completedAt: state === 'pending' ? undefined : new Date(Date.now() - 2 * 3600e3 + minutes * 60e3).toISOString(), url: 'https://github.com/', ...extra });
+const scenes: Record<string, Partial<GhOverview>> = {
+  // The default: approved by one reviewer, waiting on another, one check failing.
+  '': {},
+  ready: {
+    reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN',
+    reviewers: [{ ...people.maria, state: 'APPROVED', submittedAt: hoursAgo(1) }, { ...people.priya, state: 'APPROVED', submittedAt: daysAgo(1) }],
+    checks: [check('test (3.12)', 'CI', 'success', 4, { required: true }), check('lint', 'CI', 'success', 1), check('docs', 'Docs', 'success', 2)] as any,
+  },
+  running: {
+    mergeStateStatus: 'BLOCKED', mergeable: 'UNKNOWN',
+    checks: [check('test (3.12)', 'CI', 'pending', 0, { required: true, description: 'In progress' }), check('lint', 'CI', 'success', 1)] as any,
+  },
+  merged: { state: 'MERGED', mergedBy: 'maria', mergedAt: hoursAgo(0.5), reviewDecision: 'APPROVED' },
+};
+const scene = scenes[process.env.OVERVIEW_SCENE ?? ''] ?? {};
+const overview: GhOverview = {
+  viewer: 'you',
+  title: 'Add a body-part term to the xG model',
+  url: 'https://github.com/',
+  state: 'OPEN',
+  isDraft: false,
+  author: people.tom,
+  createdAt: daysAgo(2),
+  body: [
+    'Headers convert at about half the rate of shots with the foot from the same spot, so the model now gets a `header` flag.',
+    '',
+    '## What changed',
+    '- `02_xg_model.ipynb`: adds the feature, refits, and redraws the calibration curve',
+    '- `src/xg/train.py`: the same feature in the pipeline, with `C` as a parameter',
+    '',
+    '## Checklist',
+    '- [x] Calibration curve redrawn',
+    '- [x] Pipeline and notebook agree',
+    '- [ ] Brier score in the model card',
+    '',
+    'Closes #31. cc @maria :tada:',
+  ].join('\n'),
+  reactions: [{ content: 'HOORAY', count: 2, viewerHasReacted: false }, { content: 'EYES', count: 1, viewerHasReacted: true }],
+  baseRef: 'main',
+  headRef: 'xg-body-part',
+  additions: 128,
+  deletions: 41,
+  changedFiles: 4,
+  commits: 5,
+  mergeable: 'MERGEABLE',
+  mergeStateStatus: 'BLOCKED',
+  reviewDecision: 'REVIEW_REQUIRED',
+  reviewers: [
+    { ...people.maria, state: 'APPROVED', submittedAt: hoursAgo(1) },
+    { ...people.priya, state: 'REQUESTED' },
+    { login: 'data-science', state: 'REQUESTED', team: true },
+  ],
+  assignees: [people.tom],
+  labels: [{ name: 'model', color: '1d76db' }, { name: 'needs-review', color: 'fbca04' }, { name: 'xg', color: 'c5def5' }],
+  milestone: 'Season 26/27 models',
+  closingIssues: [{ number: 31, title: 'xG overrates headers from close range', url: 'https://github.com/', state: 'OPEN' }],
+  checks: [
+    check('test (3.11)', 'CI', 'failure', 3, { required: true, description: '2 tests failed' }),
+    check('test (3.12)', 'CI', 'success', 4, { required: true }),
+    check('lint', 'CI', 'success', 1),
+    check('notebooks run', 'Notebooks', 'success', 9),
+    check('docs', 'Docs', 'skipped', 0),
+  ] as any,
+  timeline: [
+    { kind: 'commit', oid: 'a1b2c3d4e5f6', message: 'Add a header flag to the shot features', author: people.tom, createdAt: daysAgo(2.1), url: 'https://github.com/' },
+    { kind: 'commit', oid: 'b2c3d4e5f6a1', message: 'Refit and redraw the calibration curve', author: people.tom, createdAt: daysAgo(2.05), url: 'https://github.com/' },
+    { kind: 'event', event: 'reviewRequested', actor: people.tom, createdAt: daysAgo(2), subject: 'priya' },
+    { kind: 'comment', id: 'ic-1', author: people.priya, createdAt: daysAgo(1.5), body: 'Is the 2023 data in yet? The headers there look odd.', url: 'https://github.com/', reactions: [] },
+    { kind: 'review', id: 'r-1', author: people.priya, state: 'COMMENTED', createdAt: daysAgo(1.2), body: '', url: 'https://github.com/', reactions: [], commentIds: ['c-3'] },
+    { kind: 'commit', oid: 'c3d4e5f6a1b2', message: 'Lower-case body_part when loading', author: people.tom, createdAt: daysAgo(1.1), url: 'https://github.com/' },
+    { kind: 'event', event: 'forcePushed', actor: people.tom, createdAt: daysAgo(1) },
+    { kind: 'review', id: 'r-2', author: people.maria, state: 'CHANGES_REQUESTED', createdAt: hoursAgo(5), body: 'Two things before this goes in: the `C` default, and where the tuning lives.', url: 'https://github.com/', reactions: [], commentIds: ['c-1', 'fc-1'] },
+    { kind: 'review', id: 'r-3', author: people.tom, state: 'COMMENTED', createdAt: hoursAgo(2), body: '', url: 'https://github.com/', reactions: [], commentIds: ['c-2'] },
+    { kind: 'commit', oid: 'd4e5f6a1b2c3', message: 'Read C from configs/xg.toml', author: people.tom, createdAt: hoursAgo(1.5), url: 'https://github.com/' },
+    { kind: 'review', id: 'r-4', author: people.maria, state: 'APPROVED', createdAt: hoursAgo(1), body: 'Thanks, looks good now :rocket:', url: 'https://github.com/', reactions: [{ content: 'THUMBS_UP', count: 1, viewerHasReacted: false }], commentIds: [] },
+  ],
+  timelineMissing: 0,
+  ...scene,
+};
+// The variables of VS Code's Light Modern theme that differ from the dark ones above.
+const LIGHT_THEME = [
+  '--vscode-foreground: #3b3b3b', '--vscode-descriptionForeground: #3b3b3b', '--vscode-editor-background: #ffffff',
+  '--vscode-sideBar-background: #f8f8f8', '--vscode-widget-border: #e5e5e5', '--vscode-editorWidget-background: #f8f8f8',
+  '--vscode-button-secondaryBackground: #e5e5e5', '--vscode-button-secondaryForeground: #3b3b3b',
+  '--vscode-textLink-foreground: #005fb8', '--vscode-textCodeBlock-background: #f2f2f2', '--vscode-toolbar-hoverBackground: rgba(184, 184, 184, 0.31)',
+  '--vscode-list-hoverBackground: #f2f2f2', '--vscode-widget-shadow: rgba(0, 0, 0, 0.16)', '--vscode-focusBorder: #005fb8',
+  '--vscode-button-background: #005fb8', '--vscode-button-hoverBackground: #0258a8',
+].join('; ');
+const overviewVM = await buildOverview(overview, session);
+writeFileSync('out/demo/overview-data.js', `window.__OVERVIEW__ = ${JSON.stringify(overviewVM)};\n`);
+writeFileSync('out/demo/overview.html', `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notebook Review overview demo</title>
+<link rel="stylesheet" href="dist/overview.css">
+<style>
+${THEME}
+</style>
+</head>
+<body class="vscode-dark" data-pr="example-org/xg-models#42">
+<div id="app"></div>
+<script>
+const deliver = data => window.dispatchEvent(new MessageEvent('message', { data }));
+window.acquireVsCodeApi = () => ({ postMessage(m) { console.log('message', m); }, getState() { return undefined; }, setState() {} });
+</script>
+<script>
+// overview.html?still has no animations, for screenshots taken as soon as the page loads, and
+// ?light shows the page in VS Code's Light Modern theme.
+if (location.search.includes('still')) {
+  document.head.insertAdjacentHTML('beforeend', '<style>*, *::before { animation: none !important; transition: none !important; }</style>');
+}
+if (location.search.includes('light')) {
+  document.body.className = 'vscode-light';
+  document.documentElement.style.cssText = ${JSON.stringify(LIGHT_THEME)};
+}
+</script>
+<script src="overview-data.js"></script>
+<script src="dist/overview.js"></script>
+<script>
+deliver({ type: 'overview', overview: window.__OVERVIEW__ });
+deliver({ type: 'progress', progress: { files: 4, viewed: 2, pending: 1, pendingReview: true, unresolved: 2, nextFile: 'src/xg/train.py' } });
+deliver({ type: 'loading', loading: false });
+</script>
+</body>
+</html>
+`);
+console.log('wrote out/demo/overview.html');

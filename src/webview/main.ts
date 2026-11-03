@@ -1,10 +1,10 @@
 // The visual review page. Renders the notebook pair as cell cards (rendered markdown, highlighted
 // code diffs, outputs) and the review threads, and sends comment actions back to the extension.
-import DOMPurify from 'dompurify';
 import type { Anchor, CellVM, CommentVM, HostMessage, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
 import { REACTIONS, REACTION_NAMES, type ReactionContent } from '../core/reactions.ts';
 import { showsThread, type CommentFilter } from '../core/commentFilter.ts';
 import { diffPixels, pairImages, type ImagePair } from './imageDiff.ts';
+import { button, h, icon, sanitize, timeAgo, type Child } from './dom.ts';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: WebviewMessage): void;
@@ -63,74 +63,6 @@ function post(msg: WebviewMessage): void {
 function persist(): void {
   // `path` lets the extension reopen this tab after VS Code reloads.
   vscode.setState({ ...ui, scrollY: window.scrollY, path: document.body.dataset.path });
-}
-
-// --- DOM helpers -------------------------------------------------------------------------------
-
-type Child = Node | string | null | undefined | false;
-
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...kids: Child[]): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (v === undefined || v === null || v === false) {
-      continue;
-    }
-    if (k === 'class') {
-      el.className = String(v);
-    } else if (k === 'html') {
-      el.innerHTML = sanitize(String(v));
-    } else if (k === 'text') {
-      el.textContent = String(v);
-    } else if (k.startsWith('on') && typeof v === 'function') {
-      el.addEventListener(k.slice(2), v as EventListener);
-    } else if (k === 'data') {
-      for (const [dk, dv] of Object.entries(v as Record<string, unknown>)) {
-        if (dv !== undefined) {
-          el.dataset[dk] = String(dv);
-        }
-      }
-    } else {
-      el.setAttribute(k, v === true ? '' : String(v));
-    }
-  }
-  for (const kid of kids) {
-    if (kid !== null && kid !== undefined && kid !== false) {
-      el.append(kid);
-    }
-  }
-  return el;
-}
-
-function sanitize(html: string): string {
-  return DOMPurify.sanitize(html, { ADD_ATTR: ['target'], FORBID_TAGS: ['style', 'form', 'input', 'button'] });
-}
-
-/** SVGs of the codicons in icons.json, put in at build time. */
-declare const __ICONS__: Record<string, string>;
-
-function icon(name: string): HTMLElement {
-  const el = h('span', { class: `codicon codicon-${name}`, 'aria-hidden': 'true' });
-  el.innerHTML = __ICONS__[name] ?? '';
-  return el;
-}
-
-function button(label: Child | Child[], onclick: (e: MouseEvent) => void, props: Record<string, unknown> = {}): HTMLButtonElement {
-  return h('button', { type: 'button', ...props, onclick }, ...(Array.isArray(label) ? label : [label]));
-}
-
-function timeAgo(iso?: string): string {
-  if (!iso) {
-    return '';
-  }
-  const seconds = (new Date(iso).getTime() - Date.now()) / 1000;
-  const fmt = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
-  const units: [Intl.RelativeTimeFormatUnit, number][] = [['year', 31536000], ['month', 2592000], ['week', 604800], ['day', 86400], ['hour', 3600], ['minute', 60]];
-  for (const [unit, size] of units) {
-    if (Math.abs(seconds) >= size) {
-      return fmt.format(Math.round(seconds / size), unit);
-    }
-  }
-  return 'just now';
 }
 
 function layout(): 'split' | 'unified' {
@@ -195,7 +127,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
       icon(m.kind === 'file' ? 'file' : 'notebook'),
       h('span', { class: 'dir', text: slash >= 0 ? m.path.slice(0, slash + 1) : '' }),
       h('span', { class: 'file', text: m.path.slice(slash + 1) }),
-      h('a', { class: 'pr', href: m.pr.url, title: `${m.pr.title} (open on GitHub)`, text: `#${m.pr.number}` }),
+      button(`#${m.pr.number}`, () => post({ type: 'openOverview' }), { class: 'pr', title: `${m.pr.title}: show the overview (status, description and conversation)` }),
       ...chips,
       h('span', { class: 'summary', text: (m.kind === 'file' ? fileSummary(m) : describe.join(' · ') || 'no cell changes') + (m.since ? ` since ${m.since.label}` : '') }),
     ),

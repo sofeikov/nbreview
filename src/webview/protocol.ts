@@ -172,4 +172,5 @@ export type WebviewMessage =
   | { type: 'submitReview'; event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'; body: string }
   | { type: 'setViewed'; viewed: boolean }
   | { type: 'openTextDiff'; cellId?: string; side?: Side }
+  | { type: 'openOverview' }
   | { type: 'openExternal'; url: string };

@@ -13,7 +13,7 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
 | `npm run e2e -- --repo owner/name [--keep]` | Drives the extension's session and state code (with a stand-in for the `vscode` module) against real GitHub, on a throwaway branch and draft PR it opens, then closes and deletes. It leaves visible comments on the closed PR: use `sofeikov/nbreview` or another repository where that is fine. Never use a company repository. |
 | `npm run package` | Builds `nbreview.vsix`. `.vscodeignore` excludes everything by default and lists only what ships. |
 | `npm run bench -- …` | Compares the speed of a git ref with the working tree, with a 95% bootstrap confidence interval. Use it before claiming a speed-up. |
-| `npm run demo` | Writes `out/demo/index.html`, the review page for `docs/demo/` outside VS Code. The README screenshots come from it. |
+| `npm run demo` | Writes `out/demo/index.html`, the review page for `docs/demo/`, and `out/demo/overview.html`, the Overview of a made-up pull request, outside VS Code. The README screenshots come from them (headless Firefox, which as a snap can't read `/tmp`). |
 
 ## How it fits together
 
@@ -24,12 +24,14 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
   - `patch.ts` works out which lines GitHub accepts comments on, from the patch.
   - `anchor.ts` decides where a notebook comment lands. A line comment is used when the line is in the diff; otherwise it becomes a file comment. It also handles the hidden marker `<!-- nbreview:{…} -->` that puts a thread back on its cell, suggestions re-encoded as notebook JSON lines, and the optional nbdev mapping.
   - `fileComments.ts` does the same for ordinary files.
-- **`src/github.ts`** is a small GitHub client. GraphQL handles threads, the viewer's pending review, viewed flags and PR search. REST handles files, contents and single comments.
+  - `prStatus.ts` works out where a pull request stands from GitHub's checks, reviews and merge state, and the Overview's one-line verdict.
+- **`src/github.ts`** is a small GitHub client. GraphQL handles threads, the viewer's pending review, viewed flags, PR search and the Overview (status, people, timeline: `getOverview`). REST handles files, contents and single comments.
 - **`src/session.ts`** holds everything known about the open PR. It has no VS Code API.
 - **`src/state.ts`** (`ReviewState`) is the review in progress. Both views listen to its change events.
 - **The views:**
   - `textReview.ts` is the text diff. VS Code's Comments API doesn't work inside notebook cells, so notebooks are shown as a virtual document (scheme `nbreview:`) in the diff editor. Other files use `nbreview-raw:`.
   - `visualReview.ts` and `src/webview/` are the review page, for every changed file: a webview with a CSP nonce, `retainContextWhenHidden`, and a panel serializer. The page's codicons are built into the page script from `src/webview/icons.json`.
+  - `overview.ts`, `overviewModel.ts` and `src/webview/overview.ts` are the pull request Overview, opened from the Review panel's PR row: a second webview (`nbreview.overview`) with its own bundle, stylesheet (`media/overview.css`) and icon list (`src/webview/overviewIcons.json`). `overview.ts` also keeps the status shown on that row. It only reads from GitHub. `src/webview/dom.ts` has the DOM helpers both pages share.
   - `viewModel.ts` builds the page's data. A notebook gives one card per cell. Any other file is one cell (`id: 'file'`) in its language, or Markdown; its comments go through `planFileComment` (`kind: 'cell'` means the whole file). `mdDiff.ts` does the word-level diff of Markdown, and `webview/imageDiff.ts` the plot comparison.
 - **The side panels:**
   - `tree.ts` is the Review panel, with Viewed checkboxes and a tree or list layout.

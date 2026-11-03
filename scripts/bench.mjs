@@ -50,7 +50,9 @@ async function prepare(dir, name) {
   writeFileSync(`${out}/activate.cjs`, `
 const Module = require('module');
 const load = Module._load;
-const stub = new Proxy(function () {}, { get: (_, k) => (k === '__esModule' ? false : stub), apply: () => stub, construct: () => stub });
+// esbuild's import helper builds the module object on the stub's prototype, so that is the stub too:
+// otherwise names used when the bundle loads, such as vscode.EventEmitter, come out undefined.
+const stub = new Proxy(function () {}, { get: (_, k) => (k === '__esModule' ? false : stub), apply: () => stub, construct: () => stub, getPrototypeOf: () => stub });
 Module._load = (request, ...rest) => (request === 'vscode' ? stub : load(request, ...rest));
 const t0 = performance.now();
 require(${JSON.stringify(`${dir}/dist/extension.js`)});

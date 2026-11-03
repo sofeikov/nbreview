@@ -70,6 +70,76 @@ for (const name of Object.keys(cellMd.renderer.rules).filter(n => n.startsWith('
 
 const commentMd = new MarkdownIt({ html: true, linkify: true, breaks: true, highlight: highlightFence });
 
+// GitHub's flavour for pull request descriptions and conversation comments: task lists, links
+// for #123 and @someone, and the commonest emoji shortcodes.
+const githubMd = new MarkdownIt({ html: true, linkify: true, breaks: true, highlight: highlightFence });
+
+const EMOJI: Record<string, string> = {
+  '+1': '👍', '-1': '👎', thumbsup: '👍', thumbsdown: '👎', tada: '🎉', rocket: '🚀', eyes: '👀', heart: '❤️', fire: '🔥',
+  smile: '😄', laughing: '😆', confused: '😕', thinking: '🤔', pray: '🙏', clap: '👏', wave: '👋', ok_hand: '👌', raised_hands: '🙌',
+  point_left: '👈', point_right: '👉', point_up: '☝️', point_down: '👇', warning: '⚠️', white_check_mark: '✅', heavy_check_mark: '✔️',
+  x: '❌', bug: '🐛', sparkles: '✨', memo: '📝', bulb: '💡', construction: '🚧', '100': '💯', boom: '💥', zap: '⚡', lock: '🔒',
+  question: '❓', exclamation: '❗', star: '⭐', package: '📦', wrench: '🔧', hammer: '🔨', recycle: '♻️', art: '🎨', chart_with_upwards_trend: '📈',
+  bar_chart: '📊', notebook: '📓', snake: '🐍', test_tube: '🧪', broom: '🧹', lipstick: '💄', see_no_evil: '🙈', sweat_smile: '😅', joy: '😂',
+};
+
+const REF_RE = /(^|[^\w/&#@.-])(?:#(\d+)|@([A-Za-z\d](?:[A-Za-z\d]|-(?=[A-Za-z\d])){0,38})|:([\w+-]+):)(?![\w-])/g;
+
+githubMd.core.ruler.push('nbreview_github', state => {
+  const repoUrl: string | undefined = state.env?.repoUrl;
+  state.tokens.forEach((block, i) => {
+    if (block.type !== 'inline' || !block.children) {
+      return;
+    }
+    // "- [x] done" as a ticked box, like GitHub's (read-only) task lists.
+    const first = block.children[0];
+    const task = first?.type === 'text' && state.tokens[i - 2]?.type === 'list_item_open' ? /^\[([ xX])\]\s/.exec(first.content) : null;
+    if (task) {
+      first.content = first.content.slice(task[0].length);
+      const box = new state.Token('html_inline', '', 0);
+      box.content = `<span class="task-box${task[1] === ' ' ? '' : ' done'}" aria-label="${task[1] === ' ' ? 'not done' : 'done'}"></span>`;
+      block.children.unshift(box);
+      state.tokens[i - 2].attrJoin('class', 'task-item');
+    }
+    let inLink = 0;
+    const out: typeof block.children = [];
+    for (const t of block.children) {
+      if (t.type === 'link_open') {
+        inLink++;
+      } else if (t.type === 'link_close') {
+        inLink--;
+      }
+      if (t.type !== 'text' || inLink || !REF_RE.test(t.content)) {
+        REF_RE.lastIndex = 0;
+        out.push(t);
+        continue;
+      }
+      REF_RE.lastIndex = 0;
+      const html = escapeHtml(t.content).replace(REF_RE, (whole, lead: string, issue?: string, login?: string, emoji?: string) => {
+        if (issue && repoUrl) {
+          return `${lead}<a class="ref" href="${repoUrl}/issues/${issue}">#${issue}</a>`;
+        }
+        if (login) {
+          return `${lead}<a class="mention" href="https://github.com/${login}">@${login}</a>`;
+        }
+        if (emoji && EMOJI[emoji]) {
+          return `${lead}${EMOJI[emoji]}`;
+        }
+        return whole;
+      });
+      const token = new state.Token('html_inline', '', 0);
+      token.content = html;
+      out.push(token);
+    }
+    block.children = out;
+  });
+});
+
+/** A pull request description or conversation comment, rendered as github.com does (mostly). */
+export function renderGitHubMarkdown(text: string, repoUrl?: string): string {
+  return githubMd.render(text, { repoUrl });
+}
+
 export function renderMarkdownCell(source: string[]): string {
   return cellMd.render(source.join('\n'));
 }

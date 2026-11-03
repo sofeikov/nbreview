@@ -5,6 +5,8 @@ import type { NotebookChanges, NotebookEntry, OtherFile } from './session.ts';
 import type { ReviewState } from './state.ts';
 import type { GhThread } from './github.ts';
 import type { CommentFilter } from './core/commentFilter.ts';
+import type { Tone } from './core/prStatus.ts';
+import type { OverviewPage } from './overview.ts';
 import { basename, buildFolderTree, dirname, shortPath, treeOrder, type FolderNode } from './paths.ts';
 
 export type Node =
@@ -49,8 +51,9 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
 
-  constructor(private readonly state: ReviewState) {
+  constructor(private readonly state: ReviewState, private readonly overview: OverviewPage) {
     state.onDidChange(() => this.changed.fire());
+    overview.onDidChangeStatus(() => this.changed.fire());
     onDidChangeFileLayout(() => this.changed.fire());
   }
 
@@ -92,11 +95,14 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
     switch (node.kind) {
       case 'pr': {
         const item = new vscode.TreeItem(`#${s.pr.number} ${s.pr.title}`);
-        item.description = `${s.pr.headRef} → ${s.pr.baseRef}`;
-        item.tooltip = new vscode.MarkdownString(`**${s.pr.title}**\n\n${s.pr.owner}/${s.pr.repo}#${s.pr.number} by @${s.pr.author}\n\n\`${s.pr.headRef}\` → \`${s.pr.baseRef}\`${sinceReviewNote(this.state)}`);
-        item.iconPath = new vscode.ThemeIcon('git-pull-request');
+        // Where it stands, once GitHub has said: "Ready to merge", "Checks failing" and so on.
+        const status = this.overview.status();
+        item.description = status ? status.verdict.title : `${s.pr.headRef} → ${s.pr.baseRef}`;
+        const lines = status ? `\n\n**${status.verdict.title}**: ${status.verdict.detail}\n\n${status.reviews.title} · ${status.checks.title}` : '';
+        item.tooltip = new vscode.MarkdownString(`**${s.pr.title}**\n\n${s.pr.owner}/${s.pr.repo}#${s.pr.number} by @${s.pr.author}\n\n\`${s.pr.headRef}\` → \`${s.pr.baseRef}\`${lines}${sinceReviewNote(this.state)}\n\nClick for the overview: status, description and conversation.`);
+        item.iconPath = new vscode.ThemeIcon(status?.verdict.tone === 'merged' ? 'git-merge' : 'git-pull-request', status && toneColor(status.verdict.tone));
         item.contextValue = 'pr';
-        item.command = { command: 'nbreview.openOnGitHub', title: 'Open on GitHub' };
+        item.command = { command: 'nbreview.openOverview', title: 'Show Overview' };
         return item;
       }
       case 'group': {
@@ -301,6 +307,22 @@ function sinceReviewNote(state: ReviewState): string {
   }
   const n = s.files.filter(f => s.changedSince(f.filename)).length;
   return `\n\n${n ? `${n} file${n === 1 ? '' : 's'} changed` : 'Nothing changed'} since ${reviewLabel(s)}`;
+}
+
+function toneColor(tone: Tone): vscode.ThemeColor | undefined {
+  switch (tone) {
+    case 'success':
+      return new vscode.ThemeColor('testing.iconPassed');
+    case 'danger':
+      return new vscode.ThemeColor('testing.iconFailed');
+    case 'warning':
+    case 'running':
+      return new vscode.ThemeColor('editorWarning.foreground');
+    case 'merged':
+      return new vscode.ThemeColor('charts.purple');
+    default:
+      return undefined;
+  }
 }
 
 function statusColor(status: string): vscode.ThemeColor {

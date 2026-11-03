@@ -2,6 +2,10 @@
 // and for posting a review (GraphQL is the only API that can add file-level threads to a review).
 import type { Side } from './core/anchor.ts';
 import { REACTIONS, type ReactionContent } from './core/reactions.ts';
+import {
+  checkRunState, latestChecks, mergeReviewers, sortChecks, statusContextState,
+  type Check, type MergeStateStatus, type ReviewDecision, type Reviewer, type ReviewState,
+} from './core/prStatus.ts';
 
 export type { ReactionContent };
 
@@ -106,6 +110,189 @@ export interface PrSummary {
   /** Changed notebook paths (among the first 100 changed files). */
   notebooks: string[];
   changedFiles: number;
+}
+
+export interface GhUser {
+  login: string;
+  avatarUrl?: string;
+}
+
+/** The pull request's status, people, description and conversation, for the Overview page. */
+export interface GhOverview {
+  viewer: string;
+  title: string;
+  url: string;
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  isDraft: boolean;
+  author: GhUser;
+  createdAt: string;
+  body: string;
+  reactions: GhReaction[];
+  baseRef: string;
+  headRef: string;
+  /** The owner of the head branch's repository, when it is a fork. */
+  headOwner?: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  commits: number;
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
+  mergeStateStatus?: MergeStateStatus;
+  reviewDecision?: ReviewDecision;
+  mergedAt?: string;
+  mergedBy?: string;
+  closedAt?: string;
+  reviewers: Reviewer[];
+  assignees: GhUser[];
+  labels: { name: string; color: string }[];
+  milestone?: string;
+  closingIssues: { number: number; title: string; url: string; state: 'OPEN' | 'CLOSED' }[];
+  checks: Check[];
+  timeline: GhTimelineItem[];
+  /** Timeline items left out because there were too many. */
+  timelineMissing: number;
+}
+
+export type GhTimelineItem =
+  | { kind: 'comment'; id: string; author: GhUser; createdAt: string; body: string; url: string; reactions: GhReaction[] }
+  | {
+    kind: 'review';
+    id: string;
+    author: GhUser;
+    state: ReviewState;
+    createdAt: string;
+    body: string;
+    url: string;
+    reactions: GhReaction[];
+    /** Ids of the comments made in this review, to put each thread under the review that started it. */
+    commentIds: string[];
+  }
+  | { kind: 'commit'; oid: string; message: string; author: GhUser; createdAt: string; url: string }
+  | {
+    kind: 'event';
+    event: 'merged' | 'closed' | 'reopened' | 'ready' | 'draft' | 'forcePushed' | 'reviewRequested' | 'reviewDismissed' | 'renamed' | 'baseChanged';
+    actor: GhUser;
+    createdAt: string;
+    /** Who was asked to review, the old title, the new base branch. */
+    subject?: string;
+  };
+
+/** Timeline pages read at most; a long-running pull request can have thousands of events. */
+const TIMELINE_PAGES = 5;
+
+const TIMELINE_TYPES = [
+  'ISSUE_COMMENT', 'PULL_REQUEST_REVIEW', 'PULL_REQUEST_COMMIT', 'HEAD_REF_FORCE_PUSHED_EVENT', 'MERGED_EVENT', 'CLOSED_EVENT',
+  'REOPENED_EVENT', 'READY_FOR_REVIEW_EVENT', 'CONVERT_TO_DRAFT_EVENT', 'REVIEW_REQUESTED_EVENT', 'REVIEW_DISMISSED_EVENT',
+  'RENAMED_TITLE_EVENT', 'BASE_REF_CHANGED_EVENT',
+].join(',');
+
+const REACTION_FIELDS = 'reactionGroups{content viewerHasReacted reactors{totalCount}}';
+
+const TIMELINE_FIELDS = `pageInfo{hasNextPage endCursor} totalCount nodes{__typename
+  ... on IssueComment{id createdAt body url author{login avatarUrl} ${REACTION_FIELDS}}
+  ... on PullRequestReview{id state createdAt submittedAt body url author{login avatarUrl} ${REACTION_FIELDS} comments(first:100){nodes{id}}}
+  ... on PullRequestCommit{url commit{oid messageHeadline committedDate author{name user{login avatarUrl}}}}
+  ... on HeadRefForcePushedEvent{createdAt actor{login avatarUrl}}
+  ... on MergedEvent{createdAt actor{login avatarUrl}}
+  ... on ClosedEvent{createdAt actor{login avatarUrl}}
+  ... on ReopenedEvent{createdAt actor{login avatarUrl}}
+  ... on ReadyForReviewEvent{createdAt actor{login avatarUrl}}
+  ... on ConvertToDraftEvent{createdAt actor{login avatarUrl}}
+  ... on ReviewRequestedEvent{createdAt actor{login avatarUrl} requestedReviewer{... on User{login} ... on Team{name} ... on Bot{login}}}
+  ... on ReviewDismissedEvent{createdAt actor{login avatarUrl} review{author{login}}}
+  ... on RenamedTitleEvent{createdAt actor{login avatarUrl} previousTitle}
+  ... on BaseRefChangedEvent{createdAt actor{login avatarUrl} currentRefName}}`;
+
+function user(u: any): GhUser {
+  return { login: u?.login ?? 'ghost', avatarUrl: u?.avatarUrl ?? undefined };
+}
+
+function reactions(groups: any[] | undefined): GhReaction[] {
+  return (groups ?? [])
+    .filter((g: any) => g.content in REACTIONS && (g.reactors?.totalCount > 0 || g.viewerHasReacted))
+    .map((g: any) => ({ content: g.content, count: g.reactors?.totalCount ?? 0, viewerHasReacted: !!g.viewerHasReacted }));
+}
+
+/** One timeline node as an item, or undefined for kinds the page doesn't show. */
+export function timelineItem(n: any): GhTimelineItem | undefined {
+  const event = (event: Extract<GhTimelineItem, { kind: 'event' }>['event'], subject?: string): GhTimelineItem =>
+    ({ kind: 'event', event, actor: user(n.actor), createdAt: n.createdAt, ...(subject ? { subject } : {}) });
+  switch (n.__typename) {
+    case 'IssueComment':
+      return { kind: 'comment', id: n.id, author: user(n.author), createdAt: n.createdAt, body: n.body ?? '', url: n.url, reactions: reactions(n.reactionGroups) };
+    case 'PullRequestReview':
+      return {
+        kind: 'review',
+        id: n.id,
+        author: user(n.author),
+        state: n.state,
+        createdAt: n.submittedAt ?? n.createdAt,
+        body: n.body ?? '',
+        url: n.url,
+        reactions: reactions(n.reactionGroups),
+        commentIds: (n.comments?.nodes ?? []).map((c: any) => c.id),
+      };
+    case 'PullRequestCommit': {
+      const c = n.commit;
+      return {
+        kind: 'commit',
+        oid: c.oid,
+        message: c.messageHeadline ?? '',
+        author: c.author?.user ? user(c.author.user) : { login: c.author?.name ?? 'unknown' },
+        createdAt: c.committedDate,
+        url: n.url,
+      };
+    }
+    case 'HeadRefForcePushedEvent':
+      return event('forcePushed');
+    case 'MergedEvent':
+      return event('merged');
+    case 'ClosedEvent':
+      return event('closed');
+    case 'ReopenedEvent':
+      return event('reopened');
+    case 'ReadyForReviewEvent':
+      return event('ready');
+    case 'ConvertToDraftEvent':
+      return event('draft');
+    case 'ReviewRequestedEvent':
+      return event('reviewRequested', n.requestedReviewer?.login ?? n.requestedReviewer?.name);
+    case 'ReviewDismissedEvent':
+      return event('reviewDismissed', n.review?.author?.login);
+    case 'RenamedTitleEvent':
+      return event('renamed', n.previousTitle);
+    case 'BaseRefChangedEvent':
+      return event('baseChanged', n.currentRefName);
+    default:
+      return undefined;
+  }
+}
+
+/** The checks on the head commit, from its status rollup. */
+export function checksFrom(rollup: any): Check[] {
+  return (rollup?.contexts?.nodes ?? []).map((c: any): Check => {
+    if (c.__typename === 'StatusContext') {
+      return {
+        name: c.context,
+        state: statusContextState(c.state),
+        description: c.description ?? undefined,
+        url: c.targetUrl ?? undefined,
+        required: !!c.isRequired,
+        startedAt: c.createdAt ?? undefined,
+      };
+    }
+    const state = checkRunState(c.status, c.conclusion);
+    return {
+      name: c.name,
+      workflow: c.checkSuite?.workflowRun?.workflow?.name ?? c.checkSuite?.app?.name ?? undefined,
+      state,
+      description: c.title || (c.status === 'COMPLETED' ? undefined : c.status === 'IN_PROGRESS' ? 'In progress' : 'Queued'),
+      url: c.detailsUrl ?? undefined,
+      required: !!c.isRequired,
+      startedAt: c.startedAt ?? undefined,
+      completedAt: c.completedAt ?? undefined,
+    };
+  });
 }
 
 const PR_FIELDS = `... on PullRequest {
@@ -350,6 +537,100 @@ export class GitHub {
       .filter(r => r.viewerDidAuthor && r.state !== 'PENDING' && r.submittedAt && r.commit?.oid);
     const last = mine[mine.length - 1];
     return last && { sha: last.commit.oid, submittedAt: last.submittedAt };
+  }
+
+  /**
+   * Everything the Overview page shows, in one request (more only for a long timeline). Without
+   * `timeline` it is only the status, for the Review panel.
+   */
+  async getOverview(owner: string, repo: string, number: number, timeline = true): Promise<GhOverview> {
+    const data: any = await this.graphql(
+      `query($o:String!,$r:String!,$n:Int!,$t:Boolean!){viewer{login} repository(owner:$o,name:$r){pullRequest(number:$n){
+        title url state isDraft createdAt body baseRefName headRefName headRepositoryOwner{login} repository{owner{login}}
+        additions deletions changedFiles mergeable mergeStateStatus reviewDecision mergedAt mergedBy{login} closedAt
+        author{login avatarUrl} ${REACTION_FIELDS}
+        assignees(first:20){nodes{login avatarUrl}}
+        labels(first:30){nodes{name color}}
+        milestone{title}
+        closingIssuesReferences(first:10){nodes{number title url state}}
+        reviewRequests(first:30){nodes{requestedReviewer{__typename ... on User{login avatarUrl} ... on Team{name avatarUrl} ... on Bot{login avatarUrl}}}}
+        latestOpinionatedReviews(first:50){nodes{state submittedAt author{login avatarUrl}}}
+        latestReviews(first:50){nodes{state submittedAt author{login avatarUrl}}}
+        commits(last:1){totalCount nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename
+          ... on CheckRun{name title status conclusion detailsUrl startedAt completedAt isRequired(pullRequestNumber:$n)
+            checkSuite{app{name} workflowRun{workflow{name}}}}
+          ... on StatusContext{context state description targetUrl createdAt isRequired(pullRequestNumber:$n)}}}}}}}
+        timelineItems(first:100, itemTypes:[${TIMELINE_TYPES}]) @include(if:$t){${TIMELINE_FIELDS}}
+      }}}`,
+      { o: owner, r: repo, n: number, t: timeline },
+    );
+    const pr = data.repository.pullRequest;
+    const reviewer = (r: any): Reviewer => ({ ...user(r.author), state: r.state, submittedAt: r.submittedAt ?? undefined });
+    const requested = (pr.reviewRequests?.nodes ?? []).map((n: any): Reviewer | undefined => {
+      const who = n.requestedReviewer;
+      if (!who) {
+        return undefined;
+      }
+      return who.__typename === 'Team'
+        ? { login: who.name, avatarUrl: who.avatarUrl ?? undefined, state: 'REQUESTED', team: true }
+        : { login: who.login, avatarUrl: who.avatarUrl ?? undefined, state: 'REQUESTED' };
+    }).filter(Boolean) as Reviewer[];
+    const items: GhTimelineItem[] = [];
+    let page = pr.timelineItems;
+    let missing = 0;
+    for (let n = 1; page; n++) {
+      items.push(...page.nodes.map(timelineItem).filter(Boolean));
+      if (!page.pageInfo.hasNextPage) {
+        break;
+      }
+      if (n >= TIMELINE_PAGES) {
+        missing = page.totalCount - n * 100;
+        break;
+      }
+      const more: any = await this.graphql(
+        `query($o:String!,$r:String!,$n:Int!,$after:String){repository(owner:$o,name:$r){pullRequest(number:$n){
+          timelineItems(first:100, after:$after, itemTypes:[${TIMELINE_TYPES}]){${TIMELINE_FIELDS}}}}}`,
+        { o: owner, r: repo, n: number, after: page.pageInfo.endCursor },
+      );
+      page = more.repository.pullRequest.timelineItems;
+    }
+    const headOwner = pr.headRepositoryOwner?.login;
+    return {
+      viewer: data.viewer.login,
+      title: pr.title,
+      url: pr.url,
+      state: pr.state,
+      isDraft: !!pr.isDraft,
+      author: user(pr.author),
+      createdAt: pr.createdAt,
+      body: pr.body ?? '',
+      reactions: reactions(pr.reactionGroups),
+      baseRef: pr.baseRefName,
+      headRef: pr.headRefName,
+      ...(headOwner && headOwner !== pr.repository?.owner?.login ? { headOwner } : {}),
+      additions: pr.additions,
+      deletions: pr.deletions,
+      changedFiles: pr.changedFiles,
+      commits: pr.commits?.totalCount ?? 0,
+      mergeable: pr.mergeable ?? 'UNKNOWN',
+      mergeStateStatus: pr.mergeStateStatus ?? undefined,
+      reviewDecision: pr.reviewDecision ?? undefined,
+      mergedAt: pr.mergedAt ?? undefined,
+      mergedBy: pr.mergedBy?.login,
+      closedAt: pr.closedAt ?? undefined,
+      reviewers: mergeReviewers(
+        (pr.latestOpinionatedReviews?.nodes ?? []).map(reviewer),
+        (pr.latestReviews?.nodes ?? []).map(reviewer),
+        requested,
+      ),
+      assignees: (pr.assignees?.nodes ?? []).map(user),
+      labels: (pr.labels?.nodes ?? []).map((l: any) => ({ name: l.name, color: l.color })),
+      milestone: pr.milestone?.title,
+      closingIssues: (pr.closingIssuesReferences?.nodes ?? []).map((i: any) => ({ number: i.number, title: i.title, url: i.url, state: i.state })),
+      checks: sortChecks(latestChecks(checksFrom(pr.commits?.nodes?.[0]?.commit?.statusCheckRollup))),
+      timeline: items,
+      timelineMissing: Math.max(0, missing),
+    };
   }
 
   /**

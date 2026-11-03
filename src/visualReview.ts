@@ -282,6 +282,9 @@ export class VisualReview implements vscode.Disposable {
       case 'nextFile':
         await vscode.commands.executeCommand('nbreview.nextFile', nbPath);
         return;
+      case 'openOverview':
+        await vscode.commands.executeCommand('nbreview.openOverview');
+        return;
       case 'openExternal':
         if (/^https?:\/\//.test(msg.url)) {
           await vscode.env.openExternal(vscode.Uri.parse(msg.url));
