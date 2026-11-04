@@ -167,6 +167,10 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.21.2
+- **Clear errors when GitHub has problems.** When GitHub failed on its side, for example during an outage, the error said only that the answer was not valid JSON, or "Something went wrong". The notification now says that GitHub may be having problems, with a **Check GitHub Status** button that opens githubstatus.com.
+- Marking files viewed now sends a failed batch once more before it reports an error.
+
 ### 0.21.1
 - **Fix: changes shown as unchanged when the base branch has moved on.** The old side of each file was read at the latest commit of the base branch. When that branch had since taken some of the same changes (for example from another merged pull request), those cells and lines showed as unchanged. The old side is now read where the pull request branched off, as on github.com.
 

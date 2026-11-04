@@ -8,6 +8,7 @@ import type { VisualReview } from './visualReview.ts';
 import type { GhOverview } from './github.ts';
 import { mergeVerdict, summarizeChecks, summarizeReviews, type StatusLine } from './core/prStatus.ts';
 import { reviewOrder } from './tree.ts';
+import { showIfGitHubDown } from './notify.ts';
 import type { MergeAction, OverviewHostMessage, OverviewMessage, ProgressVM } from './webview/overviewProtocol.ts';
 
 /** How often the page asks GitHub again while checks run or mergeability is being worked out. */
@@ -186,7 +187,10 @@ export class OverviewPage implements vscode.Disposable {
       }
     });
     panel.webview.onDidReceiveMessage((msg: OverviewMessage) => {
-      this.handle(msg).catch(e => this.post({ type: 'error', message: e instanceof Error ? e.message : String(e) }));
+      this.handle(msg).catch(e => {
+        showIfGitHubDown(e);
+        this.post({ type: 'error', message: e instanceof Error ? e.message : String(e) });
+      });
     });
   }
 

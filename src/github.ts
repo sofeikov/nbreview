@@ -12,6 +12,17 @@ export type { ReactionContent };
 
 /** Files marked viewed per request. */
 const VIEWED_BATCH = 50;
+/** Wait before a failed batch of viewed marks is sent again. */
+const VIEWED_RETRY_MS = 1000;
+
+/**
+ * A failure on GitHub's side (an error page, a 5xx status, or "Something went wrong"), not in the
+ * request. The extension shows these with a link to GitHub's status page.
+ */
+export class GitHubDownError extends Error {}
+
+/** GraphQL's answer when GitHub fails while it runs a query. */
+const SERVER_FAILURE = /^Something went wrong while executing your query/;
 
 export interface PrInfo {
   owner: string;
@@ -343,6 +354,9 @@ export class GitHub {
 
   private async json<T>(url: string): Promise<T> {
     const res = await this.request(url);
+    if (res.status >= 500) {
+      throw new GitHubDownError(`GitHub answered ${res.status}. GitHub may be having problems. Try again later.`);
+    }
     if (!res.ok) {
       throw new Error(`GitHub ${res.status} for ${url}: ${(await res.text()).slice(0, 200)}`);
     }
@@ -351,7 +365,18 @@ export class GitHub {
 
   async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     const res = await this.request('/graphql', { method: 'POST', body: JSON.stringify({ query, variables }) });
-    const payload = (await res.json()) as { data?: T; errors?: { message: string }[] };
+    // During an outage GitHub can answer with an HTML error page. Parsing it as JSON gives an
+    // error that says nothing about the cause, so say what GitHub sent instead.
+    const text = await res.text();
+    let payload: { data?: T; errors?: { message: string }[] };
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new GitHubDownError(`GitHub answered ${res.status} with an error page. GitHub may be having problems. Try again later.`);
+    }
+    if (res.status >= 500 || payload.errors?.some(e => SERVER_FAILURE.test(e.message))) {
+      throw new GitHubDownError(`GitHub couldn't complete the request (${payload.errors?.[0]?.message ?? res.status}). GitHub may be having problems. Try again later.`);
+    }
     if (!res.ok || payload.errors?.length) {
       throw new Error(`GitHub GraphQL: ${payload.errors?.map(e => e.message).join('; ') ?? res.status}`);
     }
@@ -795,10 +820,13 @@ export class GitHub {
       const chunk = paths.slice(i, i + VIEWED_BATCH);
       const fields = chunk.map((_, j) => `f${j}:${mutation}(input:{pullRequestId:$pr,path:$p${j}}){clientMutationId}`);
       const vars = chunk.map((_, j) => `$p${j}:String!`);
-      await this.graphql(`mutation($pr:ID!,${vars.join(',')}){${fields.join(' ')}}`, {
+      const send = () => this.graphql(`mutation($pr:ID!,${vars.join(',')}){${fields.join(' ')}}`, {
         pr: prNodeId,
         ...Object.fromEntries(chunk.map((p, j) => [`p${j}`, p])),
       });
+      // GitHub sometimes fails these mutations ("Something went wrong", or an error page).
+      // Marking a file viewed twice does no harm, so a failed batch is sent once more.
+      await send().catch(() => new Promise(resolve => setTimeout(resolve, VIEWED_RETRY_MS)).then(send));
     }
   }
 

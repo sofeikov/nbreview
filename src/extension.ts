@@ -8,6 +8,7 @@ import { VisualReview } from './visualReview.ts';
 import { OverviewPage } from './overview.ts';
 import { FilesTree, fileLayout, initFileLayout, nodePath, nodePaths, onDidChangeFileLayout, reviewOrder, setFileLayout, type Node } from './tree.ts';
 import { allFolders } from './paths.ts';
+import { showError } from './notify.ts';
 import { PrBadges, PrList, pickPullRequest, type RepoRef } from './prList.ts';
 
 let ctx: vscode.ExtensionContext;
@@ -288,10 +289,6 @@ async function nextFile(arg?: vscode.Uri | string): Promise<void> {
   await vscode.commands.executeCommand('nbreview.openNotebook', next);
 }
 
-function showError(e: unknown): void {
-  void vscode.window.showErrorMessage(`Notebook Review: ${e instanceof Error ? e.message : String(e)}`);
-}
-
 function updateStatus(): void {
   const s = state.session;
   if (!s) {
@@ -496,7 +493,7 @@ async function submit({ event, body }: SubmitRequest): Promise<string> {
     return url;
   } catch (e) {
     const message = `Submitting the review failed: ${e instanceof Error ? e.message : e}. Your pending comments are still in your review on GitHub.`;
-    void vscode.window.showErrorMessage(message);
+    showError(e, message);
     throw new Error(message);
   } finally {
     await state.reloadThreads();

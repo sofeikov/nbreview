@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { GitHub, type PrInfo } from '../src/github.ts';
+import { GitHub, GitHubDownError, type PrInfo } from '../src/github.ts';
 
 const pr: PrInfo = {
   owner: 'o', repo: 'r', number: 1, nodeId: 'PR_1', title: 't', url: 'u', author: 'a',
@@ -269,6 +269,37 @@ test('a pull request compares with the merge base, not with the tip of the base 
     // When GitHub can't compare the two, the tip of the base branch is the best there is.
     compareStatus = 404;
     assert.equal((await gh.getPr('o', 'r', 1)).baseSha, 'b'.repeat(40));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('an HTML error page from GitHub gives a clear error, and a failed batch of viewed marks is sent again', async () => {
+  const realFetch = globalThis.fetch;
+  const answers: Response[] = [];
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return answers.shift() ?? new Response('<html><head><title>502 Bad Gateway</title></head></html>', { status: 502 });
+  }) as typeof fetch;
+  try {
+    const gh = new GitHub('t');
+    await assert.rejects(gh.graphql('query{viewer{login}}', {}), (e: unknown) => e instanceof GitHubDownError && /answered 502 with an error page/.test(e.message));
+    answers.push(new Response(JSON.stringify({ errors: [{ message: 'Something went wrong while executing your query on 2026-11-04T11:17:32Z.' }] }), { status: 200 }));
+    await assert.rejects(gh.graphql('query{viewer{login}}', {}), GitHubDownError);
+    // A mistake in the request is not GitHub being down.
+    answers.push(new Response(JSON.stringify({ errors: [{ message: 'Field x does not exist' }] }), { status: 200 }));
+    await assert.rejects(gh.graphql('query{x}', {}), (e: unknown) => !(e instanceof GitHubDownError));
+    calls = 0;
+    answers.push(
+      new Response('<html>502</html>', { status: 502 }),
+      new Response(JSON.stringify({ data: { f0: { clientMutationId: null } } }), { status: 200 }),
+    );
+    await gh.setViewed('PR_1', ['a.py'], true);
+    assert.equal(calls, 2);
+    calls = 0;
+    await assert.rejects(gh.setViewed('PR_1', ['a.py'], true), GitHubDownError);
+    assert.equal(calls, 2);
   } finally {
     globalThis.fetch = realFetch;
   }

@@ -10,6 +10,7 @@ import type { ReviewDoc } from './core/reviewDoc.ts';
 import type { NewComment, NewFileComment, ReviewState } from './state.ts';
 import { basename } from './paths.ts';
 import { imageMime, isBinary } from './core/binary.ts';
+import { showError } from './notify.ts';
 
 export const SCHEME = 'nbreview';
 export const RAW_SCHEME = 'nbreview-raw';
@@ -394,7 +395,7 @@ export class TextReview implements vscode.Disposable {
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: `${what}…` }, fn);
       return true;
     } catch (e) {
-      void vscode.window.showErrorMessage(`${what} failed: ${e instanceof Error ? e.message : String(e)}`);
+      showError(e, `${what} failed: ${e instanceof Error ? e.message : String(e)}`);
       return false;
     }
   }

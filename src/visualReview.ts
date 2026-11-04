@@ -11,6 +11,7 @@ import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
 import type { Finding, HostMessage, RangeState, ViewModel, WebviewMessage } from './webview/protocol.ts';
 import { resolveRange, type RangeChoice, type ResolvedRange } from './core/range.ts';
 import { pageTitle, pathFromPageTitle } from './paths.ts';
+import { showIfGitHubDown } from './notify.ts';
 
 export class VisualReview implements vscode.Disposable {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
@@ -187,6 +188,7 @@ export class VisualReview implements vscode.Disposable {
     });
     panel.webview.onDidReceiveMessage((msg: WebviewMessage) => {
       this.handle(nbPath, panel, msg).catch(e => {
+        showIfGitHubDown(e);
         this.post(panel, { type: 'error', message: e instanceof Error ? e.message : String(e) });
       });
       if (msg.type === 'ready' && pendingReveal) {
