@@ -2,8 +2,9 @@
 import type { ReactionContent } from '../core/reactions.ts';
 import type { CommentFilter } from '../core/commentFilter.ts';
 import type { Finding } from '../core/checks.ts';
+import type { PrCommit, RangeChoice } from '../core/range.ts';
 
-export type { Finding };
+export type { Finding, PrCommit, RangeChoice };
 
 export type Side = 'LEFT' | 'RIGHT';
 
@@ -19,10 +20,12 @@ export interface ViewModel {
   /** Why the file isn't shown (binary, too large), instead of its cells. */
   notice?: string;
   /**
-   * Set when the old side is the notebook as it was at the viewer's last review rather than the
-   * pull request's base. Comments can't be made on that side: it isn't part of the pull request.
+   * Set when the page compares something other than the whole pull request: the changes since
+   * the viewer's last review, or in some of its commits. The old side then isn't part of the pull
+   * request, so it takes no comments; when the new side isn't the latest version either
+   * (`readOnly`), nothing does.
    */
-  since?: { label: string };
+  range?: { describe: string; readOnly: boolean };
   /** Cells whose only change is their outputs or whitespace show as unchanged. */
   hideNoise: boolean;
   /** Cells whose only changes are noise; of those, ones with changed outputs, and ones whose source changed only in whitespace. */
@@ -136,18 +139,31 @@ export interface PanelState {
   pendingReview: boolean;
   /** Which threads are shown; the page gets all of them and leaves the others out. */
   comments: CommentFilter;
-  /** Comparing with the viewer's last review: possible for this notebook, and switched on. */
-  since?: SinceState;
+  /** What the page compares, and the choices of the range picker; undefined when there is nothing to pick. */
+  range?: RangeState;
 }
 
-export interface SinceState {
-  /** Whether "Since your review" can be chosen: there is a review and this notebook changed after it. */
-  available: boolean;
-  on: boolean;
-  /** For example "your review on 22 Oct (abc1234)". */
+export interface RangeState {
+  choice: RangeChoice;
+  /** For the picker's button: "All changes", "Since your review", "Commit abc1234", "3 commits". */
   label: string;
-  /** Why it isn't available, when there is a review. */
-  problem?: string;
+  /** Not picked: the default, which follows the file (since the last review if it changed after it). */
+  auto: boolean;
+  readOnly: boolean;
+  /**
+   * The viewer's last review, for "Since your review". `problem` says why this file has nothing
+   * to show since then; `blocked`, that it can't be picked at all (its commit is gone).
+   */
+  review?: { label: string; sha: string; problem?: string; blocked?: boolean };
+  /** How many commits the pull request has. */
+  commits: number;
+  /** The latest commit: when it changes, the page's list of commits is out of date. */
+  head: string;
+}
+
+/** A commit in the picker; `touches` says whether it changed the page's file (undefined: unknown). */
+export interface CommitVM extends PrCommit {
+  touches?: boolean;
 }
 
 export type HostMessage =
@@ -156,6 +172,7 @@ export type HostMessage =
   | { type: 'state'; state: PanelState }
   | { type: 'plan'; requestId: number; describe: string }
   | { type: 'reveal'; cellKey: string }
+  | { type: 'commits'; head: string; commits: CommitVM[]; error?: string }
   | { type: 'error'; message: string }
   | { type: 'submitted'; ok: boolean; url?: string; message?: string };
 
@@ -168,7 +185,8 @@ export type WebviewMessage =
   | { type: 'deleteComment'; id: string }
   | { type: 'resolve'; threadId: string; resolved: boolean }
   | { type: 'react'; commentId: string; content: ReactionContent; add: boolean }
-  | { type: 'setSince'; on: boolean }
+  | { type: 'setRange'; choice: RangeChoice }
+  | { type: 'loadCommits' }
   | { type: 'setHideNoise'; on: boolean }
   | { type: 'setCommentFilter'; filter: CommentFilter }
   | { type: 'discardReview' }

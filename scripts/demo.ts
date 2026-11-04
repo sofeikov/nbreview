@@ -198,6 +198,25 @@ const syncModel = buildFileViewModel(syncFile, syncBase, syncHead, checksPr);
 const syncAdded = syncModel.cells[0].ops.flatMap(o => (o.op === 'add' ? [{ index: o.h, text: syncHead.split('\n')[o.h] }] : []));
 const checksFileModel = { ...syncModel, findings: checkFile(syncFile.filename, syncBase.split('\n'), syncAdded) };
 
+// --- The range picker: the same pull request after a review and two more commits -----------------
+
+// The notebook as it was at the reviewer's last review: as now, except the fit cell.
+const reviewedJson = JSON.parse(readFileSync('docs/demo/xg_model.head.ipynb', 'utf8'));
+const reviewedFit = reviewedJson.cells.find((c: { id: string }) => c.id === 'fit');
+reviewedFit.source = (reviewedFit.source as string[]).map(l => l.replace('C=0.5', 'C=1.0'));
+const reviewedDoc = buildReviewDoc(parseNotebook(JSON.stringify(reviewedJson)));
+const demoPr = { number: 42, title: 'Add a body-part term to the xG model', url: 'https://github.com/' };
+const sha = (seed: string) => (seed.repeat(40)).slice(0, 40);
+const rangeCommits = [
+  { sha: sha('3fa9c1'), parent: sha('0b11e2'), headline: 'Add a header flag to the shot loader', author: 'tom', date: hoursAgo(50), touches: true },
+  { sha: sha('8d02be'), parent: sha('3fa9c1'), headline: 'Refit the model with the new feature', author: 'tom', date: hoursAgo(49), touches: true },
+  { sha: sha('c41f7a'), parent: sha('8d02be'), headline: 'Bump scikit-learn to 1.5', author: 'tom', date: hoursAgo(30), touches: false },
+  { sha: sha('e7a3d5'), parent: sha('c41f7a'), headline: 'Tune C on the validation folds', author: 'tom', date: hoursAgo(3), touches: true },
+];
+const reviewSha = rangeCommits[1].sha;
+const sinceModel = buildViewModel(entry, demoPr, { base: reviewedDoc, describe: 'since your review on 2 Nov (8d02be8)', readOnly: false });
+const commitModel = buildViewModel(entry, demoPr, { head: reviewedDoc, describe: 'in 3fa9c13', readOnly: true });
+
 const THEME = `/* The theme variables VS Code gives a webview, from the Dark Modern theme. */
 html {
   --vscode-font-family: system-ui, "Segoe UI", Ubuntu, sans-serif; --vscode-font-size: 13px;
@@ -225,6 +244,10 @@ writeFileSync('out/demo/data.js', [
   `window.__FILE_THREADS__ = ${JSON.stringify(fileThreads)};`,
   `window.__CHECKS_MODEL__ = ${JSON.stringify(checksModel)};`,
   `window.__CHECKS_FILE_MODEL__ = ${JSON.stringify(checksFileModel)};`,
+  `window.__SINCE_MODEL__ = ${JSON.stringify(sinceModel)};`,
+  `window.__COMMIT_MODEL__ = ${JSON.stringify(commitModel)};`,
+  `window.__COMMITS__ = ${JSON.stringify(rangeCommits)};`,
+  `window.__REVIEW_SHA__ = ${JSON.stringify(reviewSha)};`,
 ].join('\n') + '\n');
 writeFileSync('out/demo/index.html', `<!DOCTYPE html>
 <html lang="en">
@@ -250,6 +273,9 @@ window.acquireVsCodeApi = () => ({
     if (m.type === 'plan') {
       deliver({ type: 'plan', requestId: m.requestId, describe: location.hash.startsWith('#checks') ? 'Will post as a line comment → ' + model.path : 'Will post as a line comment · cell line 2 → ${path} L41' });
     }
+    if (m.type === 'loadCommits') {
+      deliver({ type: 'commits', head: window.__COMMITS__[3].sha, commits: window.__COMMITS__ });
+    }
     if (m.type === 'setCommentFilter') {
       panelState.comments = m.filter;
       deliver({ type: 'state', state: panelState });
@@ -267,10 +293,19 @@ window.acquireVsCodeApi = () => ({
 // #checks-list (their list in the toolbar), #checks-comment (a comment started from one) and
 // #checks-file (a Python module with findings).
 const scene = location.hash.slice(1);
+// The range picker: #range (on "Since your review", the default) and #range-commit (one earlier
+// commit picked, so the page is read-only).
 const checks = scene.startsWith('checks');
-const model = scene === 'file' ? window.__FILE_MODEL__ : scene === 'checks-file' ? window.__CHECKS_FILE_MODEL__ : checks ? window.__CHECKS_MODEL__ : window.__MODEL__;
+const models = { file: window.__FILE_MODEL__, 'checks-file': window.__CHECKS_FILE_MODEL__, range: window.__SINCE_MODEL__, 'range-commit': window.__COMMIT_MODEL__ };
+const model = models[scene] ?? (checks ? window.__CHECKS_MODEL__ : window.__MODEL__);
 deliver({ type: 'model', model });
-deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : checks ? [] : window.__THREADS__ });
+deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : checks || scene === 'range-commit' ? [] : window.__THREADS__ });
+if (scene.startsWith('range')) {
+  const first = window.__COMMITS__[0].sha;
+  panelState.range = scene === 'range'
+    ? { choice: { kind: 'since' }, label: 'Since your review', auto: true, readOnly: false, review: { label: 'your review on 2 Nov (8d02be8)', sha: window.__REVIEW_SHA__ }, commits: 4, head: window.__COMMITS__[3].sha }
+    : { choice: { kind: 'commits', first, last: first }, label: 'Commit ' + first.slice(0, 7), auto: false, readOnly: true, review: { label: 'your review on 2 Nov (8d02be8)', sha: window.__REVIEW_SHA__ }, commits: 4, head: window.__COMMITS__[3].sha };
+}
 deliver({ type: 'state', state: panelState });
 // Headless Firefox captures from the top of the page, so a scene hides the cells above its subject.
 const scrollTo = el => {
@@ -293,6 +328,9 @@ if (scene === 'comment') {
   area.value = 'Should other body parts (chest, knee) get their own flag, or is "header vs. not" enough?';
   area.dispatchEvent(new Event('input'));
   scrollTo(document.querySelector('section.cell[data-key="load"]'));
+}
+if (scene.startsWith('range')) {
+  document.querySelector('.range-wrap > button').click();
 }
 if (scene === 'checks-list') {
   document.querySelector('.checks-wrap > button').click();

@@ -187,7 +187,7 @@ try {
   assert.ok(s.viewedDismissed.has(NOTEBOOK), 'GitHub unchecked the changed notebook');
   assert.equal(s.viewed.get(NOTES), true, 'the unchanged file is still viewed');
   const since = await s.sinceReviewDoc(NOTEBOOK)!;
-  const vm = buildViewModel(s.notebooks.get(NOTEBOOK)!, { number: pr.number, title: '', url: '' }, { base: since, label: 'your review' });
+  const vm = buildViewModel(s.notebooks.get(NOTEBOOK)!, { number: pr.number, title: '', url: '' }, { base: since, describe: 'since your review', readOnly: false });
   assert.deepEqual(vm.cells.filter(c => c.status !== 'unchanged').map(c => c.key), ['fit'], 'since the review, only the fit cell changed');
   assert.deepEqual([vm.stats.additions, vm.stats.deletions], [1, 1]);
   log('since the review: only the notebook, only its fit cell; the notebook is no longer marked viewed');

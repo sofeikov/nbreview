@@ -636,3 +636,57 @@ button.checks.high { color: var(--finding-high); border-color: color-mix(in srgb
 .source .code.has-finding.high { box-shadow: inset 3px 0 0 var(--finding-high); background-image: linear-gradient(color-mix(in srgb, var(--finding-high) 10%, transparent), color-mix(in srgb, var(--finding-high) 10%, transparent)); }
 .finding-badge { display: inline-flex; align-items: center; gap: 3px; font-family: var(--vscode-font-family); }
 .map-mark.find { left: 0; right: 0; height: 3px !important; background: var(--finding-low); }
+
+/* --- Range picker -------------------------------------------------------------------------- */
+/* What the page compares: all changes, since your last review, or some of the commits. */
+
+.range-wrap { position: relative; }
+button.range.on { background: var(--vscode-button-secondaryBackground, var(--vscode-toolbar-activeBackground)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
+.range-box {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  width: min(520px, calc(100vw - 24px));
+  padding: 6px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--vscode-editorWidget-background, var(--card));
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.45));
+  z-index: 20;
+}
+.range-box .submit-options { margin: 0 0 4px; }
+.range-box .option.disabled { opacity: 0.55; cursor: default; }
+.range-head { display: flex; align-items: baseline; gap: 8px; padding: 8px 6px 4px; border-top: 1px solid var(--border); }
+.range-head .muted { font-size: 11px; }
+.commit-list { max-height: min(50vh, 360px); overflow-y: auto; }
+.commit-note { padding: 4px 6px; }
+.commit {
+  display: grid;
+  grid-template-columns: 16px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.commit:hover, .commit:focus { background: var(--vscode-list-hoverBackground); outline: none; }
+.commit.on { background: var(--vscode-list-inactiveSelectionBackground, var(--vscode-list-hoverBackground)); }
+.commit.untouched { opacity: 0.5; }
+.commit code { font-family: var(--code-font); font-size: 11px; color: var(--vscode-textLink-foreground); }
+.commit .headline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit .muted { font-size: 11px; white-space: nowrap; }
+.commit .mark { display: inline-flex; color: var(--accent); }
+.review-mark { display: flex; align-items: center; gap: 8px; margin: 2px 6px; color: var(--vscode-charts-yellow, #d29922); font-size: 11px; }
+.review-mark::before, .review-mark::after { content: ''; flex: 1; border-top: 1px dashed currentColor; opacity: 0.6; }
+.range-box .foot { padding: 8px 6px 0; font-size: 11px; }
+.range-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+}
+.range-note > span { flex: 1; }

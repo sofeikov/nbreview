@@ -8,7 +8,8 @@ import { imageMime } from './core/binary.ts';
 import type { Anchor } from './webview/protocol.ts';
 import type { TextReview } from './textReview.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
-import type { HostMessage, SinceState, ViewModel, WebviewMessage } from './webview/protocol.ts';
+import type { Finding, HostMessage, RangeState, ViewModel, WebviewMessage } from './webview/protocol.ts';
+import { resolveRange, type RangeChoice, type ResolvedRange } from './core/range.ts';
 import { pageTitle, pathFromPageTitle } from './paths.ts';
 
 export class VisualReview implements vscode.Disposable {
@@ -16,9 +17,18 @@ export class VisualReview implements vscode.Disposable {
   /** Tabs from before a reload that VS Code has handed back, while they wait for the pull request. */
   private readonly reviving = new Set<vscode.WebviewPanel>();
   private staleTimer?: ReturnType<typeof setTimeout>;
-  /** Notebooks shown compared with the viewer's last review instead of the pull request's base. */
-  private readonly sinceOn = new Set<string>();
+  /**
+   * The range picked in a page, used by every page of that pull request until another is picked;
+   * none picked means the default (see `range`).
+   */
+  private chosen?: { pr: string; choice: RangeChoice };
   private readonly disposables: vscode.Disposable[] = [];
+  /**
+   * The latest sync of each page that sends a model. Loading a range can take a while, so an
+   * earlier sync that finishes later must not replace a newer page.
+   */
+  private readonly modelSyncs = new Map<vscode.WebviewPanel, number>();
+  private syncCount = 0;
 
   constructor(
     private readonly state: ReviewState,
@@ -65,15 +75,14 @@ export class VisualReview implements vscode.Disposable {
   }
 
   open(nbPath: string, revealCellId?: string, options: { since?: boolean; viewColumn?: vscode.ViewColumn } = {}): void {
-    if (options.since !== undefined) {
-      this.setSince(nbPath, options.since);
+    // The history button is on files changed since the review, which the default shows since
+    // then: going back to the default shows it, and leaves the other files as they were.
+    if (options.since && this.chosen) {
+      this.setRange(undefined);
     }
     const existing = this.panels.get(nbPath);
     if (existing) {
       existing.reveal();
-      if (options.since !== undefined) {
-        void this.sync(existing, nbPath, { model: true, threads: true });
-      }
       if (revealCellId) {
         this.post(existing, { type: 'reveal', cellKey: revealCellId });
       }
@@ -172,7 +181,10 @@ export class VisualReview implements vscode.Disposable {
     panel.webview.html = this.html(panel.webview, this.dist(), nbPath);
     this.panels.set(nbPath, panel);
     let pendingReveal = revealCellId;
-    panel.onDidDispose(() => this.panels.delete(nbPath));
+    panel.onDidDispose(() => {
+      this.panels.delete(nbPath);
+      this.modelSyncs.delete(panel);
+    });
     panel.webview.onDidReceiveMessage((msg: WebviewMessage) => {
       this.handle(nbPath, panel, msg).catch(e => {
         this.post(panel, { type: 'error', message: e instanceof Error ? e.message : String(e) });
@@ -203,8 +215,12 @@ export class VisualReview implements vscode.Disposable {
         return;
       }
       case 'addComment': {
-        if (msg.anchor.side === 'LEFT' && this.since(nbPath)?.on) {
-          throw new Error('The old side shows your last review, which is not part of the pull request: comment on the new side.');
+        const range = (await this.range(nbPath))?.resolved;
+        if (range?.readOnly) {
+          throw new Error('This range ends before the latest commit, and GitHub takes comments on the latest version only. Pick a range that ends at the latest commit to comment.');
+        }
+        if (msg.anchor.side === 'LEFT' && range?.from) {
+          throw new Error('The old side is an earlier commit, which is not part of the pull request\'s diff: comment on the new side.');
         }
         if (!this.state.entry(nbPath)) {
           const comment = this.fileComment(nbPath, msg.anchor, msg.text);
@@ -254,9 +270,11 @@ export class VisualReview implements vscode.Disposable {
       case 'setCommentFilter':
         await this.state.setCommentFilter(msg.filter);
         return;
-      case 'setSince':
-        this.setSince(nbPath, msg.on);
-        await this.sync(panel, nbPath, { model: true, threads: true });
+      case 'setRange':
+        this.setRange(msg.choice);
+        return;
+      case 'loadCommits':
+        await this.sendCommits(panel, nbPath);
         return;
       case 'discardReview':
         await this.state.discardReview();
@@ -314,111 +332,198 @@ export class VisualReview implements vscode.Disposable {
     await Promise.all([...this.panels].map(([path, panel]) => this.sync(panel, path, { model: true })));
   }
 
-  private setSince(nbPath: string, on: boolean): void {
-    if (on) {
-      this.sinceOn.add(nbPath);
-    } else {
-      this.sinceOn.delete(nbPath);
+  /** Picks the range every page of the pull request compares, and shows it in the open pages. */
+  private setRange(choice: RangeChoice | undefined): void {
+    const pr = this.state.prKey();
+    this.chosen = pr && choice ? { pr, choice } : undefined;
+    for (const [path, panel] of this.panels) {
+      this.sync(panel, path, { model: true, threads: true }).catch(e => {
+        this.post(panel, { type: 'error', message: `Couldn't show this range: ${e instanceof Error ? e.message : String(e)}` });
+      });
     }
   }
+
+  /** Sends the page the pull request's commits for the range picker, marking those that changed its file. */
+  private async sendCommits(panel: vscode.WebviewPanel, path: string): Promise<void> {
+    const s = this.state.session;
+    if (!s) {
+      return;
+    }
+    try {
+      const [commits, touching] = await Promise.all([s.commits(), s.commitsTouching(path).catch(() => undefined)]);
+      // GitHub lists the file's latest 100 commits: when it hits that, an older commit not in
+      // the list may still have changed the file.
+      const touches = (sha: string) => (!touching ? undefined : touching.has(sha) ? true : touching.size >= 100 ? undefined : false);
+      this.post(panel, { type: 'commits', head: s.pr.headSha, commits: commits.map(c => ({ ...c, touches: touches(c.sha) })) });
+    } catch (e) {
+      this.post(panel, { type: 'commits', head: s.pr.headSha, commits: [], error: `Couldn't load the commits: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }
+
 
   /** Sends the page what changed, in order: the notebook, then its threads, then the toolbar state. */
   private async sync(panel: vscode.WebviewPanel, nbPath: string, what: { model?: boolean; threads?: boolean }): Promise<void> {
+    const id = ++this.syncCount;
+    if (what.model) {
+      this.modelSyncs.set(panel, id);
+    }
+    // A newer sync with a model has started: this one's range may be out of date.
+    const stale = () => (this.modelSyncs.get(panel) ?? 0) > id;
     const vm = await (this.viewModel ??= import('./viewModel.ts'));
     const s = this.state.session;
     const entry = this.state.entry(nbPath);
-    const since = this.since(nbPath);
+    const range = await this.range(nbPath);
+    const r = range?.resolved;
+    // The page's range, when it isn't the whole pull request.
+    const page = r && (r.from || r.to) ? { describe: r.describe, readOnly: r.readOnly } : undefined;
     const file = s?.files.find(f => f.filename === nbPath);
     if (s && file && !entry) {
       if (what.model) {
-        const model = await this.fileModel(vm, nbPath, since);
-        this.post(panel, { type: 'model', model: { ...model, findings: this.state.findings(nbPath) } });
+        const model = await this.fileModel(vm, nbPath, r, page);
+        if (stale()) {
+          return;
+        }
+        this.post(panel, { type: 'model', model: { ...model, findings: this.findingsFor(nbPath, model, r) } });
+      }
+      if (stale()) {
+        return;
       }
       if (what.threads) {
-        const list = (s.fileThreads.get(nbPath) ?? []).filter(f => !since?.on || f.side === 'RIGHT');
+        const list = (s.fileThreads.get(nbPath) ?? []).filter(f => keepThread(f.side, r));
         this.post(panel, { type: 'threads', threads: vm.buildFileThreads(list, gh => this.state.describe(gh)) });
       }
-      this.post(panel, this.stateMessage(nbPath));
+      this.post(panel, this.stateMessage(nbPath, range?.state));
       return;
     }
     if (s && entry && what.model) {
-      const base = since?.on ? await s.sinceReviewDoc(nbPath) : undefined;
+      const [base, head] = await Promise.all([r?.from ? s.docAt(nbPath, r.from) : undefined, r?.to ? s.docAt(nbPath, r.to) : undefined]);
       const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
-      const model = vm.buildViewModel(entry, pr, base && since ? { base, label: since.label } : undefined, { hideNoise: this.hideNoise() });
-      this.post(panel, { type: 'model', model: { ...model, findings: this.state.findings(nbPath) } });
+      const model = vm.buildViewModel(entry, pr, page && { base, head, ...page }, { hideNoise: this.hideNoise() });
+      if (stale()) {
+        return;
+      }
+      this.post(panel, { type: 'model', model: { ...model, findings: this.findingsFor(nbPath, model, r) } });
+    }
+    if (stale()) {
+      return;
     }
     if (what.threads) {
-      // Compared with the last review, the old side isn't the pull request's: its threads are left out.
-      const placed = s ? s.threadsFor(nbPath).filter(p => !since?.on || p.side === 'RIGHT') : [];
+      const placed = s ? s.threadsFor(nbPath).filter(p => keepThread(p.side, r)) : [];
       const threads = s && entry ? vm.buildThreads(entry, placed, p => this.state.describe(p.gh)) : [];
       this.post(panel, { type: 'threads', threads });
     }
-    this.post(panel, this.stateMessage(nbPath));
+    this.post(panel, this.stateMessage(nbPath, range?.state));
+  }
+
+  /**
+   * The checks' findings for the page. They are about the latest version, so a range that ends
+   * earlier shows none, and one that starts later than the base shows those on what it changed.
+   */
+  private findingsFor(path: string, model: ViewModel, r: ResolvedRange | undefined): Finding[] {
+    const all = this.state.findings(path);
+    if (r?.readOnly) {
+      return [];
+    }
+    if (!r?.from) {
+      return all;
+    }
+    return all.filter(f => {
+      const c = model.cells.find(x => x.headId === f.cellId);
+      return !!c && c.status !== 'unchanged' && (f.kind !== 'source' || c.ops.some(o => o.op === 'add' && o.h === f.line));
+    });
   }
 
   /** An ordinary file as one cell; binary and very large files get a notice instead. */
-  private async fileModel(vm: typeof import('./viewModel.ts'), path: string, since: SinceState | undefined): Promise<ViewModel> {
+  private async fileModel(vm: typeof import('./viewModel.ts'), path: string, r: ResolvedRange | undefined, page: ViewModel['range']): Promise<ViewModel> {
     const s = this.state.session!;
     const file = s.files.find(f => f.filename === path)!;
     const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
     const mime = imageMime(path);
     if (mime && mime !== 'image/svg+xml') {
-      return this.imageModel(vm, path, since);
+      return this.imageModel(vm, path, r, page);
     }
-    const [base, head] = await Promise.all([s.content(path, 'LEFT'), s.content(path, 'RIGHT')]);
-    let old = base;
-    if (since?.on && s.lastReview) {
-      old = (await s.contentAt(path, s.lastReview.sha)) ?? (file.previousFilename ? await s.contentAt(file.previousFilename, s.lastReview.sha) : undefined);
-    }
+    const [old, head] = await Promise.all([
+      r?.from ? s.textAt(path, r.from) : s.content(path, 'LEFT'),
+      r?.to ? s.textAt(path, r.to) : s.content(path, 'RIGHT'),
+    ]);
     const unreadable = [old, head].find(t => t !== undefined && (t.length > 2_000_000 || t.slice(0, 8000).includes('\u0000')));
     if (unreadable !== undefined) {
       const notice = unreadable.length > 2_000_000
         ? 'This file is too large to show here.'
         : 'This is a binary file, so there is nothing to show line by line.';
-      return { ...vm.buildFileViewModel(file, undefined, undefined, pr), notice };
+      return { ...vm.buildFileViewModel(file, undefined, undefined, pr, page), notice };
     }
-    return vm.buildFileViewModel(file, old, head, pr, since?.on ? { label: since.label } : undefined, { hideNoise: this.hideNoise() });
+    return vm.buildFileViewModel(file, old, head, pr, page, { hideNoise: this.hideNoise() });
   }
 
   /** An image file as its old and new pictures. */
-  private async imageModel(vm: typeof import('./viewModel.ts'), path: string, since: SinceState | undefined): Promise<ViewModel> {
+  private async imageModel(vm: typeof import('./viewModel.ts'), path: string, r: ResolvedRange | undefined, page: ViewModel['range']): Promise<ViewModel> {
     const s = this.state.session!;
     const file = s.files.find(f => f.filename === path)!;
     const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
-    const [base, head] = await Promise.all([s.bytes(path, 'LEFT'), s.bytes(path, 'RIGHT')]);
-    let old = base;
-    if (since?.on && s.lastReview) {
-      old = (await s.bytesAt(path, s.lastReview.sha)) ?? (file.previousFilename ? await s.bytesAt(file.previousFilename, s.lastReview.sha) : undefined);
-    }
+    const [old, head] = await Promise.all([
+      r?.from ? s.bytesAtCommit(path, r.from) : s.bytes(path, 'LEFT'),
+      r?.to ? s.bytesAtCommit(path, r.to) : s.bytes(path, 'RIGHT'),
+    ]);
     // The pictures go to the page inside its data, as base64.
     if ([old, head].some(b => b && b.length > 10_000_000)) {
-      return { ...vm.buildFileViewModel(file, undefined, undefined, pr), notice: 'This image is too large to show here.' };
+      return { ...vm.buildFileViewModel(file, undefined, undefined, pr, page), notice: 'This image is too large to show here.' };
     }
-    return vm.buildImageViewModel(file, old, head, pr, since?.on ? { label: since.label } : undefined);
+    return vm.buildImageViewModel(file, old, head, pr, page);
   }
 
-  /** Whether the file can be, and is, compared with the viewer's last review. */
-  private since(nbPath: string): SinceState | undefined {
-    const s = this.state.session;
-    const last = s?.lastReview;
-    if (!s || !last) {
+  /** "your review on 22 Oct (abc1234)". */
+  private reviewLabel(): string | undefined {
+    const last = this.state.session?.lastReview;
+    if (!last) {
       return undefined;
     }
     const date = new Date(last.submittedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-    const label = `your review on ${date} (${last.sha.slice(0, 7)})`;
-    if (s.sinceReviewProblem) {
-      return { available: false, on: false, label, problem: s.sinceReviewProblem };
+    return `your review on ${date} (${last.sha.slice(0, 7)})`;
+  }
+
+  /**
+   * What a file's page compares, and the range picker's state. A range picked in any page is used
+   * by every page of the pull request. Until one is picked, a file that changed after the viewer's
+   * last review shows the changes since then, and any other file all its changes. Undefined when
+   * there is nothing to pick: one commit and no review.
+   */
+  private async range(path: string): Promise<{ resolved: ResolvedRange; state: RangeState } | undefined> {
+    const s = this.state.session;
+    if (!s) {
+      return undefined;
     }
-    const available = s.changedSince(nbPath);
+    const last = s.lastReview;
+    if (s.pr.commits <= 1 && !last) {
+      return undefined;
+    }
+    const label = this.reviewLabel() ?? '';
+    const what = this.state.entry(path) ? 'notebook' : 'file';
+    const problem = !last ? undefined : s.sinceReviewProblem ?? (s.changedSince(path) ? undefined : `No changes to this ${what} since ${label}.`);
+    const picked = this.chosen?.pr === this.state.prKey() ? this.chosen.choice : undefined;
+    const commits = picked?.kind === 'commits' ? await s.commits().catch(() => undefined) : undefined;
+    const pr = { headSha: s.pr.headSha, baseSha: s.pr.baseSha, commits, lastReview: last && !s.sinceReviewProblem ? { sha: last.sha, label } : undefined };
+    // A picked range of commits that are gone (after a force push) falls back to the default.
+    const chosen = picked && resolveRange(picked, pr);
+    // A file removed after the review has only an old side then, which takes no comments: the
+    // default for it is all changes, where it can be commented on as a whole.
+    const removed = s.files.find(f => f.filename === path)?.status === 'removed';
+    const resolved = chosen ?? resolveRange(pr.lastReview && !problem && !removed ? { kind: 'since' } : { kind: 'all' }, pr)!;
     return {
-      available,
-      on: available && this.sinceOn.has(nbPath),
-      label,
-      ...(available ? {} : { problem: `No changes to this ${this.state.entry(nbPath) ? 'notebook' : 'file'} since ${label}.` }),
+      resolved,
+      state: {
+        choice: resolved.choice,
+        label: resolved.label,
+        auto: !chosen,
+        readOnly: resolved.readOnly,
+        ...(last ? { review: { label, sha: last.sha, ...(problem ? { problem } : {}), ...(s.sinceReviewProblem ? { blocked: true } : {}) } } : {}),
+        commits: s.pr.commits,
+        head: s.pr.headSha,
+      },
     };
   }
 
-  private stateMessage(nbPath: string): HostMessage {
+  private stateMessage(nbPath: string, range: RangeState | undefined): HostMessage {
     return {
       type: 'state',
       state: {
@@ -426,7 +531,7 @@ export class VisualReview implements vscode.Disposable {
         pending: this.state.pendingCount(),
         pendingReview: this.state.hasPendingReview(),
         comments: this.state.commentFilter(),
-        since: this.since(nbPath),
+        ...(range ? { range } : {}),
       },
     };
   }
@@ -464,4 +569,12 @@ export class VisualReview implements vscode.Disposable {
 
 function escapeAttr(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+/**
+ * Whether a thread shows in a range. Threads are placed on the pull request's own versions: the
+ * old side's only when that is the base, and none when the new side is an earlier commit.
+ */
+function keepThread(side: 'LEFT' | 'RIGHT', r: ResolvedRange | undefined): boolean {
+  return !r?.readOnly && (side === 'RIGHT' || !r?.from);
 }

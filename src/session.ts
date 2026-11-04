@@ -8,6 +8,7 @@ import { locateNotebookThread, matchExportedLine, nbdevSourceForLine, type Side 
 import { locateFileThread } from './core/fileComments.ts';
 import { diffCells, notebookChanges, type NotebookChanges } from './core/cellDiff.ts';
 import { checkFile, checkNotebook, patchLines, type Finding } from './core/checks.ts';
+import type { PrCommit } from './core/range.ts';
 
 export type { NotebookChanges };
 
@@ -78,7 +79,9 @@ export class ReviewSession {
    */
   changedSinceReview?: Set<string>;
   sinceReviewProblem?: string;
-  private readonly sinceDocs = new Map<string, Promise<ReviewDoc>>();
+  private readonly docs = new Map<string, Promise<ReviewDoc>>();
+  private commitList?: Promise<PrCommit[]>;
+  private readonly history = new Map<string, Promise<Set<string>>>();
   private readonly changes = new Map<string, NotebookChanges>();
   private readonly checks = new Map<string, Finding[]>();
   private readonly raw = new Map<string, Promise<Uint8Array | undefined>>();
@@ -173,19 +176,61 @@ export class ReviewSession {
 
   /** A notebook as it was at the viewer's last review (empty if it didn't exist then). */
   sinceReviewDoc(nbPath: string): Promise<ReviewDoc> | undefined {
-    const last = this.lastReview;
+    return this.lastReview && this.docAt(nbPath, this.lastReview.sha);
+  }
+
+  /**
+   * A notebook of the pull request as it was at a commit, under its old name if it was renamed
+   * later; empty if it didn't exist then.
+   */
+  docAt(nbPath: string, sha: string): Promise<ReviewDoc> | undefined {
     const entry = this.notebooks.get(nbPath);
-    if (!last || !entry) {
+    if (!entry) {
       return undefined;
     }
-    let doc = this.sinceDocs.get(nbPath);
+    const key = `${sha}:${nbPath}`;
+    let doc = this.docs.get(key);
     if (!doc) {
-      doc = this.contentAt(nbPath, last.sha)
-        .then(text => (text === undefined && entry.file.previousFilename ? this.contentAt(entry.file.previousFilename, last.sha) : text))
+      doc = this.textAt(nbPath, sha)
         .then(text => buildReviewDoc(text === undefined ? emptyNotebook() : parseNotebook(text)));
-      this.sinceDocs.set(nbPath, doc);
+      // A failure (a network error, a notebook that isn't valid JSON at that commit) isn't kept.
+      doc.catch(() => this.docs.delete(key));
+      this.docs.set(key, doc);
     }
     return doc;
+  }
+
+  /** A changed file's text at a commit, under its old name if it was renamed later. */
+  async textAt(path: string, sha: string): Promise<string | undefined> {
+    const previous = this.files.find(f => f.filename === path)?.previousFilename;
+    return (await this.contentAt(path, sha)) ?? (previous ? this.contentAt(previous, sha) : undefined);
+  }
+
+  /** A changed file's bytes at a commit, under its old name if it was renamed later. */
+  async bytesAtCommit(path: string, sha: string): Promise<Uint8Array | undefined> {
+    const previous = this.files.find(f => f.filename === path)?.previousFilename;
+    return (await this.bytesAt(path, sha)) ?? (previous ? this.bytesAt(previous, sha) : undefined);
+  }
+
+  /** The pull request's commits, oldest first (asked for once, when first needed). */
+  commits(): Promise<PrCommit[]> {
+    this.commitList ??= this.gh.listCommits(this.pr.owner, this.pr.repo, this.pr.number);
+    this.commitList.catch(() => (this.commitList = undefined));
+    return this.commitList;
+  }
+
+  /** The commits that changed a file (under either name), for the commit picker. */
+  commitsTouching(path: string): Promise<Set<string>> {
+    let p = this.history.get(path);
+    if (!p) {
+      const previous = this.files.find(f => f.filename === path)?.previousFilename;
+      const ask = (name: string) => this.gh.commitsTouching(this.pr.owner, this.pr.repo, this.pr.headSha, name);
+      p = Promise.all([ask(path), previous ? ask(previous) : Promise.resolve(new Set<string>())])
+        .then(([a, b]) => new Set([...a, ...b]));
+      p.catch(() => this.history.delete(path));
+      this.history.set(path, p);
+    }
+    return p;
   }
 
   /** Cached raw content of a changed file on one side of the PR. */
@@ -225,6 +270,10 @@ export class ReviewSession {
     let p = this.raw.get(key);
     if (!p) {
       p = this.gh.getBytes(this.pr.owner, this.pr.repo, path, ref);
+      p.catch(() => {
+        this.raw.delete(key);
+        this.contents.delete(key);
+      });
       this.raw.set(key, p);
     }
     return p;

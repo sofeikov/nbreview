@@ -2,6 +2,7 @@
 // and for posting a review (GraphQL is the only API that can add file-level threads to a review).
 import type { Side } from './core/anchor.ts';
 import { REACTIONS, type ReactionContent } from './core/reactions.ts';
+import type { PrCommit } from './core/range.ts';
 import {
   checkRunState, latestChecks, mergeReviewers, sortChecks, statusContextState,
   type Check, type MergeMethod, type MergeSettings, type MergeStateStatus, type ReviewDecision, type Reviewer, type ReviewState,
@@ -24,6 +25,8 @@ export interface PrInfo {
   headRef: string;
   baseSha: string;
   headSha: string;
+  /** How many commits the pull request has. */
+  commits: number;
 }
 
 export interface PrFile {
@@ -365,6 +368,7 @@ export class GitHub {
       headRef: pr.head.ref,
       baseSha: pr.base.sha,
       headSha: pr.head.sha,
+      commits: pr.commits ?? 0,
     };
   }
 
@@ -707,6 +711,41 @@ export class GitHub {
   /** Deletes a branch, such as a merged pull request's (github.com can restore it). */
   async deleteBranch(refId: string): Promise<void> {
     await this.graphql(`mutation($input:DeleteRefInput!){deleteRef(input:$input){clientMutationId}}`, { input: { refId } });
+  }
+
+  /** The pull request's commits, oldest first (GitHub lists up to 250). */
+  async listCommits(owner: string, repo: string, number: number): Promise<PrCommit[]> {
+    const out: PrCommit[] = [];
+    let after: string | null = null;
+    do {
+      const data: any = await this.graphql(
+        `query($o:String!,$r:String!,$n:Int!,$a:String){repository(owner:$o,name:$r){pullRequest(number:$n){
+          commits(first:100,after:$a){pageInfo{hasNextPage endCursor} nodes{commit{
+            oid messageHeadline committedDate parents(first:1){nodes{oid}} author{name user{login}}}}}}}}`,
+        { o: owner, r: repo, n: number, a: after },
+      );
+      const page = data.repository.pullRequest.commits;
+      for (const { commit: c } of page.nodes as any[]) {
+        out.push({
+          sha: c.oid,
+          parent: c.parents?.nodes?.[0]?.oid,
+          headline: c.messageHeadline ?? '',
+          author: c.author?.user?.login ?? c.author?.name ?? '',
+          date: c.committedDate,
+        });
+      }
+      after = page.pageInfo.hasNextPage && out.length < 250 ? page.pageInfo.endCursor : null;
+    } while (after);
+    return out;
+  }
+
+  /**
+   * The commits, reachable from `head`, that changed a file: GitHub's history of one path. Up to
+   * 100, the newest first, which covers the commits of almost any pull request.
+   */
+  async commitsTouching(owner: string, repo: string, head: string, path: string): Promise<Set<string>> {
+    const list = await this.json<any[]>(`/repos/${owner}/${repo}/commits?sha=${head}&path=${encodeURIComponent(path)}&per_page=100`);
+    return new Set(list.map(c => c.sha as string));
   }
 
   /**

@@ -11,27 +11,32 @@ import { highlightLines, renderCommentBody, renderMarkdownCell } from './render.
 import { renderMarkdownDiff } from './mdDiff.ts';
 import type { Anchor, CellVM, CommentVM, OutputVM, ThreadVM, ViewModel } from './webview/protocol.ts';
 
+/** What a page compares when it isn't the whole pull request (see ViewModel.range). */
+export type PageRange = NonNullable<ViewModel['range']>;
+
 /**
- * The page's data for a notebook. With `since`, the old side is the notebook as it was at the
- * viewer's last review instead of the pull request's base. With `hideNoise`, cells whose only
- * change is their outputs, or whitespace in their source, show as unchanged.
+ * The page's data for a notebook. With `range`, the sides are the notebook at two commits of the
+ * pull request (`base` and `head`, each the pull request's own when left out) instead of its base
+ * and head. With `hideNoise`, cells whose only change is their outputs, or whitespace in their
+ * source, show as unchanged.
  */
 export function buildViewModel(
   prEntry: NotebookEntry,
   pr: { number: number; title: string; url: string },
-  since?: { base: ReviewDoc; label: string },
+  range?: { base?: ReviewDoc; head?: ReviewDoc } & PageRange,
   options: { hideNoise?: boolean } = {},
 ): ViewModel {
-  const base = since ? since.base : prEntry.base;
+  const base = range?.base ?? prEntry.base;
+  const head = range?.head ?? prEntry.head;
   return modelFromCells({
     kind: 'notebook',
     path: prEntry.path,
-    language: prEntry.head.notebook.language || base.notebook.language || 'python',
+    language: head.notebook.language || base.notebook.language || 'python',
     baseCells: base.notebook.cells,
-    headCells: prEntry.head.notebook.cells,
+    headCells: head.notebook.cells,
     file: prEntry.file,
     pr,
-    since: since && { label: since.label },
+    range: range && { describe: range.describe, readOnly: range.readOnly },
     hideNoise: !!options.hideNoise,
   });
 }
@@ -59,15 +64,15 @@ export function fileLanguage(path: string): string {
 
 /**
  * The page's data for a changed file that isn't a notebook: its two versions as one cell. `base`
- * or `head` is undefined when the file was added or removed; with `since`, `base` is the file at
- * the viewer's last review.
+ * or `head` is undefined when the file was added or removed; with `range`, they are the file at
+ * two commits of the pull request.
  */
 export function buildFileViewModel(
   file: PrFile,
   base: string | undefined,
   head: string | undefined,
   pr: { number: number; title: string; url: string },
-  since?: { label: string },
+  range?: PageRange,
   options: { hideNoise?: boolean } = {},
 ): ViewModel {
   const language = fileLanguage(file.filename);
@@ -90,7 +95,7 @@ export function buildFileViewModel(
     headCells: cell(head),
     file,
     pr,
-    since,
+    range,
     hideNoise: !!options.hideNoise,
   });
 }
@@ -104,7 +109,7 @@ export function buildImageViewModel(
   base: Uint8Array | undefined,
   head: Uint8Array | undefined,
   pr: { number: number; title: string; url: string },
-  since?: { label: string },
+  range?: PageRange,
 ): ViewModel {
   const mime = imageMime(file.filename) ?? 'application/octet-stream';
   const picture = (bytes: Uint8Array | undefined): OutputVM[] => {
@@ -150,7 +155,7 @@ export function buildImageViewModel(
     path: file.filename,
     kind: 'file',
     image: true,
-    ...(since ? { since: { label: since.label } } : {}),
+    ...(range ? { range } : {}),
     hideNoise: false,
     noise: { cells: 0, outputs: 0, whitespace: 0 },
     fileStats: { additions: file.additions, deletions: file.deletions },
@@ -167,10 +172,10 @@ function modelFromCells(args: {
   headCells: NbCell[];
   file: PrFile;
   pr: { number: number; title: string; url: string };
-  since?: { label: string };
+  range?: PageRange;
   hideNoise: boolean;
 }): ViewModel {
-  const { since, language } = args;
+  const { range, language } = args;
   const hide = args.hideNoise;
   const pairs = diffCells(args.baseCells, args.headCells, { ignoreWhitespace: hide });
   const noise = { cells: 0, outputs: 0, whitespace: 0 };
@@ -220,7 +225,7 @@ function modelFromCells(args: {
     path: args.path,
     kind: args.kind,
     ...(args.kind === 'file' ? { language } : {}),
-    ...(since ? { since: { label: since.label } } : {}),
+    ...(range ? { range } : {}),
     hideNoise: hide,
     noise,
     fileStats: { additions: args.file.additions, deletions: args.file.deletions },

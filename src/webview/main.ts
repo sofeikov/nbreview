@@ -1,7 +1,8 @@
 // The visual review page. Renders the notebook pair as cell cards (rendered markdown, highlighted
 // code diffs, outputs) and the review threads, and sends comment actions back to the extension.
-import type { Anchor, CellVM, CommentVM, Finding, HostMessage, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
+import type { Anchor, CellVM, CommentVM, CommitVM, Finding, HostMessage, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
 import { findingPlace } from '../core/checks.ts';
+import { pickCommits, sameChoice, short, type RangeChoice } from '../core/range.ts';
 import { REACTIONS, REACTION_NAMES, type ReactionContent } from '../core/reactions.ts';
 import { showsThread, type CommentFilter } from '../core/commentFilter.ts';
 import { diffPixels, pairImages, type ImagePair } from './imageDiff.ts';
@@ -47,6 +48,19 @@ let panel: PanelState = { viewed: false, pending: 0, pendingReview: false, comme
 let filterOpen = false;
 /** The list of check findings is open. */
 let checksOpen = false;
+/** The range picker is open. */
+let rangeOpen = false;
+/** The pull request's commits for the range picker, asked for when it is first opened; `head` is the latest then. */
+let commitList: { loading?: boolean; commits?: CommitVM[]; error?: string; head?: string } = {};
+/**
+ * The range just picked here, until the extension confirms it: loading the two versions can take
+ * a moment, and a Shift-click in that time extends this one.
+ */
+let pickedChoice: RangeChoice | undefined;
+
+function currentChoice(): RangeChoice | undefined {
+  return pickedChoice ?? panel.range?.choice;
+}
 let requestSeq = 0;
 const composers = new Map<string, Composer>();
 const replies = new Map<string, { text: string; saving?: number; savingMode?: 'review' | 'single' }>();
@@ -109,7 +123,11 @@ function render(): void {
 
 function renderToolbar(m: ViewModel): HTMLElement {
   const slash = m.path.lastIndexOf('/');
-  const linesTitle = `Source lines. GitHub counts +${m.fileStats.additions} −${m.fileStats.deletions} in the .ipynb file, outputs and metadata included.`;
+  const linesTitle = m.range
+    ? `Source lines changed ${m.range.describe}.`
+    : m.kind === 'notebook'
+      ? `Source lines. GitHub counts +${m.fileStats.additions} −${m.fileStats.deletions} in the .ipynb file, outputs and metadata included.`
+      : 'Lines added and removed.';
   const chips: Child[] = [
     h('span', { class: 'chip add', text: `+${m.stats.additions}`, title: linesTitle }),
     h('span', { class: 'chip del', text: `−${m.stats.deletions}`, title: linesTitle }),
@@ -132,18 +150,12 @@ function renderToolbar(m: ViewModel): HTMLElement {
       h('span', { class: 'file', text: m.path.slice(slash + 1) }),
       button(`#${m.pr.number}`, () => post({ type: 'openOverview' }), { class: 'pr', title: `${m.pr.title}: show the overview (status, description and conversation)` }),
       ...chips,
-      h('span', { class: 'summary', text: (m.kind === 'file' ? fileSummary(m) : describe.join(' · ') || 'no cell changes') + (m.since ? ` since ${m.since.label}` : '') }),
+      h('span', { class: 'summary', text: (m.kind === 'file' ? fileSummary(m) : describe.join(' · ') || 'no cell changes') + (m.range ? ` ${m.range.describe}` : '') }),
     ),
     h(
       'div',
       { class: 'controls' },
-      panel.since && h('div', { class: 'segmented' },
-        button('Whole PR', () => post({ type: 'setSince', on: false }), { class: panel.since.on ? '' : 'on', title: 'Compare with the base of the pull request' }),
-        button([icon('history'), 'Since your review'], () => post({ type: 'setSince', on: true }), {
-          class: panel.since.on ? 'on' : '',
-          disabled: !panel.since.available,
-          title: panel.since.problem ?? `Only what changed after ${panel.since.label}`,
-        })),
+      rangeControl(),
       noiseButton(m),
       checksControl(m),
       m.kind === 'notebook' && segmented([
@@ -346,9 +358,113 @@ function renderFilterBox(): HTMLElement {
     h('div', { class: 'muted', text: 'Your pending comments always show. The text diff and the Review panel’s counts follow this too.' }));
 }
 
-/** Comments can't be made on the old side when it shows the last review: it isn't part of the pull request. */
+/**
+ * Comments go on the pull request's own versions only: not on the old side when it is an earlier
+ * commit (since the last review, or a range of commits), and nowhere when the new side is.
+ */
 function commentable(side: Side): boolean {
-  return !(model?.since && side === 'LEFT');
+  return !model?.range?.readOnly && !(model?.range && side === 'LEFT');
+}
+
+// Range picker -----------------------------------------------------------------------------------
+// What the page compares, as on github.com: all changes, the changes since your last review, or
+// those of one commit or a run of them (click, then Shift-click). The choice holds for every file.
+
+const RANGE_ICONS: Record<RangeChoice['kind'], string> = { all: 'git-compare', since: 'history', commits: 'git-commit' };
+
+function rangeControl(): HTMLElement | false {
+  const r = panel.range;
+  if (!r) {
+    return false;
+  }
+  const title = r.choice.kind === 'since' && r.auto
+    ? `The changes since ${r.review?.label}: this ${model?.kind === 'file' ? 'file' : 'notebook'} changed after it. Click to pick other changes.`
+    : 'Pick what to compare: all changes, the changes since your review, or some of the commits';
+  return h('div', { class: 'range-wrap' },
+    button([icon(RANGE_ICONS[r.choice.kind]), r.label, icon('chevron-down')], () => openRange(!rangeOpen), {
+      class: `ghost range${r.choice.kind === 'all' ? '' : ' on'}`,
+      title,
+      'aria-haspopup': 'true',
+      'aria-expanded': rangeOpen ? 'true' : 'false',
+    }),
+    rangeOpen && renderRangeBox());
+}
+
+function openRange(open: boolean): void {
+  rangeOpen = open;
+  if (open && !commitList.commits && !commitList.loading) {
+    commitList = { loading: true, head: panel.range?.head };
+    post({ type: 'loadCommits' });
+  }
+  render();
+}
+
+function setRange(choice: RangeChoice, close: boolean): void {
+  if (close) {
+    rangeOpen = false;
+  }
+  if (!sameChoice(choice, currentChoice()) || panel.range?.auto) {
+    pickedChoice = choice;
+    post({ type: 'setRange', choice });
+  }
+  render();
+}
+
+function renderRangeBox(): HTMLElement {
+  const r = panel.range!;
+  const option = (choice: RangeChoice, label: string, hint: string, disabled = false) => {
+    const on = r.choice.kind === choice.kind;
+    return h('label', { class: `option${on ? ' on' : ''}${disabled ? ' disabled' : ''}` },
+      h('input', { type: 'radio', name: 'range', checked: on, disabled, onchange: () => setRange(choice, true) }),
+      h('span', {}, h('b', { text: label }), h('span', { class: 'muted', text: hint })));
+  };
+  const review = r.review;
+  return h('div', { class: 'range-box', role: 'dialog', 'aria-label': 'Compare' },
+    h('div', { class: 'submit-options' },
+      option({ kind: 'all' }, 'All changes', `Everything the pull request changes, in ${r.commits} commit${r.commits === 1 ? '' : 's'}.`),
+      review && option({ kind: 'since' }, 'Since your review', review.problem ?? `What changed after ${review.label}.`, review.blocked)),
+    h('div', { class: 'range-head' }, h('b', { text: 'Commits' }), h('span', { class: 'muted', text: 'Click one, or Shift-click to pick several.' })),
+    renderCommitList(),
+    review && !review.blocked && h('div', { class: 'muted foot', text: 'Until you pick, a file that changed after your review shows the changes since then.' }));
+}
+
+function renderCommitList(): HTMLElement {
+  if (commitList.loading) {
+    return h('div', { class: 'muted commit-note', text: 'Loading commits…' });
+  }
+  if (commitList.error || !commitList.commits) {
+    return h('div', { class: 'muted commit-note', text: commitList.error ?? '' });
+  }
+  const commits = commitList.commits;
+  const choice = currentChoice();
+  const at = (sha: string) => commits.findIndex(c => c.sha === sha);
+  const reviewed = panel.range?.review && !panel.range.review.blocked ? at(panel.range.review.sha) : -1;
+  // The commits the page's range takes in are ticked, whichever way it was picked.
+  const [from, to] = choice?.kind === 'commits' ? [at(choice.first), at(choice.last)]
+    : choice?.kind === 'since' ? (reviewed >= 0 ? [reviewed + 1, commits.length - 1] : [-1, -1])
+      : [0, commits.length - 1];
+  const rows: HTMLElement[] = [];
+  commits.forEach((c, i) => {
+    const picked = from >= 0 && i >= from && i <= to;
+    rows.push(h('div', {
+      class: `commit${picked ? ' on' : ''}${c.touches === false ? ' untouched' : ''}`,
+      role: 'button',
+      tabindex: '0',
+      title: c.touches === false ? `${c.headline}
+
+Doesn’t change this ${model?.kind === 'file' ? 'file' : 'notebook'}.` : c.headline,
+      onclick: (e: MouseEvent) => setRange(pickCommits(commits, c.sha, choice, e.shiftKey), false),
+      onkeydown: (e: KeyboardEvent) => e.key === 'Enter' && setRange(pickCommits(commits, c.sha, choice, e.shiftKey), false),
+    },
+    h('span', { class: 'mark' }, picked ? icon('check') : null),
+    h('code', { text: short(c.sha) }),
+    h('span', { class: 'headline', text: c.headline }),
+    h('span', { class: 'muted', text: [c.author, timeAgo(c.date)].filter(Boolean).join(' · ') })));
+    if (i === reviewed && i < commits.length - 1) {
+      rows.push(h('div', { class: 'review-mark' }, h('span', { text: 'your last review' })));
+    }
+  });
+  return h('div', { class: 'commit-list' }, ...rows);
 }
 
 /** Outputs of a notebook cell take comments; the picture of an image file is the file, commented on as a whole. */
@@ -451,6 +567,11 @@ function cellHasThreads(c: CellVM): boolean {
 
 function renderCells(m: ViewModel): HTMLElement {
   const root = h('main', { class: `cells ${layout()}` });
+  if (m.range?.readOnly) {
+    root.append(h('div', { class: 'range-note' }, icon('info'),
+      h('span', { text: 'This shows an earlier version than the latest. GitHub takes comments on the latest version only, so comments are off and threads are hidden here.' }),
+      button('Show all changes', () => setRange({ kind: 'all' }, true), { class: 'ghost' })));
+  }
   if (m.notice) {
     root.append(h('div', { class: 'notice' }, h('span', { text: m.notice }),
       button([icon('diff'), 'Open text diff'], () => post({ type: 'openTextDiff' }), { class: 'ghost' })));
@@ -1508,6 +1629,10 @@ window.addEventListener('mousedown', e => {
     checksOpen = false;
     render();
   }
+  if (rangeOpen && !(e.target as HTMLElement).closest('.range-wrap')) {
+    rangeOpen = false;
+    render();
+  }
   if (submitBox.open && !submitBox.sending && !(e.target as HTMLElement).closest('.submit-wrap')) {
     submitBox.open = false;
     render();
@@ -1516,9 +1641,10 @@ window.addEventListener('mousedown', e => {
 
 window.addEventListener('keydown', e => {
   const target = e.target as HTMLElement;
-  if (e.key === 'Escape' && (filterOpen || checksOpen)) {
+  if (e.key === 'Escape' && (filterOpen || checksOpen || rangeOpen)) {
     filterOpen = false;
     checksOpen = false;
+    rangeOpen = false;
     render();
     return;
   }
@@ -1590,8 +1716,25 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       resolving.clear();
       render();
       break;
+    case 'commits':
+      // A list from before new commits arrived is left out. After an error the list is asked
+      // for again the next time the picker opens.
+      if (!panel.range || msg.head === panel.range.head) {
+        commitList = msg.error ? { error: msg.error } : { commits: msg.commits, head: msg.head };
+        render();
+      }
+      break;
     case 'state':
+      pickedChoice = undefined;
+      // New commits were pushed (or the branch was rewritten): the list is out of date.
+      if (msg.state.range && (commitList.commits || commitList.loading) && commitList.head !== msg.state.range.head) {
+        commitList = {};
+      }
       panel = msg.state;
+      if (rangeOpen && !commitList.commits && !commitList.loading && !commitList.error) {
+        commitList = { loading: true, head: panel.range?.head };
+        post({ type: 'loadCommits' });
+      }
       render();
       break;
     case 'plan': {

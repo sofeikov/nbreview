@@ -202,13 +202,24 @@ test('compared with the last review: only what changed since, and no comments on
   const reviewed = JSON.parse(fx('small.head.ipynb'));
   const lossDef = reviewed.cells.find((c: any) => c.id === 'loss-def');
   lossDef.source[0] = '# reviewed version\n';
-  const since = { base: buildReviewDoc(parseNotebook(JSON.stringify(reviewed))), label: 'your review on 1 Oct (abc1234)' };
+  const since = { base: buildReviewDoc(parseNotebook(JSON.stringify(reviewed))), describe: 'since your review on 1 Oct (abc1234)', readOnly: false };
   const vm = buildViewModel(e, { number: 1, title: 't', url: 'u' }, since);
-  assert.deepEqual(vm.since, { label: 'your review on 1 Oct (abc1234)' });
+  assert.deepEqual(vm.range, { describe: 'since your review on 1 Oct (abc1234)', readOnly: false });
   assert.deepEqual(vm.cells.filter(c => c.status !== 'unchanged').map(c => c.key), ['loss-def']);
   assert.deepEqual([vm.stats.additions, vm.stats.deletions], [1, 1], 'the source lines changed since the review');
   // The whole pull request, for comparison.
-  assert.equal(buildViewModel(e, { number: 1, title: 't', url: 'u' }).since, undefined);
+  assert.equal(buildViewModel(e, { number: 1, title: 't', url: 'u' }).range, undefined);
+});
+
+test('a range of commits: both sides can be other versions, and an earlier new side is read-only', () => {
+  const e = entry(fx('small.base.ipynb'), fx('small.head.ipynb'), fx('small.patch'));
+  // The new side is the base itself: nothing changed between the two commits.
+  const same = buildViewModel(e, { number: 1, title: 't', url: 'u' }, { base: e.base, head: e.base, describe: 'in abc1234', readOnly: true });
+  assert.deepEqual(same.cells.filter(c => c.status !== 'unchanged'), []);
+  assert.deepEqual(same.range, { describe: 'in abc1234', readOnly: true });
+  // Only the new side given: the old side stays the pull request's base.
+  const head = buildViewModel(e, { number: 1, title: 't', url: 'u' }, { head: e.head, describe: 'in 2 commits', readOnly: false });
+  assert.deepEqual(head.cells.map(c => c.status), buildViewModel(e, { number: 1, title: 't', url: 'u' }).cells.map(c => c.status));
 });
 
 test('published threads: resolve flags, reactions, and editing only the viewer\'s own comments', () => {
@@ -350,8 +361,8 @@ test('a changed file is one cell, with its lines diffed and counted', () => {
 
   const quiet = buildFileViewModel(file, 'x=1\n', 'x = 1\n', pr, undefined, { hideNoise: true });
   assert.equal(quiet.cells[0].noiseHidden, 'whitespace');
-  const since = buildFileViewModel(file, 'a\n', 'b\n', pr, { label: 'your review' });
-  assert.deepEqual(since.since, { label: 'your review' });
+  const since = buildFileViewModel(file, 'a\n', 'b\n', pr, { describe: 'since your review', readOnly: false });
+  assert.deepEqual(since.range, { describe: 'since your review', readOnly: false });
 });
 
 test('an image file is one cell with the old and new pictures, compared like a changed plot', () => {

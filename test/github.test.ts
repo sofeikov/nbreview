@@ -4,7 +4,7 @@ import { GitHub, type PrInfo } from '../src/github.ts';
 
 const pr: PrInfo = {
   owner: 'o', repo: 'r', number: 1, nodeId: 'PR_1', title: 't', url: 'u', author: 'a',
-  baseRef: 'main', headRef: 'feat', baseSha: 'b'.repeat(40), headSha: 'h'.repeat(40),
+  baseRef: 'main', headRef: 'feat', baseSha: 'b'.repeat(40), headSha: 'h'.repeat(40), commits: 1,
 };
 
 /** Replaces fetch with a fake GitHub GraphQL endpoint that records the calls. */
