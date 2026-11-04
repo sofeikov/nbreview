@@ -11,6 +11,7 @@ import type { CommentableLines } from './patch.ts';
 import type { LineInfo, ReviewDoc } from './reviewDoc.ts';
 import { docLineForJsonLine, docLineForSource, findCell, headerLine } from './reviewDoc.ts';
 import type { NbCell } from './notebook.ts';
+import { redactSecrets } from './checks.ts';
 
 export type Side = 'LEFT' | 'RIGHT';
 
@@ -150,7 +151,9 @@ function renderHeader(path: string, cell: NbCell, marker: Marker): string {
   if (!quoted.length) {
     return title;
   }
-  const shown = quoted.slice(0, 6);
+  // A key in the quoted lines is hidden: a review comment would otherwise publish it again, and
+  // keep it after the line is fixed.
+  const shown = quoted.slice(0, 6).map(redactSecrets);
   const fence = ['```' + lang, ...shown, ...(quoted.length > shown.length ? ['…'] : []), '```'];
   return [title, ...fence.map(l => `> ${l}`)].join('\n');
 }

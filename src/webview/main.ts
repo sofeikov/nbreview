@@ -1602,8 +1602,10 @@ window.addEventListener('blur', () => showNavTarget(undefined));
 // With the focus outside the page, releasing the key isn't seen here: leaving the page clears the mark.
 document.documentElement.addEventListener('mouseleave', () => showNavTarget(undefined));
 app.addEventListener('click', e => {
-  // A drag that selected text isn't a click on a name.
-  if (!navKey(e) || !panel.local || !(window.getSelection()?.isCollapsed ?? true)) {
+  // A drag that selected text isn't a click on a name. The click goes to the extension even
+  // before the page knows of a local clone (it is looked up after the page is drawn): the
+  // extension then looks itself, and says what to open if there is none.
+  if (!navKey(e) || !(window.getSelection()?.isCollapsed ?? true)) {
     return;
   }
   const t = navTarget(e);

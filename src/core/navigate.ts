@@ -101,3 +101,20 @@ export function isRemoteOf(url: string, owner: string, repo: string): boolean {
   const m = /^(?:[a-z+]+:\/\/)?(?:[^@/\s]+@)?github\.com(?:-[\w.-]+)?(?::\d+)?[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(url.trim());
   return !!m && m[1].toLowerCase() === owner.toLowerCase() && m[2].toLowerCase() === repo.toLowerCase();
 }
+
+/**
+ * A short name for a file in a list of definitions: its name, and where it is, relative to a
+ * workspace folder, or from the package folder of an installed library or stub
+ * (`site-packages/`, `stubs/`, `stdlib/`), instead of a long absolute path.
+ */
+export function shortPlace(path: string, roots: string[]): { name: string; where: string } {
+  const slash = path.lastIndexOf('/');
+  const name = path.slice(slash + 1);
+  const dir = path.slice(0, Math.max(slash, 0));
+  const root = roots.filter(r => dir === r || dir.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
+  if (root !== undefined) {
+    return { name, where: dir.slice(root.length + 1) };
+  }
+  const m = /\/(?:site-packages|dist-packages|stubs|stdlib)\/(.*)$/.exec(dir);
+  return { name, where: m ? m[1] : dir };
+}

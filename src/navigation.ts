@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
 import type { ReviewState } from './state.ts';
-import { columnOf, isRemoteOf, matchCell, matchLine } from './core/navigate.ts';
+import { columnOf, isRemoteOf, matchCell, matchLine, shortPlace } from './core/navigate.ts';
 
 /** The open folder that is a clone of the pull request's repository, and what it has checked out. */
 export interface LocalRepo {
@@ -128,12 +128,24 @@ export class Navigator {
     let found: (vscode.Location | vscode.LocationLink)[] = [];
     const col = where && where.line !== undefined ? columnOf(where.doc.lineAt(where.line).text, name, column) : undefined;
     if (where && where.line !== undefined && col !== undefined) {
-      found = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
-        'vscode.executeDefinitionProvider', where.doc.uri, new vscode.Position(where.line, col)) ?? [];
+      const position = new vscode.Position(where.line, col);
+      // A file the language server has only just been given (or a server that is still starting,
+      // as on the first click after VS Code starts) answers nothing at first: ask again for a few
+      // seconds before saying there is no definition.
+      const until = Date.now() + (where.justOpened ? 8000 : 0);
+      for (;;) {
+        found = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>('vscode.executeDefinitionProvider', where.doc.uri, position) ?? [];
+        if (found.length || Date.now() >= until) {
+          break;
+        }
+        await new Promise(r => setTimeout(r, 400));
+      }
       // The line is there, and the language server knows of no definition (a word in a comment, an
       // attribute it can't resolve): another symbol of the same name would be a guess.
       if (!found.length) {
-        return `VS Code found no definition of ${name} here in ${checkout}.`;
+        // Usually a word with nothing to go to; but a language server that is still busy starting
+        // (many editors restored with the window) answers nothing too.
+        return `VS Code found no definition of ${name} here in ${checkout}. If its language server is still starting, try again in a moment.`;
       }
     }
     // The line isn't in the checkout: look the name up instead.
@@ -147,9 +159,15 @@ export class Navigator {
         ? `No definition of ${name} found in ${checkout}.`
         : `No definition of ${name} found in ${checkout}. If this pull request adds it, check out its branch to go to it.`;
     }
-    const target = found.length === 1 ? found[0] : await this.pick(name, found, repo);
-    if (target) {
-      await reveal(target);
+    if (found.length > 1 && exact && where && where.line !== undefined && col !== undefined) {
+      // Several definitions (overloads: pandas' groupby has 17): VS Code's own peek view lists
+      // them with previews, at the clicked line in the viewer's copy of the file, as F12 does.
+      await this.peek(where, new vscode.Position(where.line, col), found);
+    } else {
+      const chosen = found.length === 1 ? found[0] : await this.pick(name, found, repo);
+      if (chosen) {
+        await reveal(chosen);
+      }
     }
     if (repo.atHead) {
       return undefined;
@@ -194,12 +212,16 @@ export class Navigator {
    * the cell (by id, then by source) and a line in it.
    */
   private async locate(repo: LocalRepo, at: PageLine): Promise<{
-    doc: vscode.TextDocument; line?: number; notebook?: vscode.NotebookDocument; cellIndex?: number;
+    doc: vscode.TextDocument; line?: number; notebook?: vscode.NotebookDocument; cellIndex?: number; justOpened?: boolean;
   } | undefined> {
     const uri = await this.localFile(repo, at);
     if (!uri) {
       return undefined;
     }
+    // Whether VS Code had the file open before: if not, its language server hasn't seen it yet.
+    const justOpened = at.cell
+      ? !vscode.workspace.notebookDocuments.some(nb => nb.uri.toString() === uri.toString())
+      : !vscode.workspace.textDocuments.some(d => d.uri.toString() === uri.toString());
     try {
       if (at.cell) {
         const notebook = await vscode.workspace.openNotebookDocument(uri);
@@ -212,10 +234,10 @@ export class Navigator {
           return { doc: notebook.cellAt(0).document, notebook };
         }
         const doc = notebook.cellAt(index).document;
-        return { doc, notebook, cellIndex: index, line: matchLine(doc.getText().split(/\r?\n/), at.text, at.line) };
+        return { doc, notebook, cellIndex: index, line: matchLine(doc.getText().split(/\r?\n/), at.text, at.line), justOpened };
       }
       const doc = await vscode.workspace.openTextDocument(uri);
-      return { doc, line: matchLine(doc.getText().split(/\r?\n/), at.text, at.line) };
+      return { doc, line: matchLine(doc.getText().split(/\r?\n/), at.text, at.line), justOpened };
     } catch {
       return undefined;
     }
@@ -238,15 +260,33 @@ export class Navigator {
     return undefined;
   }
 
+  /** Shows the local line beside the page, with VS Code's peek view of the definitions on it. */
+  private async peek(where: { doc: vscode.TextDocument; notebook?: vscode.NotebookDocument; cellIndex?: number }, at: vscode.Position, found: (vscode.Location | vscode.LocationLink)[]): Promise<void> {
+    const selection = new vscode.Range(at, at);
+    if (where.notebook && where.cellIndex !== undefined) {
+      await showCell(where.notebook, where.cellIndex, selection);
+    } else {
+      await vscode.window.showTextDocument(where.doc, { viewColumn: vscode.ViewColumn.Beside, selection });
+    }
+    const locations = found.map(l => (l instanceof vscode.Location ? l : new vscode.Location(target(l).uri, target(l).range)));
+    await vscode.commands.executeCommand('editor.action.goToLocations', where.doc.uri, at, locations, 'peek', 'No definitions found');
+  }
+
   private async pick(name: string, found: (vscode.Location | vscode.LocationLink)[], repo: LocalRepo): Promise<vscode.Location | vscode.LocationLink | undefined> {
+    const roots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
     const items = found.map(l => {
       const { uri, range } = target(l);
-      const path = vscode.workspace.asRelativePath(uri.scheme === 'vscode-notebook-cell' ? uri.with({ scheme: 'file', fragment: '' }) : uri);
-      return { label: `${path}:${range.start.line + 1}`, location: l };
+      const place = shortPlace(fileOf(uri).fsPath, roots);
+      return { label: `${place.name}:${range.start.line + 1}`, description: place.where, location: l };
     });
     const chosen = await vscode.window.showQuickPick(items, { placeHolder: `Definitions of ${name}${repo.branch ? ` in ${repo.branch}` : ''}` });
     return chosen?.location;
   }
+}
+
+/** The file of a location: a notebook for one of its cells. */
+function fileOf(uri: vscode.Uri): vscode.Uri {
+  return uri.scheme === 'vscode-notebook-cell' ? uri.with({ scheme: 'file', fragment: '' }) : uri;
 }
 
 function target(l: vscode.Location | vscode.LocationLink): { uri: vscode.Uri; range: vscode.Range } {

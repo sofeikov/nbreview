@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnOf, identifierAt, isRemoteOf, matchCell, matchLine } from '../src/core/navigate.ts';
+import { columnOf, identifierAt, isRemoteOf, matchCell, matchLine, shortPlace } from '../src/core/navigate.ts';
 
 test('identifierAt finds the name under the cursor, also just after it', () => {
   const line = 'result = area(2, 3)';
@@ -61,4 +61,12 @@ test('isRemoteOf recognises the forms of a GitHub remote', () => {
   assert.ok(!isRemoteOf('git@gitlab.com:sofeikov/nbreview.git', 'sofeikov', 'nbreview'));
   assert.ok(!isRemoteOf('git@notgithub.com:sofeikov/nbreview.git', 'sofeikov', 'nbreview'));
   assert.ok(!isRemoteOf('https://evil.example/github.com/sofeikov/nbreview', 'sofeikov', 'nbreview'));
+});
+
+test('shortPlace names a file by its name and a short folder', () => {
+  assert.deepEqual(shortPlace('/home/me/repo/pkg/geometry.py', ['/home/me/repo']), { name: 'geometry.py', where: 'pkg' });
+  assert.deepEqual(shortPlace('/home/me/repo/a.py', ['/home/me/repo']), { name: 'a.py', where: '' });
+  assert.deepEqual(shortPlace('/x/exts/ms-python.vscode-pylance-2026.4.1/dist/bundled/stubs/pandas/core/frame.pyi', ['/home/me/repo']), { name: 'frame.pyi', where: 'pandas/core' });
+  assert.deepEqual(shortPlace('/usr/lib/python3/dist-packages/numpy/linalg/linalg.py', []), { name: 'linalg.py', where: 'numpy/linalg' });
+  assert.deepEqual(shortPlace('/opt/other/x.py', []), { name: 'x.py', where: '/opt/other' });
 });

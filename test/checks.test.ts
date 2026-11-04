@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseNotebook } from '../src/core/notebook.ts';
 import { diffCells } from '../src/core/cellDiff.ts';
+import { buildReviewDoc, docLineForSource } from '../src/core/reviewDoc.ts';
+import { parseBody, planComment } from '../src/core/anchor.ts';
 import { checkFile, checkNotebook, entropy, findLocalPaths, findSecrets, findingPlace, patchLines, withoutStylesAndScripts } from '../src/core/checks.ts';
 
 // Keys are put together at run time, so the test file itself has nothing that looks like a key
@@ -303,4 +305,14 @@ test('withoutStylesAndScripts drops style and script elements, closed or not, qu
   withoutStylesAndScripts('<script'.repeat(50_000));
   withoutStylesAndScripts('<style>x'.repeat(50_000));
   assert.ok(performance.now() - start < 200);
+});
+
+test('the line a comment quotes has its keys hidden', () => {
+  const pw = random(14, 31);
+  const doc = buildReviewDoc(nb([{ id: 'db', source: `url = "postgresql://analyst:${pw}@db:5432/x"\nprint(url)`, count: 1 }]));
+  const line = docLineForSource(doc, 'db', 0)!;
+  const plan = planComment({ doc, path: 'a.ipynb', side: 'RIGHT', startDocLine: line, endDocLine: line, commentable: { left: new Set(), right: new Set() }, text: 'Rotate this.' });
+  assert.ok(!plan.body.includes(pw), plan.body);
+  assert.match(plan.body, /> url = "postgresql:\/\/analyst:\[hidden, 14 characters\]@db:5432\/x"/);
+  assert.equal(parseBody(plan.body).text, 'Rotate this.');
 });

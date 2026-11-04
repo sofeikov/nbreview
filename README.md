@@ -170,6 +170,13 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.22.1
+Fixes found by testing 0.20–0.22 by hand in the packaged extension:
+- **Fix: a comment on a line with a key quoted the key.** Comments made here quote the lines they are about, so a comment on a line with a password published it again, also one started from a finding's **Comment** button. Keys in the quoted lines are now hidden.
+- **Fix: go to definition said "no definition" on the first click** on a file that VS Code hadn't opened yet, or right after VS Code started, before the language server had read it. It now asks again for a few seconds.
+- A name with many definitions (pandas' `groupby` has 17 overloads) opens VS Code's peek view at your local copy of the line, as F12 does, instead of a list of full paths. A list of definitions found by name in several files shows each file's name and a short folder.
+- Ctrl+click (⌘+click) works as soon as the page is open. Before, it did nothing until the page had found the local clone, which could take a while after VS Code started.
+
 ### 0.22.0
 - **Go to definition from the review page.** Ctrl+click (⌘+click) a name in a notebook cell or a file to go to its definition. The name is underlined while the key is down. VS Code's own language server (Pylance for Python) finds it in your checkout, so it follows imports, other notebook cells and installed libraries, and it opens beside the page. This needs the folder open in VS Code to be a clone of the pull request's repository. When your checkout isn't at the pull request's latest commit, a note says the definition comes from your checkout.
 - **Open in workspace**: a button in each cell's header opens the cell, or the file at its first changed line, in VS Code's own editor.
