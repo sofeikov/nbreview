@@ -33,6 +33,7 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 - **Images in the pull request.** A changed PNG, JPEG, GIF, WebP or other image file opens in the review page as a picture, old and new, with the same Side by side, Swipe, Onion skin and Difference views as a changed plot; an SVG shows its source and its picture. **Text diff** opens images, and any other binary file, in VS Code's own viewer instead of as garbled text.
 - **Hide the noise.** Execution counts and notebook metadata never show as changes. **Hide noise** in the review page also folds away cells whose only change is their outputs (a notebook that was run again) or whitespace (code that was reformatted), and says how many it hid. Counts are of source lines, not the JSON lines GitHub counts, and a notebook that was only run again is marked *outputs only*.
 - **Checks on what the pull request adds.** The review page finds what a reviewer can miss: keys, tokens and passwords (GitHub, GitLab, AWS, OpenAI, Anthropic, Hugging Face, Slack, Google, Stripe, private keys, JSON web tokens, bearer tokens, passwords in database URLs, in `password = "…"` lines and in YAML, INI, TOML and `.env` files), absolute paths into a home folder (`/home/alice/`, `/Users/bob/`, `C:\Users\carol\`) and, in notebooks, cells that ran out of order, outputs not updated after the code changed, error outputs and outputs over 1 MB. Only what the pull request adds is checked: a key or path that the notebook already had, or that a changed file had on a line the pull request removes, is not reported again. Each finding shows on its cell and line, and **Comment** starts a review comment from it. Keys are masked on the page and never go into the comment. The **checks** button in the toolbar lists them all, and the Review panel marks files with findings (`⚠2`). Setting `nbreview.checks` switches the checks off.
+- **Go to definition, with your own language server.** When the folder open in VS Code is a clone of the pull request's repository, Ctrl+click (⌘+click on macOS) a name in the review page to go to where it is defined. Pylance, or whatever language server you use, finds it in your checkout, also in other files, other notebook cells and installed libraries, and it opens beside the page. The button in a cell's header opens that cell or file in VS Code's own editor. When your checkout isn't at the pull request's latest commit, a short note says the result comes from your checkout. Check out the pull request's branch to go to code that the pull request adds.
 - **Comment on any cell.** Hover a line of code, a Markdown paragraph or a list item and click `+`, or drag the `+` over several lines. Every cell and output also has a comment button, so you can comment on a whole cell or on a plot.
 - **Comments land on GitHub.** A comment becomes a line comment on the notebook in the pull request when GitHub allows it, otherwise a file comment. Every comment quotes the cell it is about, so it reads well on github.com too.
 - **Suggested changes.** "Suggest change" proposes new lines that the author can apply with GitHub's *Commit suggestion* button, directly in the notebook.
@@ -154,6 +155,7 @@ The core does not use the VS Code API and is in `src/core/`:
 - `patch.ts`: which lines GitHub accepts comments on.
 - `prStatus.ts`: where a pull request stands (its checks, reviews and conflicts) and the Overview's one-line verdict.
 - `checks.ts`: the checks on what a pull request adds (keys, local paths, run order, stale, error and large outputs).
+- `navigate.ts`: finds the clicked name and line of the review page in your checkout, for go to definition.
 - `range.ts`: what the review page compares (all changes, since your review, or some commits) and the commit picker's selection.
 
 ## Limits
@@ -163,9 +165,14 @@ The core does not use the VS Code API and is in `src/core/`:
 - Images with relative paths in Markdown cells and files do not show.
 - Binary files other than images, text files over 2 MB and images over 10 MB are not shown in the review page; **Open text diff** shows them in VS Code's own viewer.
 - An image file takes comments on the whole file only: GitHub has no lines to comment on in it.
+- Go to definition works on your checkout, not on the pull request's own files: the language server only reads files on disk. Code that only the pull request has is found when its branch is checked out.
 - The checks find keys by their known prefixes and by names such as `password` or `api_key` with a random-looking value. They can miss a key with no known prefix in a variable with another name, and they can report a value that is not a key. In a file that is not a notebook, a key copied from an unchanged line is reported as new. A file that GitHub gives no patch for (a very large diff) is not checked, and neither are `application/json` outputs.
 
 ## Changelog
+
+### 0.22.0
+- **Go to definition from the review page.** Ctrl+click (⌘+click) a name in a notebook cell or a file to go to its definition. The name is underlined while the key is down. VS Code's own language server (Pylance for Python) finds it in your checkout, so it follows imports, other notebook cells and installed libraries, and it opens beside the page. This needs the folder open in VS Code to be a clone of the pull request's repository. When your checkout isn't at the pull request's latest commit, a note says the definition comes from your checkout.
+- **Open in workspace**: a button in each cell's header opens the cell, or the file at its first changed line, in VS Code's own editor.
 
 ### 0.21.2
 - **Clear errors when GitHub has problems.** When GitHub failed on its side, for example during an outage, the error said only that the answer was not valid JSON, or "Something went wrong". The notification now says that GitHub may be having problems, with a **Check GitHub Status** button that opens githubstatus.com.

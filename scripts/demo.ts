@@ -267,8 +267,10 @@ ${THEME}
 // (headless screenshots are taken then).
 const deliver = data => window.dispatchEvent(new MessageEvent('message', { data }));
 const panelState = { viewed: false, pending: 1, pendingReview: true, comments: 'all' };
+window.__posted = [];
 window.acquireVsCodeApi = () => ({
   postMessage(m) {
+    window.__posted.push(m);
     // Answer like the extension does, so a new comment shows where it will land on GitHub.
     if (m.type === 'plan') {
       deliver({ type: 'plan', requestId: m.requestId, describe: location.hash.startsWith('#checks') ? 'Will post as a line comment → ' + model.path : 'Will post as a line comment · cell line 2 → ${path} L41' });
@@ -291,7 +293,8 @@ window.acquireVsCodeApi = () => ({
 // Scenes for the README screenshots: index.html#outputs (a changed plot), #comment, #submit, and
 // #file (another file of the pull request). The checks: #checks (a notebook with findings),
 // #checks-list (their list in the toolbar), #checks-comment (a comment started from one) and
-// #checks-file (a Python module with findings).
+// #checks-file (a Python module with findings). #nav shows code navigation (Ctrl held over a
+// name) and #navtest checks Ctrl+click in the browser, writing the results on the page.
 const scene = location.hash.slice(1);
 // The range picker: #range (on "Since your review", the default) and #range-commit (one earlier
 // commit picked, so the page is read-only).
@@ -331,6 +334,48 @@ if (scene === 'comment') {
 }
 if (scene.startsWith('range')) {
   document.querySelector('.range-wrap > button').click();
+}
+// #navtest: Ctrl+click checked in a real browser; the results are written on the page.
+if (scene === 'navtest') {
+  panelState.local = { branch: 'main', atHead: true };
+  deliver({ type: 'state', state: panelState });
+  const out = {};
+  const text = document.querySelector('.code[data-cell="fit"][data-side="RIGHT"] .text');
+  const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+  let node, hit;
+  while ((node = walker.nextNode())) { const i = node.textContent.indexOf('LogisticRegression'); if (i >= 0) { hit = [node, i]; break; } }
+  const r = document.createRange();
+  r.setStart(hit[0], hit[1] + 5);
+  r.setEnd(hit[0], hit[1] + 6);
+  const b = r.getBoundingClientRect();
+  const ev = (type, ctrlKey) => new MouseEvent(type, { bubbles: true, cancelable: true, ctrlKey, clientX: b.left + 1, clientY: b.top + b.height / 2 });
+  text.dispatchEvent(ev('mousemove', true));
+  out.underlined = CSS.highlights && CSS.highlights.has('nav-target') ? [...CSS.highlights.get('nav-target')][0].toString() : null;
+  out.pointer = document.body.classList.contains('nav-target');
+  text.dispatchEvent(ev('click', false));
+  out.plainClickSent = window.__posted.filter(m => m.type === 'goToDefinition').length;
+  text.dispatchEvent(ev('click', true));
+  out.sent = window.__posted.filter(m => m.type === 'goToDefinition').map(m => ({ name: m.name, column: m.column, line: m.at.line, text: m.at.text, cell: m.at.cell && m.at.cell.id }));
+  window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control' }));
+  out.clearedOnKeyup = !(CSS.highlights && CSS.highlights.has('nav-target'));
+  document.body.insertAdjacentHTML('afterbegin', '<pre id="navtest" style="position:fixed;top:0;left:0;right:0;z-index:99;background:#000;color:#0f0;font-size:16px;padding:12px;white-space:pre-wrap">' + JSON.stringify(out, null, 1).replace(/</g, '&lt;') + '</pre>');
+}
+// #nav: code navigation, with a clone of the repository open on main. Ctrl is held over a name,
+// which is underlined, and the note a definition from another commit gets is shown.
+if (scene === 'nav') {
+  panelState.local = { branch: 'main', atHead: false };
+  deliver({ type: 'state', state: panelState });
+  scrollTo(document.querySelector('section.cell[data-key="fit"]'));
+  const text = document.querySelector('.code[data-cell="fit"][data-side="RIGHT"] .text');
+  const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+  let node, hit;
+  while ((node = walker.nextNode())) { const i = node.textContent.indexOf('LogisticRegression'); if (i >= 0) { hit = [node, i]; break; } }
+  const r = document.createRange();
+  r.setStart(hit[0], hit[1] + 5);
+  r.setEnd(hit[0], hit[1] + 6);
+  const b = r.getBoundingClientRect();
+  text.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ctrlKey: true, clientX: b.left + 1, clientY: b.top + b.height / 2 }));
+  deliver({ type: 'toast', message: 'From your checkout (main), which isn’t at the pull request’s latest commit.' });
 }
 if (scene === 'checks-list') {
   document.querySelector('.checks-wrap > button').click();

@@ -1,8 +1,9 @@
 // The visual review page. Renders the notebook pair as cell cards (rendered markdown, highlighted
 // code diffs, outputs) and the review threads, and sends comment actions back to the extension.
-import type { Anchor, CellVM, CommentVM, CommitVM, Finding, HostMessage, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
+import type { Anchor, CellVM, CommentVM, CommitVM, Finding, HostMessage, NavLine, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
 import { findingPlace } from '../core/checks.ts';
 import { pickCommits, sameChoice, short, type RangeChoice } from '../core/range.ts';
+import { identifierAt, type Identifier } from '../core/navigate.ts';
 import { REACTIONS, REACTION_NAMES, type ReactionContent } from '../core/reactions.ts';
 import { showsThread, type CommentFilter } from '../core/commentFilter.ts';
 import { diffPixels, pairImages, type ImagePair } from './imageDiff.ts';
@@ -637,6 +638,10 @@ function renderCell(c: CellVM): HTMLElement {
       button('Source', () => { ui.mdSource[c.key] = true; persist(); render(); }, { class: rendered ? '' : 'on' })),
     commentable(cellAnchor().side) && button(icon('comment'), () => openComposer(cellAnchor()), { class: 'icon-btn', title: file ? 'Comment on the whole file' : 'Comment on this cell' }),
     c.headId && button(icon('diff'), () => post({ type: 'openTextDiff', cellId: file ? undefined : c.headId }), { class: 'icon-btn', title: 'Show in text diff' }),
+    panel.local && !model?.image && button(icon('go-to-file'), () => post({ type: 'openInWorkspace', at: cellNavLine(c) }), {
+      class: 'icon-btn',
+      title: `Open in your workspace${panel.local.branch ? ` (${panel.local.branch})` : ''}, with VS Code's own editor and language tools. ${NAV_KEY}+click a name to go to its definition.`,
+    }),
   );
   const card = h('section', { class: `cell ${c.status}${c.moved ? ' moved' : ''}${model?.image ? ' image-file' : ''}`, data: { key: c.key, head: c.headId, base: c.baseId } }, head);
   const cellFindings = findingsOf(c);
@@ -1476,6 +1481,140 @@ function openComposer(anchor: Anchor, text = ''): void {
 const planRequests = new Map<number, string>();
 
 
+// --- Code navigation ---------------------------------------------------------------------------
+// Ctrl+click (⌘+click) on a name asks the extension for its definition, which VS Code's language
+// server finds in the viewer's own checkout; while the key is down, the name under the mouse is
+// underlined. Only when the workspace has a clone of the pull request's repository.
+
+/** The source of a cell on one side, as lines. */
+function sideSource(c: CellVM, side: Side): string[] {
+  return side === 'RIGHT' ? c.headSource : c.baseSameAsHead ? c.headSource : c.baseSource;
+}
+
+/**
+ * The line where "Open in workspace" opens a cell: its first changed line on the new side that
+ * isn't blank (a blank line can't be found in the checkout by its text), else its first line.
+ */
+function cellNavLine(c: CellVM): NavLine {
+  const side: Side = c.headId ? 'RIGHT' : 'LEFT';
+  const source = sideSource(c, side);
+  const lines = c.ops.flatMap(o => (side === 'RIGHT' && o.op === 'add' ? [o.h] : side === 'LEFT' && o.op === 'del' ? [o.b] : []));
+  const line = lines.find(i => source[i]?.trim()) ?? source.findIndex(l => l.trim());
+  return navLine(c, side, Math.max(line, 0));
+}
+
+/**
+ * The key that goes to a definition, as in VS Code's editor: ⌘ on macOS (where Ctrl+click opens
+ * the context menu), Ctrl elsewhere.
+ */
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const NAV_KEY = MAC ? '⌘' : 'Ctrl';
+const navKey = (e: MouseEvent) => (MAC ? e.metaKey : e.ctrlKey);
+
+function navLine(c: CellVM, side: Side, line: number): NavLine {
+  const source = sideSource(c, side);
+  const id = (side === 'RIGHT' ? c.headId : c.baseId)!;
+  return { line, text: source[line] ?? '', ...(model?.kind === 'notebook' ? { cell: { id, source: source.join('\n') } } : {}) };
+}
+
+/** The character of a line's text element under the mouse. */
+function caretOffset(textEl: HTMLElement, x: number, y: number): number | undefined {
+  const d = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const pos = d.caretPositionFromPoint?.(x, y);
+  const range = pos ? undefined : d.caretRangeFromPoint?.(x, y);
+  const node = pos?.offsetNode ?? range?.startContainer;
+  const offset = pos?.offset ?? range?.startOffset ?? 0;
+  if (!node || !textEl.contains(node)) {
+    return undefined;
+  }
+  const before = document.createRange();
+  before.setStart(textEl, 0);
+  before.setEnd(node, offset);
+  return before.toString().length;
+}
+
+/** The name under the mouse in a code line of the page, with what the extension needs to find it. */
+function navTarget(e: MouseEvent): { textEl: HTMLElement; id: Identifier; at: NavLine } | undefined {
+  const textEl = (e.target as HTMLElement | null)?.closest?.('.code .text') as HTMLElement | null;
+  const code = textEl?.parentElement;
+  if (!textEl || !code || !model) {
+    return undefined;
+  }
+  const side = code.dataset.side as Side;
+  const line = Number(code.dataset.line);
+  const c = model.cells.find(x => (side === 'RIGHT' ? x.headId : x.baseId) === code.dataset.cell);
+  const offset = caretOffset(textEl, e.clientX, e.clientY);
+  if (!c || offset === undefined) {
+    return undefined;
+  }
+  const at = navLine(c, side, line);
+  const id = identifierAt(at.text, offset);
+  return id && { textEl, id, at };
+}
+
+/** A range over characters `start` to `end` of an element's text, across its highlighting spans. */
+function textRange(el: HTMLElement, start: number, end: number): Range | undefined {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  let pos = 0;
+  let started = false;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const len = node.textContent?.length ?? 0;
+    if (!started && start < pos + len) {
+      range.setStart(node, start - pos);
+      started = true;
+    }
+    if (started && end <= pos + len) {
+      range.setEnd(node, end - pos);
+      return range;
+    }
+    pos += len;
+  }
+  return undefined;
+}
+
+const highlights = (globalThis as unknown as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights;
+const HighlightClass = (globalThis as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+
+function showNavTarget(e: MouseEvent | undefined): void {
+  const t = e && panel.local && navKey(e) ? navTarget(e) : undefined;
+  const range = t && textRange(t.textEl, t.id.start, t.id.end);
+  document.body.classList.toggle('nav-target', !!range);
+  if (highlights && HighlightClass) {
+    if (range) {
+      highlights.set('nav-target', new HighlightClass(range));
+    } else {
+      highlights.delete('nav-target');
+    }
+  }
+}
+
+window.addEventListener('mousemove', e => showNavTarget(e), { passive: true });
+window.addEventListener('keyup', e => {
+  if (e.key === 'Control' || e.key === 'Meta') {
+    showNavTarget(undefined);
+  }
+});
+window.addEventListener('blur', () => showNavTarget(undefined));
+// With the focus outside the page, releasing the key isn't seen here: leaving the page clears the mark.
+document.documentElement.addEventListener('mouseleave', () => showNavTarget(undefined));
+app.addEventListener('click', e => {
+  // A drag that selected text isn't a click on a name.
+  if (!navKey(e) || !panel.local || !(window.getSelection()?.isCollapsed ?? true)) {
+    return;
+  }
+  const t = navTarget(e);
+  if (t) {
+    e.preventDefault();
+    e.stopPropagation();
+    showNavTarget(undefined);
+    post({ type: 'goToDefinition', at: t.at, name: t.id.name, column: t.id.start });
+  }
+});
+
 // --- Change map --------------------------------------------------------------------------------
 // A strip down the right edge, like the marks in VS Code's scrollbar, showing where on the page the
 // changes and comments are; a click scrolls there. A one-line change in a long README or a long
@@ -1715,6 +1854,9 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       }
       resolving.clear();
       render();
+      break;
+    case 'toast':
+      toast(msg.message);
       break;
     case 'commits':
       // A list from before new commits arrived is left out. After an error the list is asked

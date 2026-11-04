@@ -690,3 +690,9 @@ button.range.on { background: var(--vscode-button-secondaryBackground, var(--vsc
   background: color-mix(in srgb, var(--accent) 8%, var(--card));
 }
 .range-note > span { flex: 1; }
+
+/* --- Code navigation ----------------------------------------------------------------------- */
+/* Ctrl+click (⌘+click) on a name goes to its definition: the name under the mouse is underlined. */
+
+::highlight(nav-target) { color: var(--vscode-textLink-foreground, #4daafc); text-decoration: underline; }
+body.nav-target .code .text { cursor: pointer; }

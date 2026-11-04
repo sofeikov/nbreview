@@ -10,6 +10,7 @@ import type { TextReview } from './textReview.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
 import type { Finding, HostMessage, RangeState, ViewModel, WebviewMessage } from './webview/protocol.ts';
 import { resolveRange, type RangeChoice, type ResolvedRange } from './core/range.ts';
+import { Navigator, type LocalRepo } from './navigation.ts';
 import { pageTitle, pathFromPageTitle } from './paths.ts';
 import { showIfGitHubDown } from './notify.ts';
 
@@ -29,6 +30,7 @@ export class VisualReview implements vscode.Disposable {
    * earlier sync that finishes later must not replace a newer page.
    */
   private readonly modelSyncs = new Map<vscode.WebviewPanel, number>();
+  private readonly nav: Navigator;
   private syncCount = 0;
 
   constructor(
@@ -36,6 +38,12 @@ export class VisualReview implements vscode.Disposable {
     private readonly text: TextReview,
     private readonly ctx: vscode.ExtensionContext,
   ) {
+    this.nav = new Navigator(state);
+    this.disposables.push(
+      this.nav,
+      this.nav.onDidChange(() => [...this.panels].forEach(([path, panel]) => void this.sync(panel, path, {}))),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => this.nav.refresh()),
+    );
     this.disposables.push(
       vscode.window.registerWebviewPanelSerializer('nbreview.visual', {
         deserializeWebviewPanel: (panel, saved) => this.restore(panel, saved),
@@ -278,6 +286,17 @@ export class VisualReview implements vscode.Disposable {
       case 'loadCommits':
         await this.sendCommits(panel, nbPath);
         return;
+      case 'goToDefinition':
+      case 'openInWorkspace': {
+        // The path is the page's own, whatever the message says.
+        const oldPath = this.state.session?.files.find(f => f.filename === nbPath)?.previousFilename;
+        const at = { ...msg.at, path: nbPath, oldPath };
+        const note = msg.type === 'goToDefinition' ? await this.nav.goToDefinition(at, msg.name, msg.column) : await this.nav.openInWorkspace(at);
+        if (note) {
+          this.post(panel, { type: 'toast', message: note });
+        }
+        return;
+      }
       case 'discardReview':
         await this.state.discardReview();
         return;
@@ -374,6 +393,8 @@ export class VisualReview implements vscode.Disposable {
     const vm = await (this.viewModel ??= import('./viewModel.ts'));
     const s = this.state.session;
     const entry = this.state.entry(nbPath);
+    // The clone isn't waited for (git can be slow): a new look that finds otherwise redraws the state.
+    const local = this.nav.current();
     const range = await this.range(nbPath);
     const r = range?.resolved;
     // The page's range, when it isn't the whole pull request.
@@ -394,7 +415,7 @@ export class VisualReview implements vscode.Disposable {
         const list = (s.fileThreads.get(nbPath) ?? []).filter(f => keepThread(f.side, r));
         this.post(panel, { type: 'threads', threads: vm.buildFileThreads(list, gh => this.state.describe(gh)) });
       }
-      this.post(panel, this.stateMessage(nbPath, range?.state));
+      this.post(panel, this.stateMessage(nbPath, range?.state, local));
       return;
     }
     if (s && entry && what.model) {
@@ -414,7 +435,7 @@ export class VisualReview implements vscode.Disposable {
       const threads = s && entry ? vm.buildThreads(entry, placed, p => this.state.describe(p.gh)) : [];
       this.post(panel, { type: 'threads', threads });
     }
-    this.post(panel, this.stateMessage(nbPath, range?.state));
+    this.post(panel, this.stateMessage(nbPath, range?.state, local));
   }
 
   /**
@@ -525,7 +546,7 @@ export class VisualReview implements vscode.Disposable {
     };
   }
 
-  private stateMessage(nbPath: string, range: RangeState | undefined): HostMessage {
+  private stateMessage(nbPath: string, range: RangeState | undefined, local: LocalRepo | undefined): HostMessage {
     return {
       type: 'state',
       state: {
@@ -534,6 +555,7 @@ export class VisualReview implements vscode.Disposable {
         pendingReview: this.state.hasPendingReview(),
         comments: this.state.commentFilter(),
         ...(range ? { range } : {}),
+        ...(local ? { local: { branch: local.branch, atHead: local.atHead } } : {}),
       },
     };
   }

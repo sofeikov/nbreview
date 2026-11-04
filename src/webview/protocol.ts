@@ -141,6 +141,18 @@ export interface PanelState {
   comments: CommentFilter;
   /** What the page compares, and the choices of the range picker; undefined when there is nothing to pick. */
   range?: RangeState;
+  /**
+   * The open workspace folder clones the pull request's repository: code navigation works, on
+   * that checkout. `atHead` says it is at the pull request's latest commit.
+   */
+  local?: { branch?: string; atHead: boolean };
+}
+
+/** A line of the page for code navigation: its text, and its notebook cell (id and whole source). */
+export interface NavLine {
+  cell?: { id: string; source: string };
+  line: number;
+  text: string;
 }
 
 export interface RangeState {
@@ -173,6 +185,8 @@ export type HostMessage =
   | { type: 'plan'; requestId: number; describe: string }
   | { type: 'reveal'; cellKey: string }
   | { type: 'commits'; head: string; commits: CommitVM[]; error?: string }
+  /** A short note, such as where a definition came from. */
+  | { type: 'toast'; message: string }
   | { type: 'error'; message: string }
   | { type: 'submitted'; ok: boolean; url?: string; message?: string };
 
@@ -187,6 +201,8 @@ export type WebviewMessage =
   | { type: 'react'; commentId: string; content: ReactionContent; add: boolean }
   | { type: 'setRange'; choice: RangeChoice }
   | { type: 'loadCommits' }
+  | { type: 'goToDefinition'; at: NavLine; name: string; column: number }
+  | { type: 'openInWorkspace'; at: NavLine }
   | { type: 'setHideNoise'; on: boolean }
   | { type: 'setCommentFilter'; filter: CommentFilter }
   | { type: 'discardReview' }
