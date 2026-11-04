@@ -51,6 +51,7 @@ const RUN = [
   { command: 'nbreview.markFolderNotViewed' },
   { command: 'nbreview.discardReview' },
   { command: 'nbreview.close' },
+  { command: 'nbreview.back' },
 ];
 // Commands that can't run here, and why. A new command must go in one of the two lists.
 const SKIP = {

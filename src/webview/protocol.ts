@@ -146,13 +146,29 @@ export interface PanelState {
    * that checkout. `atHead` says it is at the pull request's latest commit.
    */
   local?: { branch?: string; atHead: boolean };
+  /** The label of the Back button, after go to definition moved within the review pages. */
+  back?: string;
 }
 
 /** A line of the page for code navigation: its text, and its notebook cell (id and whole source). */
 export interface NavLine {
   cell?: { id: string; source: string };
+  /** The side of the line: the old version (`LEFT`) or the new one. */
+  side?: Side;
   line: number;
   text: string;
+}
+
+/**
+ * A place on a review page that go to definition shows: a line of a cell (`file` for a file that
+ * isn't a notebook) on one side, and the name on it from `col`, `length` characters long.
+ */
+export interface PageSpot {
+  side: Side;
+  cellId: string;
+  line: number;
+  col?: number;
+  length?: number;
 }
 
 export interface RangeState {
@@ -184,6 +200,8 @@ export type HostMessage =
   | { type: 'state'; state: PanelState }
   | { type: 'plan'; requestId: number; describe: string }
   | { type: 'reveal'; cellKey: string }
+  /** Show a line, unfolded, and mark the name on it: a definition, or where Back returns to. */
+  | { type: 'goTo'; spot: PageSpot }
   | { type: 'commits'; head: string; commits: CommitVM[]; error?: string }
   /** A short note, such as where a definition came from. */
   | { type: 'toast'; message: string }
@@ -203,6 +221,7 @@ export type WebviewMessage =
   | { type: 'loadCommits' }
   | { type: 'goToDefinition'; at: NavLine; name: string; column: number }
   | { type: 'openInWorkspace'; at: NavLine }
+  | { type: 'back' }
   | { type: 'setHideNoise'; on: boolean }
   | { type: 'setCommentFilter'; filter: CommentFilter }
   | { type: 'discardReview' }

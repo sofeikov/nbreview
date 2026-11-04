@@ -94,6 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return pr && openPr(`${pr.owner}/${pr.repo}#${pr.number}`, false).catch(showError);
     }),
     // Opens any changed file, notebook or not, in the view chosen in the settings.
+    vscode.commands.registerCommand('nbreview.back', () => visual.goBack()),
     vscode.commands.registerCommand('nbreview.openNotebook', (path: string) => {
       const view = vscode.workspace.getConfiguration('nbreview').get<string>('defaultView', 'visual');
       if (view === 'text') {

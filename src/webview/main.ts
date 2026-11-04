@@ -1,6 +1,6 @@
 // The visual review page. Renders the notebook pair as cell cards (rendered markdown, highlighted
 // code diffs, outputs) and the review threads, and sends comment actions back to the extension.
-import type { Anchor, CellVM, CommentVM, CommitVM, Finding, HostMessage, NavLine, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
+import type { Anchor, CellVM, CommentVM, CommitVM, Finding, HostMessage, NavLine, OutputVM, PageSpot, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
 import { findingPlace } from '../core/checks.ts';
 import { pickCommits, sameChoice, short, type RangeChoice } from '../core/range.ts';
 import { identifierAt, type Identifier } from '../core/navigate.ts';
@@ -58,6 +58,18 @@ let commitList: { loading?: boolean; commits?: CommitVM[]; error?: string; head?
  * a moment, and a Shift-click in that time extends this one.
  */
 let pickedChoice: RangeChoice | undefined;
+/**
+ * The place go to definition (or Back) showed on this page. Its line stays unfolded, and `pending`
+ * says it is still to be scrolled to: a new page gets it before its model.
+ */
+let spot: { at: PageSpot; pending: boolean } | undefined;
+/** Until when the place go to definition showed is marked. */
+let spotMarkUntil = 0;
+/**
+ * The scroll position the page went to for that place. Comments that come later add lines above
+ * it: until the reader scrolls, each redraw scrolls to the place again.
+ */
+let spotScrollY: number | undefined;
 
 function currentChoice(): RangeChoice | undefined {
   return pickedChoice ?? panel.range?.choice;
@@ -120,6 +132,7 @@ function render(): void {
       }
     }
   }
+  markSpot();
 }
 
 function renderToolbar(m: ViewModel): HTMLElement {
@@ -156,6 +169,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
     h(
       'div',
       { class: 'controls' },
+      panel.back && button([icon('arrow-left'), panel.back], () => post({ type: 'back' }), { class: 'ghost back', title: 'Go back to where you went to a definition from (Alt+Left)' }),
       rangeControl(),
       noiseButton(m),
       checksControl(m),
@@ -601,7 +615,7 @@ function renderCells(m: ViewModel): HTMLElement {
     group = [];
   };
   for (const c of m.cells) {
-    if (!ui.showAll && c.status === 'unchanged' && !c.moved && !cellHasThreads(c) && !findingsOf(c).length) {
+    if (!ui.showAll && c.status === 'unchanged' && !c.moved && !cellHasThreads(c) && !findingsOf(c).length && !isSpotCell(c)) {
       group.push(c);
     } else {
       flush();
@@ -763,7 +777,8 @@ function renderSource(c: CellVM): HTMLElement {
   const marked = new Set(findingsOf(c).filter(f => f.kind === 'source').map(f => f.line));
   const hasAnchor = (r: Row) =>
     sourceThreads(c, r.left).length + sourceThreads(c, r.right).length + sourceComposers(c, r.left).length + sourceComposers(c, r.right).length > 0
-    || (!!r.right && marked.has(r.right.line));
+    || (!!r.right && marked.has(r.right.line))
+    || isSpotRow(c, r);
   // Removed code is rarely what a review is about: show its start and fold the rest.
   const removedKey = `${c.key}:removed`;
   if (c.status === 'removed' && rows.length > 12 && !ui.expanded[removedKey] && !rows.some(hasAnchor)) {
@@ -1514,7 +1529,7 @@ const navKey = (e: MouseEvent) => (MAC ? e.metaKey : e.ctrlKey);
 function navLine(c: CellVM, side: Side, line: number): NavLine {
   const source = sideSource(c, side);
   const id = (side === 'RIGHT' ? c.headId : c.baseId)!;
-  return { line, text: source[line] ?? '', ...(model?.kind === 'notebook' ? { cell: { id, source: source.join('\n') } } : {}) };
+  return { side, line, text: source[line] ?? '', ...(model?.kind === 'notebook' ? { cell: { id, source: source.join('\n') } } : {}) };
 }
 
 /** The character of a line's text element under the mouse. */
@@ -1739,6 +1754,77 @@ function toolbarHeight(): number {
   return (app.querySelector<HTMLElement>('.toolbar')?.offsetHeight ?? 50) + 10;
 }
 
+function isSpotCell(c: CellVM): boolean {
+  return !!spot && (spot.at.side === 'RIGHT' ? c.headId : c.baseId) === spot.at.cellId;
+}
+
+function isSpotRow(c: CellVM, r: Row): boolean {
+  return isSpotCell(c) && (spot!.at.side === 'RIGHT' ? r.right : r.left)?.line === spot!.at.line;
+}
+
+/**
+ * Scrolls to the place go to definition showed, once the page has its model: the line, unfolded,
+ * with the name on it marked for a moment. Without its line (a Markdown cell shown rendered), the
+ * cell.
+ */
+function showSpot(): void {
+  if (!model || !spot?.pending) {
+    return;
+  }
+  spot.pending = false;
+  const at = spot.at;
+  render();
+  const code = app.querySelector<HTMLElement>(`.code[data-cell="${CSS.escape(at.cellId)}"][data-side="${at.side}"][data-line="${at.line}"]`);
+  const card = app.querySelector<HTMLElement>(`section.cell[data-${at.side === 'RIGHT' ? 'head' : 'base'}="${CSS.escape(at.cellId)}"]`);
+  if (!code) {
+    if (card) {
+      reveal(card);
+    } else {
+      toast('That place isn’t on this page.');
+    }
+    return;
+  }
+  spotMarkUntil = Date.now() + 3000;
+  scrollToSpot(code);
+  markSpot();
+  setTimeout(markSpot, 3100);
+}
+
+/**
+ * Scrolls to a line at once, not smoothly: the page draws itself again when its comments come, and
+ * keeps the scroll position it has then, which would stop a smooth scroll half-way. Some lines
+ * stay above the place.
+ */
+function scrollToSpot(code: HTMLElement): void {
+  window.scrollTo({ top: window.scrollY + code.getBoundingClientRect().top - toolbarHeight() - 80 });
+  spotScrollY = window.scrollY;
+}
+
+/**
+ * Marks the place go to definition showed, for a few seconds: its line and the name on it. Done
+ * again after every redraw, which replaces the page's elements.
+ */
+function markSpot(): void {
+  const at = spot?.at;
+  const live = !!at && Date.now() < spotMarkUntil;
+  const code = live ? app.querySelector<HTMLElement>(`.code[data-cell="${CSS.escape(at.cellId)}"][data-side="${at.side}"][data-line="${at.line}"]`) : null;
+  app.querySelectorAll('.spot').forEach(el => el.classList.remove('spot'));
+  code?.classList.add('spot');
+  if (code && spotScrollY !== undefined && Math.abs(window.scrollY - spotScrollY) < 2) {
+    scrollToSpot(code);
+  }
+  const text = code?.querySelector<HTMLElement>('.text');
+  const range = text && at?.col !== undefined && at.length ? textRange(text, at.col, at.col + at.length) : undefined;
+  if (!highlights || !HighlightClass) {
+    return;
+  }
+  if (range) {
+    highlights.set('nav-spot', new HighlightClass(range));
+  } else {
+    highlights.delete('nav-spot');
+  }
+}
+
 function reveal(el: HTMLElement): void {
   window.scrollTo({ top: window.scrollY + el.getBoundingClientRect().top - toolbarHeight(), behavior: 'smooth' });
   el.classList.remove('flash');
@@ -1835,6 +1921,11 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
     case 'model':
       model = msg.model;
       render();
+      showSpot();
+      break;
+    case 'goTo':
+      spot = { at: msg.spot, pending: true };
+      showSpot();
       break;
     case 'threads':
       threads = msg.threads;

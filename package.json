@@ -2,7 +2,7 @@
   "name": "nbreview",
   "displayName": "Notebook Review for GitHub Pull Requests (Jupyter .ipynb)",
   "description": "Review Jupyter notebooks (.ipynb) in GitHub pull requests inside VS Code: rendered cell-by-cell diffs of code, Markdown, LaTeX and outputs, with line comments on any cell that post to GitHub as a normal PR review.",
-  "version": "0.23.1",
+  "version": "0.24.0",
   "publisher": "KonstantinSofeikov",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -285,6 +285,12 @@
         "category": "Notebook Review",
         "icon": "$(arrow-right)",
         "enablement": "nbreview.active"
+      },
+      {
+        "command": "nbreview.back",
+        "title": "Back (Go to Definition)",
+        "category": "Notebook Review",
+        "icon": "$(arrow-left)"
       }
     ],
     "menus": {
@@ -521,6 +527,10 @@
         {
           "command": "nbreview.openChangesSinceReview",
           "when": "false"
+        },
+        {
+          "command": "nbreview.back",
+          "when": "false"
         }
       ],
       "comments/commentThread/title": [
@@ -688,6 +698,13 @@
         "id": "nbreview.commentsNone",
         "label": "Comments: Hidden",
         "icon": "$(filter-filled)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "nbreview.back",
+        "key": "alt+left",
+        "when": "activeWebviewPanelId == 'nbreview.visual'"
       }
     ]
   },

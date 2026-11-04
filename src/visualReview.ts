@@ -8,7 +8,7 @@ import { imageMime } from './core/binary.ts';
 import type { Anchor } from './webview/protocol.ts';
 import type { TextReview } from './textReview.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
-import type { Finding, HostMessage, RangeState, ViewModel, WebviewMessage } from './webview/protocol.ts';
+import type { Finding, HostMessage, PageSpot, RangeState, ViewModel, WebviewMessage } from './webview/protocol.ts';
 import { resolveRange, type RangeChoice, type ResolvedRange } from './core/range.ts';
 import { Navigator, type LocalRepo } from './navigation.ts';
 import { pageTitle, pathFromPageTitle } from './paths.ts';
@@ -31,6 +31,11 @@ export class VisualReview implements vscode.Disposable {
    */
   private readonly modelSyncs = new Map<vscode.WebviewPanel, number>();
   private readonly nav: Navigator;
+  /**
+   * Where Back returns to, latest last: the places that go to definition left for another place
+   * on the review pages. Kept for one pull request.
+   */
+  private back: { pr: string; path: string; spot: PageSpot }[] = [];
   private syncCount = 0;
 
   constructor(
@@ -42,6 +47,7 @@ export class VisualReview implements vscode.Disposable {
     // only read `file:` documents, so the copies are opened by their path on disk.
     const storage = ctx.globalStorageUri.scheme === 'vscode-userdata' ? vscode.Uri.file(ctx.globalStorageUri.fsPath) : ctx.globalStorageUri;
     this.nav = new Navigator(state, storage);
+    this.nav.onPage = (spot, from) => this.showOnPage(spot, from);
     this.disposables.push(
       this.nav,
       this.nav.onDidChange(() => [...this.panels].forEach(([path, panel]) => void this.sync(panel, path, {}))),
@@ -86,7 +92,7 @@ export class VisualReview implements vscode.Disposable {
     vscode.Disposable.from(...this.disposables).dispose();
   }
 
-  open(nbPath: string, revealCellId?: string, options: { since?: boolean; viewColumn?: vscode.ViewColumn } = {}): void {
+  open(nbPath: string, revealCellId?: string, options: { since?: boolean; viewColumn?: vscode.ViewColumn; goTo?: PageSpot } = {}): void {
     // The history button is on files changed since the review, which the default shows since
     // then: going back to the default shows it, and leaves the other files as they were.
     if (options.since && this.chosen) {
@@ -97,6 +103,9 @@ export class VisualReview implements vscode.Disposable {
       existing.reveal();
       if (revealCellId) {
         this.post(existing, { type: 'reveal', cellKey: revealCellId });
+      }
+      if (options.goTo) {
+        this.post(existing, { type: 'goTo', spot: options.goTo });
       }
       return;
     }
@@ -109,7 +118,7 @@ export class VisualReview implements vscode.Disposable {
       { viewColumn: options.viewColumn ?? vscode.ViewColumn.Active, preserveFocus: false },
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [this.dist()], enableFindWidget: true },
     );
-    this.adopt(panel, nbPath, revealCellId);
+    this.adopt(panel, nbPath, revealCellId, options.goTo);
   }
 
   /** Brings back review tabs that were open when VS Code was reloaded. */
@@ -187,12 +196,13 @@ export class VisualReview implements vscode.Disposable {
     return vscode.Uri.joinPath(this.ctx.extensionUri, 'dist');
   }
 
-  private adopt(panel: vscode.WebviewPanel, nbPath: string, revealCellId?: string): void {
+  private adopt(panel: vscode.WebviewPanel, nbPath: string, revealCellId?: string, goTo?: PageSpot): void {
     panel.title = this.title(nbPath);
     panel.iconPath = vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'icon.svg');
     panel.webview.html = this.html(panel.webview, this.dist(), nbPath);
     this.panels.set(nbPath, panel);
     let pendingReveal = revealCellId;
+    let pendingGoTo = goTo;
     panel.onDidDispose(() => {
       this.panels.delete(nbPath);
       this.modelSyncs.delete(panel);
@@ -205,6 +215,11 @@ export class VisualReview implements vscode.Disposable {
       if (msg.type === 'ready' && pendingReveal) {
         this.post(panel, { type: 'reveal', cellKey: pendingReveal });
         pendingReveal = undefined;
+      }
+      // The page keeps it until its model has come and been drawn.
+      if (msg.type === 'ready' && pendingGoTo) {
+        this.post(panel, { type: 'goTo', spot: pendingGoTo });
+        pendingGoTo = undefined;
       }
     });
   }
@@ -294,12 +309,17 @@ export class VisualReview implements vscode.Disposable {
         // The path is the page's own, whatever the message says.
         const oldPath = this.state.session?.files.find(f => f.filename === nbPath)?.previousFilename;
         const at = { ...msg.at, path: nbPath, oldPath };
-        const note = msg.type === 'goToDefinition' ? await this.nav.goToDefinition(at, msg.name, msg.column) : await this.nav.openInWorkspace(at);
+        // Where Back returns to, if the definition is shown on a review page.
+        const from = { path: nbPath, side: msg.at.side ?? 'RIGHT', cellId: msg.at.cell?.id ?? 'file', line: msg.at.line, ...(msg.type === 'goToDefinition' ? { col: msg.column, length: msg.name.length } : {}) };
+        const note = msg.type === 'goToDefinition' ? await this.nav.goToDefinition(at, msg.name, msg.column, from) : await this.nav.openInWorkspace(at);
         if (note) {
           this.post(panel, { type: 'toast', message: note });
         }
         return;
       }
+      case 'back':
+        this.goBack();
+        return;
       case 'discardReview':
         await this.state.discardReview();
         return;
@@ -549,7 +569,58 @@ export class VisualReview implements vscode.Disposable {
     };
   }
 
+  /**
+   * The Back places of the open pull request at its latest commit: those of another pull request,
+   * or from before new commits (whose lines may have moved), are dropped.
+   */
+  private backStack(): { pr: string; path: string; spot: PageSpot }[] {
+    const pr = `${this.state.prKey()}@${this.state.session?.pr.headSha}`;
+    this.back = this.back.filter(b => b.pr === pr);
+    return this.back;
+  }
+
+  /** Goes back to where go to definition was last used on a review page. */
+  goBack(): void {
+    const last = this.backStack().pop();
+    if (last) {
+      this.goTo(last.path, last.spot);
+    }
+    this.syncStates();
+  }
+
+  /**
+   * Shows a definition on the review page of its file, from where go to definition was clicked
+   * (`from`, kept for Back). False when that page doesn't show the pull request's latest version
+   * (a range that ends at an older commit), so its lines aren't the definition's.
+   */
+  private async showOnPage(spot: PageSpot & { path: string }, from?: PageSpot & { path: string }): Promise<boolean> {
+    if (!this.state.session || !this.reviewable(spot.path) || (await this.range(spot.path))?.resolved.readOnly) {
+      return false;
+    }
+    // A click on a definition's own name goes nowhere: Back would return to the same place.
+    const same = from && from.path === spot.path && from.side === spot.side && from.cellId === spot.cellId && from.line === spot.line;
+    if (from && !same) {
+      const back = this.backStack();
+      back.push({ pr: `${this.state.prKey()}@${this.state.session.pr.headSha}`, path: from.path, spot: strip(from) });
+      back.splice(0, Math.max(0, back.length - 50));
+    }
+    this.goTo(spot.path, strip(spot));
+    this.syncStates();
+    return true;
+  }
+
+  /** Shows a place on a file's review page, opening the page if it isn't open. */
+  private goTo(path: string, spot: PageSpot): void {
+    this.open(path, undefined, { goTo: spot });
+  }
+
+  /** Sends every page its state again: the Back button follows the stack. */
+  private syncStates(): void {
+    [...this.panels].forEach(([path, panel]) => void this.sync(panel, path, {}));
+  }
+
   private stateMessage(nbPath: string, range: RangeState | undefined, local: LocalRepo | undefined): HostMessage {
+    const last = this.backStack().at(-1);
     return {
       type: 'state',
       state: {
@@ -559,6 +630,7 @@ export class VisualReview implements vscode.Disposable {
         comments: this.state.commentFilter(),
         ...(range ? { range } : {}),
         ...(local ? { local: { branch: local.branch, atHead: local.atHead } } : {}),
+        ...(last ? { back: last.path === nbPath ? 'Back' : `Back to ${last.path.split('/').pop()}` } : {}),
       },
     };
   }
@@ -604,4 +676,10 @@ function escapeAttr(text: string): string {
  */
 function keepThread(side: 'LEFT' | 'RIGHT', r: ResolvedRange | undefined): boolean {
   return !r?.readOnly && (side === 'RIGHT' || !r?.from);
+}
+
+/** A page place without the path of its file. */
+function strip(spot: PageSpot & { path?: string }): PageSpot {
+  const { path: _path, ...rest } = spot;
+  return rest;
 }

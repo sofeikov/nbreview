@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnOf, identifierAt, isRemoteOf, matchCell, matchLine, shortPlace } from '../src/core/navigate.ts';
+import { columnOf, headCellOf, headLineOf, identifierAt, isRemoteOf, matchCell, matchLine, shortPlace } from '../src/core/navigate.ts';
 
 test('identifierAt finds the name under the cursor, also just after it', () => {
   const line = 'result = area(2, 3)';
@@ -69,4 +69,23 @@ test('shortPlace names a file by its name and a short folder', () => {
   assert.deepEqual(shortPlace('/x/exts/ms-python.vscode-pylance-2026.4.1/dist/bundled/stubs/pandas/core/frame.pyi', ['/home/me/repo']), { name: 'frame.pyi', where: 'pandas/core' });
   assert.deepEqual(shortPlace('/usr/lib/python3/dist-packages/numpy/linalg/linalg.py', []), { name: 'linalg.py', where: 'numpy/linalg' });
   assert.deepEqual(shortPlace('/opt/other/x.py', []), { name: 'x.py', where: '/opt/other' });
+});
+
+test('headLineOf keeps the line at the latest commit, and matches it by text otherwise', () => {
+  const head = ['import x', '', 'def area(w, h):', '    return w * h'];
+  assert.equal(headLineOf(head, 'def area(w, h):', 2, true), 2, 'at the head: the same line');
+  assert.equal(headLineOf(head, 'def area(w, h):', 3, true), 2, 'at the head, with a local change above it: by its text');
+  assert.equal(headLineOf(head, 'x', 9, true), undefined, 'past the end');
+  assert.equal(headLineOf(head, 'def area(w, h):', 5, false), 2, 'moved in the pull request');
+  assert.equal(headLineOf(head, 'def gone():', 2, false), undefined);
+});
+
+test('headCellOf keeps the cell at the latest commit, and matches it by id or source otherwise', () => {
+  const head = [{ id: 'a', source: 'import x' }, { id: 'b', source: 'def f():\n    pass' }];
+  assert.equal(headCellOf(head, { index: 1, source: 'def f():\n    pass' }, true), 1);
+  assert.equal(headCellOf(head, { index: 0, id: 'b', source: 'changed locally' }, true), 1, 'at the head, changed locally: by id');
+  assert.equal(headCellOf(head, { index: 5, source: '' }, true), undefined);
+  assert.equal(headCellOf(head, { index: 0, id: 'b', source: 'old' }, false), 1, 'by id');
+  assert.equal(headCellOf(head, { index: 0, source: 'def f():\n    pass' }, false), 1, 'by source');
+  assert.equal(headCellOf(head, { index: 0, id: 'z', source: 'other' }, false), undefined);
 });

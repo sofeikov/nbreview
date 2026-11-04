@@ -118,3 +118,28 @@ export function shortPlace(path: string, roots: string[]): { name: string; where
   const m = /\/(?:site-packages|dist-packages|stubs|stdlib)\/(.*)$/.exec(dir);
   return { name, where: m ? m[1] : dir };
 }
+
+/**
+ * The line of the pull request's version of a file that is a line of the local copy: the same
+ * line when the local copy is the pull request's latest commit (`same`) and the line has the same
+ * text there, otherwise the nearest line with the same text (a checkout at that commit can have
+ * changes of its own). Undefined when no line matches.
+ */
+export function headLineOf(head: string[], localText: string, line: number, same: boolean): number | undefined {
+  if (same && line < head.length && head[line].trimEnd() === localText.trimEnd()) {
+    return line;
+  }
+  return matchLine(head, localText, line);
+}
+
+/**
+ * The cell of the pull request's version of a notebook that is a cell of the local copy: the
+ * same cell when the local copy is the pull request's latest commit (`same`) and the cell has the
+ * same source there, otherwise the cell with the same id, then the same source.
+ */
+export function headCellOf(head: { id: string; source: string }[], local: { index: number; id?: string; source: string }, same: boolean): number | undefined {
+  if (same && local.index < head.length && head[local.index].source.trimEnd() === local.source.trimEnd()) {
+    return local.index;
+  }
+  return matchCell(head, local.id, local.source);
+}

@@ -8,9 +8,11 @@
 // reading the import statements (`core/pyImports.ts`), also when a clone is open.
 import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
+import { realpath } from 'node:fs/promises';
 import type { ReviewState } from './state.ts';
 import type { ReviewSession } from './session.ts';
-import { columnOf, isRemoteOf, matchCell, matchLine, shortPlace } from './core/navigate.ts';
+import { columnOf, headCellOf, headLineOf, isRemoteOf, matchCell, matchLine, shortPlace } from './core/navigate.ts';
+import type { PageSpot } from './webview/protocol.ts';
 import { importedName, importTargets, moduleFiles, topLevelLine, type ImportTarget } from './core/pyImports.ts';
 
 /** The open folder that is a clone of the pull request's repository, and what it has checked out. */
@@ -74,6 +76,12 @@ export class Navigator {
   private pruning?: Promise<void>;
   /** Files of a copy being fetched: two clicks at once share one fetch and one write. */
   private readonly fetching = new Map<string, Promise<vscode.Uri | undefined>>();
+
+  /**
+   * Shows a definition on the review page of its file, when that page shows the pull request's
+   * latest version; false when it can't, and the definition opens in an editor instead.
+   */
+  onPage?: (spot: PageSpot & { path: string }, from?: PageSpot & { path: string }) => Promise<boolean>;
 
   constructor(private readonly state: ReviewState, private readonly storage: vscode.Uri) {}
 
@@ -154,7 +162,9 @@ export class Navigator {
    * Goes to where a name on a line of the review page is defined: in the viewer's checkout, or
    * without one, in a copy of the pull request's files.
    */
-  async goToDefinition(at: PageLine, name: string, column: number): Promise<NavNote> {
+  async goToDefinition(at: PageLine, name: string, column: number, from?: PageSpot & { path: string }): Promise<NavNote> {
+    // The pull request of the click: another one opened meanwhile has other files and lines.
+    const session = this.state.session;
     const repo: Place | undefined = (await this.localRepo()) ?? (await this.copy());
     if (!repo) {
       return this.noRepo();
@@ -206,6 +216,9 @@ export class Navigator {
       // attribute it can't resolve): another symbol of the same name would be a guess.
       if (!found.length) {
         if (imported) {
+          if (await this.toPage(repo, imported, session, from)) {
+            return undefined;
+          }
           await reveal(imported);
           return this.foundNote(repo, checkout, true);
         }
@@ -232,11 +245,80 @@ export class Navigator {
       await this.peek(where, new vscode.Position(where.line, col), found);
     } else {
       const chosen = found.length === 1 ? found[0] : await this.pick(name, found, repo);
+      if (chosen && (await this.toPage(repo, chosen, session, from))) {
+        return undefined;
+      }
       if (chosen) {
         await reveal(chosen);
       }
     }
     return this.foundNote(repo, checkout, exact);
+  }
+
+  /**
+   * Shows a definition on a review page instead of an editor, when it is in a file that the pull
+   * request changes: in the same notebook, or on another file's page. Its line in the clone or the
+   * copy is mapped to the pull request's latest version (the same line at that commit, otherwise
+   * the line with the same text).
+   */
+  private async toPage(repo: Place, l: vscode.Location | vscode.LocationLink, s: ReviewSession | undefined, from?: PageSpot & { path: string }): Promise<boolean> {
+    if (!s || !this.onPage) {
+      return false;
+    }
+    const { uri, range } = target(l);
+    const file = fileOf(uri);
+    if (file.scheme !== 'file') {
+      return false;
+    }
+    // Git gives the clone's real path; a language server may give the workspace's (a symbolic
+    // link, or another letter case of the drive on Windows).
+    const real = (p: string) => realpath(p).then(r => r.replace(/\\/g, '/'), () => p.replace(/\\/g, '/'));
+    const [filePath, top] = await Promise.all([real(file.fsPath), real(repo.folder.fsPath)]);
+    const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+    const root = top.replace(/\/$/, '');
+    if (!fold(filePath).startsWith(`${fold(root)}/`)) {
+      return false;
+    }
+    const rel = filePath.slice(root.length + 1);
+    // A checkout of an older commit may have a file under the name it had before the pull request.
+    const changed = s.files.find(f => f.filename === rel) ?? (repo.atHead ? undefined : s.files.find(f => f.previousFilename === rel));
+    if (!changed || changed.status === 'removed') {
+      return false;
+    }
+    const path = changed.filename;
+    const at = range.start;
+    // The name's characters, when the location gives just the name (not a whole function).
+    const name = range.isSingleLine && !range.isEmpty ? { col: at.character, length: range.end.character - at.character } : { col: at.character };
+    try {
+      if (uri.scheme === 'vscode-notebook-cell') {
+        const notebook = vscode.workspace.notebookDocuments.find(nb => nb.uri.toString() === file.toString());
+        const index = notebook?.getCells().findIndex(c => c.document.uri.toString() === uri.toString()) ?? -1;
+        const head = await s.docAt(path, s.pr.headSha);
+        if (!notebook || index < 0 || !head) {
+          return false;
+        }
+        const local = notebook.cellAt(index);
+        const cells = head.notebook.cells.map(c => ({ id: c.id, source: c.source.join('\n') }));
+        const localId = typeof local.metadata?.id === 'string' ? local.metadata.id : undefined;
+        const i = headCellOf(cells, { index, id: localId, source: local.document.getText() }, repo.atHead);
+        const line = i === undefined ? undefined : headLineOf(head.notebook.cells[i].source, local.document.lineAt(at.line).text, at.line, repo.atHead);
+        return i !== undefined && line !== undefined && this.state.session === s
+          && (await this.onPage({ path, side: 'RIGHT', cellId: head.notebook.cells[i].id, line, ...name }, from));
+      }
+      if (this.state.entry(path)) {
+        return false;
+      }
+      const text = await s.textAt(path, s.pr.headSha);
+      // A file the review page shows only a notice for (too large, or binary).
+      if (text === undefined || text.length > 2_000_000 || text.slice(0, 8000).includes('\u0000')) {
+        return false;
+      }
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const line = headLineOf(text.split(/\r?\n/), doc.lineAt(at.line).text, at.line, repo.atHead);
+      return line !== undefined && this.state.session === s && (await this.onPage({ path, side: 'RIGHT', cellId: 'file', line, ...name }, from));
+    } catch {
+      return false;
+    }
   }
 
   /** What to say after going to a definition: where it was found, when that isn't obvious. */

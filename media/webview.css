@@ -132,6 +132,8 @@ body.with-map .cells { padding-right: 32px; }
 .cell.removed { border-left-color: var(--del-mark); }
 .cell.flash { animation: flash 1.2s ease-out; }
 .thread.flash { animation: flash 1.2s ease-out; }
+/* The line go to definition went to, for a few seconds. */
+.code.spot { background-color: var(--vscode-editor-rangeHighlightBackground, rgba(255, 255, 255, 0.06)); }
 @keyframes flash { from { box-shadow: 0 0 0 2px var(--accent); } to { box-shadow: 0 0 0 2px transparent; } }
 
 .cell-head {
@@ -694,5 +696,7 @@ button.range.on { background: var(--vscode-button-secondaryBackground, var(--vsc
 /* --- Code navigation ----------------------------------------------------------------------- */
 /* Ctrl+click (⌘+click) on a name goes to its definition: the name under the mouse is underlined. */
 
+/* The name go to definition went to, for a moment. */
+::highlight(nav-spot) { background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33)); }
 ::highlight(nav-target) { color: var(--vscode-textLink-foreground, #4daafc); text-decoration: underline; }
 body.nav-target .code .text { cursor: pointer; }
