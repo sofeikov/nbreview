@@ -7,6 +7,7 @@ import type { GhThread } from './github.ts';
 import type { CommentFilter } from './core/commentFilter.ts';
 import type { Tone } from './core/prStatus.ts';
 import type { OverviewPage } from './overview.ts';
+import { findingPlace, type Finding } from './core/checks.ts';
 import { basename, buildFolderTree, dirname, shortPath, treeOrder, type FolderNode } from './paths.ts';
 
 export type Node =
@@ -55,6 +56,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
     state.onDidChange(() => this.changed.fire());
     overview.onDidChangeStatus(() => this.changed.fire());
     onDidChangeFileLayout(() => this.changed.fire());
+    vscode.workspace.onDidChangeConfiguration(e => e.affectsConfiguration('nbreview.checks') && this.changed.fire());
   }
 
   getChildren(node?: Node): Node[] {
@@ -137,7 +139,8 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         const item = new vscode.TreeItem(fileLayout() === 'tree' ? basename(entry.path) : shortPath(entry.path, [...s.notebooks.keys()]));
         const changes = s.notebookChanges(entry.path);
         const filter = this.state.commentFilter();
-        item.description = [fresh && 'new', unresolved(threads, filter), drafts ? `✎${drafts}` : '', changeCounts(changes)]
+        const findings = this.state.findings(entry.path);
+        item.description = [findingsBadge(findings), fresh && 'new', unresolved(threads, filter), drafts ? `✎${drafts}` : '', changeCounts(changes)]
           .filter(Boolean)
           .join(' ');
         item.tooltip = [
@@ -148,6 +151,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
           fresh,
           threadSummary(threads, filter),
           entry.error && `⚠ ${entry.error}`,
+          findingsSummary(findings),
         ].filter(Boolean).join('\n');
         item.iconPath = new vscode.ThemeIcon('notebook', statusColor(entry.file.status));
         item.contextValue = s.changedSince(entry.path) ? 'notebook since' : 'notebook';
@@ -162,14 +166,16 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         const pending = threads.reduce((n, t) => n + t.comments.filter(c => c.pending).length, 0);
         const fresh = freshness(this.state, other.file.filename);
         const filter = this.state.commentFilter();
+        const findings = this.state.findings(other.file.filename);
         item.description = [
+          findingsBadge(findings),
           fresh && 'new',
           unresolved(threads, filter),
           pending ? `✎${pending}` : '',
           `+${other.file.additions} −${other.file.deletions}`,
           fileLayout() === 'list' ? dirname(other.file.filename) : '',
         ].filter(Boolean).join(' ');
-        item.tooltip = [other.file.filename, fresh, threadSummary(threads, filter)].filter(Boolean).join('\n');
+        item.tooltip = [other.file.filename, fresh, threadSummary(threads, filter), findingsSummary(findings)].filter(Boolean).join('\n');
         item.iconPath = new vscode.ThemeIcon('file', statusColor(other.file.status));
         item.contextValue = s.changedSince(other.file.filename) ? 'file since' : 'file';
         item.checkboxState = this.checkbox(other.file.filename);
@@ -333,4 +339,21 @@ function statusColor(status: string): vscode.ThemeColor {
     return new vscode.ThemeColor('gitDecoration.deletedResourceForeground');
   }
   return new vscode.ThemeColor('gitDecoration.modifiedResourceForeground');
+}
+
+/** "⚠2" after a file with findings from the hygiene checks. */
+function findingsBadge(findings: Finding[]): string {
+  return findings.length ? `⚠${findings.length}` : '';
+}
+
+/** One line per finding, for the tooltip. */
+function findingsSummary(findings: Finding[]): string {
+  if (!findings.length) {
+    return '';
+  }
+  const lines = findings.slice(0, 8).map(f => `⚠ ${f.title} (${findingPlace(f)})`);
+  if (findings.length > 8) {
+    lines.push(`… and ${findings.length - 8} more`);
+  }
+  return ['Checks:', ...lines].join('\n');
 }

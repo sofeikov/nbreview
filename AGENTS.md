@@ -25,6 +25,7 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
   - `anchor.ts` decides where a notebook comment lands. A line comment is used when the line is in the diff; otherwise it becomes a file comment. It also handles the hidden marker `<!-- nbreview:{…} -->` that puts a thread back on its cell, suggestions re-encoded as notebook JSON lines, and the optional nbdev mapping.
   - `fileComments.ts` does the same for ordinary files.
   - `prStatus.ts` works out where a pull request stands from GitHub's checks, reviews and merge state, and the Overview's one-line verdict.
+  - `checks.ts` runs the hygiene checks on what a pull request adds: keys and passwords, local paths and, in notebooks, run order, stale, error and large outputs. Keys already on the base branch aren't reported, and keys are masked: a finding never carries one. `ReviewSession.findings` caches the result for each file (a notebook from its cells, another file from its patch), and both the review page and the Review panel use it. Tests build fake keys at run time, because GitHub's push protection refuses a file with a real-looking key.
 - **`src/github.ts`** is a small GitHub client. GraphQL handles threads, the viewer's pending review, viewed flags, PR search and the Overview (status, people, timeline: `getOverview`). REST handles files, contents and single comments.
 - **`src/session.ts`** holds everything known about the open PR. It has no VS Code API.
 - **`src/state.ts`** (`ReviewState`) is the review in progress. Both views listen to its change events.

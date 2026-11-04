@@ -1,6 +1,7 @@
 // The visual review page. Renders the notebook pair as cell cards (rendered markdown, highlighted
 // code diffs, outputs) and the review threads, and sends comment actions back to the extension.
-import type { Anchor, CellVM, CommentVM, HostMessage, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
+import type { Anchor, CellVM, CommentVM, Finding, HostMessage, OutputVM, PanelState, ReactionVM, Side, ThreadVM, ViewModel, WebviewMessage } from './protocol.ts';
+import { findingPlace } from '../core/checks.ts';
 import { REACTIONS, REACTION_NAMES, type ReactionContent } from '../core/reactions.ts';
 import { showsThread, type CommentFilter } from '../core/commentFilter.ts';
 import { diffPixels, pairImages, type ImagePair } from './imageDiff.ts';
@@ -44,6 +45,8 @@ let shown: ThreadVM[] = [];
 let panel: PanelState = { viewed: false, pending: 0, pendingReview: false, comments: 'all' };
 /** The Comments filter's menu is open. */
 let filterOpen = false;
+/** The list of check findings is open. */
+let checksOpen = false;
 let requestSeq = 0;
 const composers = new Map<string, Composer>();
 const replies = new Map<string, { text: string; saving?: number; savingMode?: 'review' | 'single' }>();
@@ -142,6 +145,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
           title: panel.since.problem ?? `Only what changed after ${panel.since.label}`,
         })),
       noiseButton(m),
+      checksControl(m),
       m.kind === 'notebook' && segmented([
         ['Changes', 'Show changed cells; fold the rest', !ui.showAll, () => { ui.showAll = false; persist(); render(); }],
         ['All cells', 'Show every cell', ui.showAll, () => { ui.showAll = true; persist(); render(); }],
@@ -199,6 +203,94 @@ function noiseButton(m: ViewModel): HTMLElement | false {
     title,
     'aria-pressed': m.hideNoise ? 'true' : 'false',
   });
+}
+
+// Checks -----------------------------------------------------------------------------------------
+// Findings of the hygiene checks (src/core/checks.ts) on what the pull request adds: a list in the
+// toolbar, a strip on each cell, and marks on the lines and outputs they are about. A finding can
+// start a review comment; keys are masked and never go into the comment.
+
+function findings(): Finding[] {
+  return model?.findings ?? [];
+}
+
+function findingsOf(c: CellVM): Finding[] {
+  return c.headId ? findings().filter(f => f.cellId === c.headId) : [];
+}
+
+function findingIcon(f: Finding): HTMLElement {
+  const high = f.severity === 'high';
+  return icon(high ? 'shield' : 'warning');
+}
+
+function findingAnchor(f: Finding): Anchor {
+  return f.kind === 'source'
+    ? { side: 'RIGHT', cellId: f.cellId, kind: 'source', start: f.line, end: f.line }
+    : f.kind === 'output'
+      ? { side: 'RIGHT', cellId: f.cellId, kind: 'output', outputIndex: f.outputIndex }
+      : { side: 'RIGHT', cellId: f.cellId, kind: 'cell' };
+}
+
+/** Where a finding is inside its cell: "line 2", "output 1", or nothing for the whole cell. */
+function placeInCell(f: Finding): string {
+  return f.kind === 'source' ? `line ${f.line! + 1}` : f.kind === 'output' ? `output ${f.outputIndex! + 1}` : '';
+}
+
+function checksControl(m: ViewModel): HTMLElement | false {
+  const list = m.findings ?? [];
+  if (!list.length) {
+    return false;
+  }
+  const high = list.filter(f => f.severity === 'high').length;
+  return h('div', { class: 'checks-wrap' },
+    button([icon(high ? 'shield' : 'warning'), `${list.length} check${list.length === 1 ? '' : 's'}`, icon('chevron-down')], () => { checksOpen = !checksOpen; render(); }, {
+      class: `ghost checks${high ? ' high' : ''}`,
+      title: `${list.length} finding${list.length === 1 ? '' : 's'} in what this pull request adds${high ? `, ${high} of them possible keys or passwords` : ''}`,
+      'aria-haspopup': 'true',
+      'aria-expanded': checksOpen ? 'true' : 'false',
+    }),
+    checksOpen && renderChecksBox(list));
+}
+
+function renderChecksBox(list: Finding[]): HTMLElement {
+  return h('div', { class: 'checks-box', role: 'dialog', 'aria-label': 'Checks' },
+    h('div', { class: 'checks-box-head', text: 'Checks on what this pull request adds' }),
+    ...list.map(f => h('div', {
+      class: `finding-item ${f.severity}`,
+      role: 'button',
+      tabindex: '0',
+      onclick: () => { checksOpen = false; render(); revealFinding(f); },
+    }, findingIcon(f), h('span', { class: 'finding-title', text: f.title }), h('span', { class: 'muted', text: findingPlace(f) }))),
+    h('div', { class: 'muted', text: 'Keys are masked and never go into a comment. The nbreview.checks setting switches the checks off.' }));
+}
+
+function revealFinding(f: Finding): void {
+  const el = app.querySelector<HTMLElement>(`.finding[data-finding="${findings().indexOf(f)}"]`);
+  if (el) {
+    reveal(el);
+  } else {
+    toast('This finding is on a part of the file that this page doesn’t show. Open the text diff to see it.');
+  }
+}
+
+function renderFindings(list: Finding[]): HTMLElement {
+  return h('div', { class: 'cell-findings' }, ...list.map((f, i) => {
+    const place = placeInCell(f);
+    // Several findings of one kind in a cell (a path on three lines) explain themselves once.
+    const repeated = i > 0 && list[i - 1].rule === f.rule;
+    return h('div', { class: `finding ${f.severity}`, data: { finding: String(findings().indexOf(f)) } },
+      findingIcon(f),
+      h('div', { class: 'finding-body' },
+        h('div', { class: 'finding-line' },
+          h('b', { text: f.title }),
+          place && h('span', { class: 'muted', text: place }),
+          f.evidence && h('code', { class: 'evidence', text: f.evidence })),
+        !repeated && h('div', { class: 'muted', text: f.detail })),
+      commentable('RIGHT') && button([icon('comment'), 'Comment'], () => openComposer(findingAnchor(f), f.comment), {
+        class: 'ghost',
+        title: 'Start a review comment from this finding. You can edit it before you add it.',
+      }));
+  }));
 }
 
 /** "3" when every thread shown is open, "2/5" when some are resolved. */
@@ -387,7 +479,7 @@ function renderCells(m: ViewModel): HTMLElement {
     group = [];
   };
   for (const c of m.cells) {
-    if (!ui.showAll && c.status === 'unchanged' && !c.moved && !cellHasThreads(c)) {
+    if (!ui.showAll && c.status === 'unchanged' && !c.moved && !cellHasThreads(c) && !findingsOf(c).length) {
       group.push(c);
     } else {
       flush();
@@ -426,6 +518,10 @@ function renderCell(c: CellVM): HTMLElement {
     c.headId && button(icon('diff'), () => post({ type: 'openTextDiff', cellId: file ? undefined : c.headId }), { class: 'icon-btn', title: 'Show in text diff' }),
   );
   const card = h('section', { class: `cell ${c.status}${c.moved ? ' moved' : ''}${model?.image ? ' image-file' : ''}`, data: { key: c.key, head: c.headId, base: c.baseId } }, head);
+  const cellFindings = findingsOf(c);
+  if (cellFindings.length) {
+    card.append(renderFindings(cellFindings));
+  }
   const cellThreads = threadsFor(t => t.anchor.kind === 'cell' && matchesCell(t.anchor, c));
   const cellComposers = [...composers.values()].filter(x => x.anchor.kind === 'cell' && matchesCell(x.anchor, c));
   if (cellThreads.length || cellComposers.length) {
@@ -538,8 +634,10 @@ function renderSource(c: CellVM): HTMLElement {
     body.append(h('div', { class: 'empty-cell', text: 'empty cell' }));
     return body;
   }
+  const marked = new Set(findingsOf(c).filter(f => f.kind === 'source').map(f => f.line));
   const hasAnchor = (r: Row) =>
-    sourceThreads(c, r.left).length + sourceThreads(c, r.right).length + sourceComposers(c, r.left).length + sourceComposers(c, r.right).length > 0;
+    sourceThreads(c, r.left).length + sourceThreads(c, r.right).length + sourceComposers(c, r.left).length + sourceComposers(c, r.right).length > 0
+    || (!!r.right && marked.has(r.right.line));
   // Removed code is rarely what a review is about: show its start and fold the rest.
   const removedKey = `${c.key}:removed`;
   if (c.status === 'removed' && rows.length > 12 && !ui.expanded[removedKey] && !rows.some(hasAnchor)) {
@@ -621,7 +719,12 @@ function appendRow(body: HTMLElement, c: CellVM, r: Row): void {
 
 function halfCells(c: CellVM, half: Half, split: boolean): HTMLElement {
   const cellId = half.side === 'LEFT' ? c.baseId : c.headId;
-  const code = h('div', { class: `code ${half.kind}${split ? ` side-${half.side}` : ''}`, data: { side: half.side, line: half.line, cell: cellId } });
+  const lineFindings = half.side === 'RIGHT' ? findingsOf(c).filter(f => f.kind === 'source' && f.line === half.line) : [];
+  const marked = lineFindings.length ? ` has-finding ${lineFindings.some(f => f.severity === 'high') ? 'high' : 'low'}` : '';
+  const code = h('div', { class: `code ${half.kind}${split ? ` side-${half.side}` : ''}${marked}`, data: { side: half.side, line: half.line, cell: cellId } });
+  if (lineFindings.length) {
+    code.title = lineFindings.map(f => f.title).join('\n');
+  }
   if (!commentable(half.side)) {
     code.append(h('span', { class: 'text', html: half.html || '&#8203;' }));
     return code;
@@ -966,9 +1069,11 @@ function renderOutput(c: CellVM, side: Side, o: OutputVM): HTMLElement {
   }
   const ts = shown.filter(t => t.anchor.kind === 'output' && t.anchor.side === side && t.anchor.cellId === cellId && t.anchor.outputIndex === o.index);
   const cs = [...composers.values()].filter(x => x.anchor.kind === 'output' && x.anchor.side === side && x.anchor.cellId === cellId && x.anchor.outputIndex === o.index);
+  const outFindings = side === 'RIGHT' ? findingsOf(c).filter(f => f.kind === 'output' && f.outputIndex === o.index) : [];
   return h('div', { class: `output ${o.kind}` },
     h('div', { class: 'output-head' },
       h('span', { text: o.label }),
+      ...outFindings.map(f => h('span', { class: `finding-badge ${f.severity}`, title: f.detail }, findingIcon(f), f.title)),
       h('span', { class: 'spacer' }),
       outputCommentable(side) && button(icon('comment'), () => openComposer(anchor), { class: 'icon-btn', title: 'Comment on this output' })),
     h('div', { class: 'output-body' }, content),
@@ -1228,14 +1333,18 @@ function focus(key: string): void {
   requestAnimationFrame(() => app.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`)?.focus());
 }
 
-function openComposer(anchor: Anchor): void {
+function openComposer(anchor: Anchor, text = ''): void {
   if (!commentable(anchor.side)) {
     return;
   }
   const key = anchorKey(anchor);
-  if (!composers.has(key)) {
+  const open = composers.get(key);
+  if (open && !open.text.trim() && text) {
+    open.text = text;
+  }
+  if (!open) {
     const requestId = ++requestSeq;
-    composers.set(key, { anchor, text: '' });
+    composers.set(key, { anchor, text });
     planRequests.set(requestId, key);
     post({ type: 'plan', anchor, requestId });
   }
@@ -1261,6 +1370,7 @@ const MAP_LANES: [lane: string, selector: string][] = [
   ['add', '.row.add, .row.mod, .x-ins, .line-ins, .md-added, .side-RIGHT div.md-changed, section.cell.added > .rendered'],
   ['out', '.image-compare, .output-cols'],
   ['note', '.thread, .composer'],
+  ['find', '.cell-findings, .code.has-finding'],
 ];
 
 let mapQueued = false;
@@ -1338,7 +1448,7 @@ function jump(dir: 1 | -1): void {
   const cards = model?.kind === 'file'
     ? [...app.querySelectorAll<HTMLElement>('.source .row:not(.same), .md-block.changed-add, .md-block.changed-del')]
       .filter(el => !el.previousElementSibling?.matches('.source .row:not(.same)'))
-    : [...app.querySelectorAll<HTMLElement>('section.cell')].filter(el => !el.classList.contains('unchanged') || el.querySelector('.thread'));
+    : [...app.querySelectorAll<HTMLElement>('section.cell')].filter(el => !el.classList.contains('unchanged') || el.querySelector('.thread, .cell-findings'));
   if (!cards.length) {
     return;
   }
@@ -1394,6 +1504,10 @@ window.addEventListener('mousedown', e => {
     filterOpen = false;
     render();
   }
+  if (checksOpen && !(e.target as HTMLElement).closest('.checks-wrap')) {
+    checksOpen = false;
+    render();
+  }
   if (submitBox.open && !submitBox.sending && !(e.target as HTMLElement).closest('.submit-wrap')) {
     submitBox.open = false;
     render();
@@ -1402,8 +1516,9 @@ window.addEventListener('mousedown', e => {
 
 window.addEventListener('keydown', e => {
   const target = e.target as HTMLElement;
-  if (e.key === 'Escape' && filterOpen) {
+  if (e.key === 'Escape' && (filterOpen || checksOpen)) {
     filterOpen = false;
+    checksOpen = false;
     render();
     return;
   }

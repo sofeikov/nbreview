@@ -6,7 +6,8 @@ import { buildReviewDoc, docLineForSource, type ReviewDoc } from './core/reviewD
 import { parsePatch, type CommentableLines } from './core/patch.ts';
 import { locateNotebookThread, matchExportedLine, nbdevSourceForLine, type Side } from './core/anchor.ts';
 import { locateFileThread } from './core/fileComments.ts';
-import { notebookChanges, type NotebookChanges } from './core/cellDiff.ts';
+import { diffCells, notebookChanges, type NotebookChanges } from './core/cellDiff.ts';
+import { checkFile, checkNotebook, patchLines, type Finding } from './core/checks.ts';
 
 export type { NotebookChanges };
 
@@ -79,6 +80,7 @@ export class ReviewSession {
   sinceReviewProblem?: string;
   private readonly sinceDocs = new Map<string, Promise<ReviewDoc>>();
   private readonly changes = new Map<string, NotebookChanges>();
+  private readonly checks = new Map<string, Finding[]>();
   private readonly raw = new Map<string, Promise<Uint8Array | undefined>>();
   private readonly contents = new Map<string, Promise<string | undefined>>();
   private readonly commentables = new Map<string, CommentableLines>();
@@ -139,6 +141,29 @@ export class ReviewSession {
       this.changes.set(nbPath, c);
     }
     return c;
+  }
+
+  /**
+   * The hygiene checks on what the pull request adds to a file (worked out once). A notebook is
+   * checked cell by cell; another file in the added lines of its patch, so a file GitHub gives no
+   * patch for (a very large diff) has no findings.
+   */
+  findings(path: string): Finding[] {
+    let found = this.checks.get(path);
+    if (!found) {
+      const entry = this.notebooks.get(path);
+      const file = this.files.find(f => f.filename === path);
+      if (entry) {
+        found = checkNotebook(diffCells(entry.base.notebook.cells, entry.head.notebook.cells));
+      } else if (file && file.status !== 'removed') {
+        const { added, removed } = patchLines(file.patch);
+        found = checkFile(path, removed, added);
+      } else {
+        found = [];
+      }
+      this.checks.set(path, found);
+    }
+    return found;
   }
 
   /** Whether a file changed after the viewer's last review. */

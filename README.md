@@ -32,6 +32,7 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 - **Compare changed plots.** A plot that changed can be compared side by side, with a **Swipe** divider you drag across, as an **Onion skin** fading from old to new, or as the **Difference**: the changed pixels in magenta with a box around them and the share of the plot that changed. Your choice is remembered, and both plots keep their comment buttons.
 - **Images in the pull request.** A changed PNG, JPEG, GIF, WebP or other image file opens in the review page as a picture, old and new, with the same Side by side, Swipe, Onion skin and Difference views as a changed plot; an SVG shows its source and its picture. **Text diff** opens images, and any other binary file, in VS Code's own viewer instead of as garbled text.
 - **Hide the noise.** Execution counts and notebook metadata never show as changes. **Hide noise** in the review page also folds away cells whose only change is their outputs (a notebook that was run again) or whitespace (code that was reformatted), and says how many it hid. Counts are of source lines, not the JSON lines GitHub counts, and a notebook that was only run again is marked *outputs only*.
+- **Checks on what the pull request adds.** The review page finds what a reviewer can miss: keys, tokens and passwords (GitHub, GitLab, AWS, OpenAI, Anthropic, Hugging Face, Slack, Google, Stripe, private keys, JSON web tokens, bearer tokens, passwords in database URLs, in `password = "…"` lines and in YAML, INI, TOML and `.env` files), absolute paths into a home folder (`/home/alice/`, `/Users/bob/`, `C:\Users\carol\`) and, in notebooks, cells that ran out of order, outputs not updated after the code changed, error outputs and outputs over 1 MB. Only what the pull request adds is checked: a key or path that the notebook already had, or that a changed file had on a line the pull request removes, is not reported again. Each finding shows on its cell and line, and **Comment** starts a review comment from it. Keys are masked on the page and never go into the comment. The **checks** button in the toolbar lists them all, and the Review panel marks files with findings (`⚠2`). Setting `nbreview.checks` switches the checks off.
 - **Comment on any cell.** Hover a line of code, a Markdown paragraph or a list item and click `+`, or drag the `+` over several lines. Every cell and output also has a comment button, so you can comment on a whole cell or on a plot.
 - **Comments land on GitHub.** A comment becomes a line comment on the notebook in the pull request when GitHub allows it, otherwise a file comment. Every comment quotes the cell it is about, so it reads well on github.com too.
 - **Suggested changes.** "Suggest change" proposes new lines that the author can apply with GitHub's *Commit suggestion* button, directly in the notebook.
@@ -53,6 +54,8 @@ Notebook Review fixes this inside the editor you already use. It reads the pull 
 ![A changed plot in the Swipe view: the old curve left of the divider and the new one right, with a pending review comment on the new plot](images/outputs.png)
 
 ![A Python module of the same pull request in the review page: highlighted split diff, a review thread on a line, and the same toolbar as for notebooks](images/file.png)
+
+![Checks on a notebook: a possible Hugging Face token and a password in a database URL on the lines that add them, an absolute local path, outputs not updated after the code changed, cells run out of order and an error output, each with a Comment button](images/checks.png)
 
 ![Finish your review: a summary, Comment, Approve or Request changes](images/submit.png)
 
@@ -112,6 +115,7 @@ Sign-in uses the GitHub CLI (`gh auth login`) when it is installed, otherwise VS
 | Setting | Default | Description |
 |---|---|---|
 | `nbreview.defaultView` | `visual` | What opens when you click a changed file, and with **Next file**: `visual` (the review page) or `text` (VS Code's line-by-line text diff). |
+| `nbreview.checks` | `true` | Check what a pull request adds for keys and passwords, absolute local paths and, in notebooks, cells run out of order, outputs not updated after the code changed, error outputs and outputs over 1 MB. Findings show in the review page and the Review panel. |
 | `nbreview.hideNoise` | `false` | Fold cells whose only change is their outputs or whitespace in the review page. The page's **Hide noise** switch changes it and remembers the choice. |
 | `nbreview.showComments` | `all` | Which comment threads show by default: `all`, `unresolved` (resolved ones are left out) or `none`. With `none` the Review panel shows no comment counts. Your own pending comments always show. The **Comments** filter changes it and remembers the choice. |
 | `nbreview.fileLayout` | `tree` | How the Review panel shows the changed files by default: `tree` (grouped into folders) or `list` (flat). The title bar buttons switch it and remember the choice, as in Source Control. **Next file** follows the order shown. |
@@ -149,6 +153,7 @@ The core does not use the VS Code API and is in `src/core/`:
 - `anchor.ts`: where a comment lands on GitHub, the comment header and marker, suggestions, and the nbdev mapping.
 - `patch.ts`: which lines GitHub accepts comments on.
 - `prStatus.ts`: where a pull request stands (its checks, reviews and conflicts) and the Overview's one-line verdict.
+- `checks.ts`: the checks on what a pull request adds (keys, local paths, run order, stale, error and large outputs).
 
 ## Limits
 
@@ -157,8 +162,12 @@ The core does not use the VS Code API and is in `src/core/`:
 - Images with relative paths in Markdown cells and files do not show.
 - Binary files other than images, text files over 2 MB and images over 10 MB are not shown in the review page; **Open text diff** shows them in VS Code's own viewer.
 - An image file takes comments on the whole file only: GitHub has no lines to comment on in it.
+- The checks find keys by their known prefixes and by names such as `password` or `api_key` with a random-looking value. They can miss a key with no known prefix in a variable with another name, and they can report a value that is not a key. In a file that is not a notebook, a key copied from an unchanged line is reported as new. A file that GitHub gives no patch for (a very large diff) is not checked, and neither are `application/json` outputs.
 
 ## Changelog
+
+### 0.20.0
+- **Checks on what the pull request adds.** The review page now reports possible keys, tokens and passwords, absolute paths into a home folder and, in notebooks, cells that ran out of order or not in one clean run, outputs not updated after the code changed, error outputs and outputs over 1 MB. Findings show at the top of their cell, with a mark on the line or output, and **Comment** starts a review comment from one (keys are masked and never go into the comment). The toolbar's **checks** button lists them, and the Review panel shows `⚠` and a count on files with findings, with the list in the tooltip. Keys and paths that were there before the pull request are not reported. New setting `nbreview.checks` (on by default).
 
 ### 0.19.0
 - **Merge from the Overview.** A green **Squash and merge** button (or **Create a merge commit**, or **Rebase and merge**: its arrow lists the ways the repository allows, and the one you used last comes first) opens a confirm box with the commit title and description GitHub would write, which you can edit. **Confirm** (`Ctrl+Enter`) merges. The merge is sent with the commit the page last saw, so GitHub refuses it if anything was pushed since; the page also warns when commits arrived after the files were loaded, with **Load them**. When it can't be merged yet, the button is grey and says why.

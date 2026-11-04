@@ -37,6 +37,9 @@ export class VisualReview implements vscode.Disposable {
         if (e.affectsConfiguration('nbreview.hideNoise')) {
           void this.setHideNoise(undefined);
         }
+        if (e.affectsConfiguration('nbreview.checks')) {
+          [...this.panels].forEach(([path, panel]) => void this.sync(panel, path, { model: true }));
+        }
       }),
       state.onDidChange(e => {
         for (const [path, panel] of this.panels) {
@@ -328,7 +331,8 @@ export class VisualReview implements vscode.Disposable {
     const file = s?.files.find(f => f.filename === nbPath);
     if (s && file && !entry) {
       if (what.model) {
-        this.post(panel, { type: 'model', model: await this.fileModel(vm, nbPath, since) });
+        const model = await this.fileModel(vm, nbPath, since);
+        this.post(panel, { type: 'model', model: { ...model, findings: this.state.findings(nbPath) } });
       }
       if (what.threads) {
         const list = (s.fileThreads.get(nbPath) ?? []).filter(f => !since?.on || f.side === 'RIGHT');
@@ -341,7 +345,7 @@ export class VisualReview implements vscode.Disposable {
       const base = since?.on ? await s.sinceReviewDoc(nbPath) : undefined;
       const pr = { number: s.pr.number, title: s.pr.title, url: s.pr.url };
       const model = vm.buildViewModel(entry, pr, base && since ? { base, label: since.label } : undefined, { hideNoise: this.hideNoise() });
-      this.post(panel, { type: 'model', model });
+      this.post(panel, { type: 'model', model: { ...model, findings: this.state.findings(nbPath) } });
     }
     if (what.threads) {
       // Compared with the last review, the old side isn't the pull request's: its threads are left out.

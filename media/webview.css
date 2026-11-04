@@ -576,3 +576,63 @@ textarea {
 }
 .filter-box .submit-options { margin: 0 0 6px; }
 .filter-box > .muted { padding: 0 6px; font-size: 11px; }
+
+/* --- Checks -------------------------------------------------------------------------------- */
+/* Findings of the hygiene checks: possible keys (high) in the error colour, the others in orange. */
+
+:root {
+  --finding-high: var(--vscode-errorForeground, #f85149);
+  --finding-low: var(--vscode-charts-orange, #d18616);
+}
+.checks-wrap { position: relative; }
+button.checks { color: var(--finding-low); border-color: color-mix(in srgb, var(--finding-low) 55%, var(--border)); }
+button.checks.high { color: var(--finding-high); border-color: color-mix(in srgb, var(--finding-high) 55%, var(--border)); }
+.checks-box {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  width: min(380px, calc(100vw - 24px));
+  padding: 8px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--vscode-editorWidget-background, var(--card));
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.45));
+  z-index: 20;
+}
+.checks-box-head { font-weight: 600; padding: 0 6px 6px; }
+.checks-box > .muted { padding: 6px 6px 0; font-size: 11px; }
+.finding-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+.finding-item:hover, .finding-item:focus { background: var(--vscode-list-hoverBackground); outline: none; }
+.finding-item .finding-title { flex: 1; }
+.finding-item.high > .codicon, .finding.high > .codicon, .finding-badge.high { color: var(--finding-high); }
+.finding-item.low > .codicon, .finding.low > .codicon, .finding-badge.low { color: var(--finding-low); }
+
+.cell-findings { border-bottom: 1px solid var(--border); }
+.finding {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 12px;
+  border-left: 3px solid var(--finding-low);
+  background: color-mix(in srgb, var(--finding-low) 8%, var(--card));
+}
+.finding + .finding { border-top: 1px solid var(--border); }
+.finding.high { border-left-color: var(--finding-high); background: color-mix(in srgb, var(--finding-high) 8%, var(--card)); }
+.finding > .codicon { margin-top: 2px; flex: none; }
+.finding-body { flex: 1; min-width: 0; }
+.finding-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.finding .evidence {
+  font-family: var(--code-font);
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, var(--card-head));
+  overflow-wrap: anywhere;
+}
+.finding.flash { animation: flash 1.2s ease-out; }
+.finding > button { flex: none; }
+
+.source .code.has-finding { box-shadow: inset 3px 0 0 var(--finding-low); }
+.source .code.has-finding.high { box-shadow: inset 3px 0 0 var(--finding-high); background-image: linear-gradient(color-mix(in srgb, var(--finding-high) 10%, transparent), color-mix(in srgb, var(--finding-high) 10%, transparent)); }
+.finding-badge { display: inline-flex; align-items: center; gap: 3px; font-family: var(--vscode-font-family); }
+.map-mark.find { left: 0; right: 0; height: 3px !important; background: var(--finding-low); }

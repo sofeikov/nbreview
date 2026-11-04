@@ -17,6 +17,8 @@ export interface NbOutput {
   html?: string;
   /** Content hash so changed outputs show up as changed lines in the diff. */
   hash: string;
+  /** About how many bytes the output takes in the .ipynb file (every MIME type it carries). */
+  size?: number;
 }
 
 export interface NbCell {
@@ -30,6 +32,8 @@ export interface NbCell {
   /** 1-based line of the cell's opening brace in the raw JSON. */
   cellJsonLine: number;
   outputs: NbOutput[];
+  /** The code cell's execution count: null when it hasn't run, undefined for other cells. */
+  executionCount?: number | null;
 }
 
 export interface Notebook {
@@ -67,6 +71,7 @@ export function parseNotebook(text: string): Notebook {
       jsonLines,
       cellJsonLine: lineOf(cellNode.offset),
       outputs: readOutputs(prop(cellNode, 'outputs')),
+      ...(type === 'code' ? { executionCount: numberAt(prop(cellNode, 'execution_count')) } : {}),
     });
   }
   return { cells, language, rawLines: text.split('\n') };
@@ -104,12 +109,14 @@ function readOutputs(node: Node | undefined): NbOutput[] {
     const type = out.output_type;
     if (type === 'stream') {
       const text = joinText(out.text);
-      outputs.push({ kind: 'stream', label: `stream ${out.name ?? 'stdout'}`, textLines: splitText(text), hash: fnv(text) });
+      outputs.push({ kind: 'stream', label: `stream ${out.name ?? 'stdout'}`, textLines: splitText(text), hash: fnv(text), size: text.length });
     } else if (type === 'error') {
       const trace = stripAnsi((out.traceback ?? []).join('\n'));
       outputs.push({ kind: 'error', label: `error ${out.ename}: ${out.evalue}`, textLines: splitText(trace).slice(-8), hash: fnv(trace) });
     } else if (type === 'execute_result' || type === 'display_data') {
-      outputs.push(readRichOutput(out.data ?? {}));
+      const data = out.data ?? {};
+      const size = Object.values(data).reduce((n: number, v) => n + (typeof v === 'string' || Array.isArray(v) ? joinText(v).length : JSON.stringify(v).length), 0);
+      outputs.push({ ...readRichOutput(data), size });
     } else {
       outputs.push({ kind: 'other', label: String(type), textLines: [], hash: fnv(JSON.stringify(out)) });
     }
@@ -174,6 +181,10 @@ function prop(node: Node | undefined, key: string): Node | undefined {
 
 function stringAt(node: Node | undefined): string | undefined {
   return node?.type === 'string' ? String(node.value) : undefined;
+}
+
+function numberAt(node: Node | undefined): number | null {
+  return node?.type === 'number' ? Number(node.value) : null;
 }
 
 function nodeValue(node: Node): unknown {

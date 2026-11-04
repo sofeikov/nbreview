@@ -12,6 +12,7 @@ import { planFileComment } from './core/fileComments.ts';
 import { isCommentFilter, showsThread, type CommentFilter } from './core/commentFilter.ts';
 import type { GhThread, ReactionContent } from './github.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
+import type { Finding } from './core/checks.ts';
 
 /** A comment in the pending review, where it sits in the review documents. */
 export interface Draft {
@@ -77,6 +78,12 @@ export class ReviewState {
 
   entry(nbPath: string): NotebookEntry | undefined {
     return this.session?.notebooks.get(nbPath);
+  }
+
+  /** The hygiene checks on a file, or none when the `nbreview.checks` setting is off. */
+  findings(path: string): Finding[] {
+    const on = vscode.workspace.getConfiguration('nbreview').get<boolean>('checks', true);
+    return on && this.session ? this.session.findings(path) : [];
   }
 
   doc(nbPath: string, side: Side): ReviewDoc | undefined {

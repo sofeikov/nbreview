@@ -10,6 +10,8 @@ import { buildFileThreads, buildFileViewModel, buildThreads, buildViewModel } fr
 import type { FileThread, NotebookEntry, PlacedThread, ReviewSession } from '../src/session.ts';
 import type { GhOverview } from '../src/github.ts';
 import { buildOverview } from '../src/overviewModel.ts';
+import { diffCells } from '../src/core/cellDiff.ts';
+import { checkFile, checkNotebook } from '../src/core/checks.ts';
 
 const path = 'nbs/02_xg_model.ipynb';
 const patch = readFileSync('docs/demo/xg_model.patch', 'utf8');
@@ -116,6 +118,86 @@ const fileThreads = buildFileThreads([
   },
 ] as unknown as FileThread[], () => '');
 
+// --- The checks: a notebook and a module that add a key, a password, a local path and more -------
+
+// Made-up keys, put together at run time so this file has nothing that looks like a key (GitHub's
+// push protection would refuse it).
+const fakeKey = (n: number, seed: number) => {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let x = seed;
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+    out += chars[(x >>> 16) % chars.length];
+  }
+  return out;
+};
+const hfToken = ['hf', fakeKey(34, 11)].join('_');
+const dbPassword = fakeKey(16, 12);
+const ghToken = ['ghp', fakeKey(36, 13)].join('_');
+
+const checksPath = 'nbs/03_shot_map.ipynb';
+const code = (id: string, source: string, count: number | null, outputs: unknown[] = []) =>
+  ({ cell_type: 'code', id, metadata: {}, execution_count: count, outputs, source });
+const md = (id: string, source: string) => ({ cell_type: 'markdown', id, metadata: {}, source });
+const result = (count: number, text: string) => ({ output_type: 'execute_result', execution_count: count, data: { 'text/plain': text }, metadata: {} });
+const notebookJson = (cells: unknown[]) => JSON.stringify({ cells, metadata: { kernelspec: { language: 'python', name: 'python3' } }, nbformat: 4, nbformat_minor: 5 }, null, 1);
+const checksBase = notebookJson([
+  md('intro', '# Shot map\n\nShots of the 2024 season on one pitch.'),
+  code('setup', 'import pandas as pd\nfrom sqlalchemy import create_engine', 1),
+  code('load', 'shots = pd.read_parquet("data/shots_2024.parquet")\nlen(shots)', 2, [result(2, '18234')]),
+  code('xg', 'shots["xg"] = model.predict_proba(shots[FEATURES])[:, 1]\nshots["xg"].sum()', 3, [result(3, '1912.4')]),
+]);
+const checksHead = notebookJson([
+  md('intro', '# Shot map\n\nShots of the 2024 season on one pitch.'),
+  code('setup', `import pandas as pd\nfrom sqlalchemy import create_engine\nfrom huggingface_hub import login\n\nlogin("${hfToken}")\nengine = create_engine("postgresql://analyst:${dbPassword}@db.internal:5432/shots")`, 1),
+  code('load', 'shots = pd.read_sql("select * from shots where season = 2024", engine)\nshots.to_parquet("/home/maria/data/shots_2024.parquet")\nprint("Saved to /home/maria/data/shots_2024.parquet")\nlen(shots)', 4, [
+    { output_type: 'stream', name: 'stdout', text: 'Saved to /home/maria/data/shots_2024.parquet\n' },
+    result(4, '18311'),
+  ]),
+  code('xg', 'shots["xg"] = model.predict_proba(shots[FEATURES + ["header"]])[:, 1]\nshots["xg"].sum()', 3, [result(3, '1912.4')]),
+  code('plot', 'plot_shot_map(shots, by="body_part")', 5, [{
+    output_type: 'error', ename: 'KeyError', evalue: "'body_part'",
+    traceback: ['KeyError                                  Traceback (most recent call last)', 'Cell In[5], line 1', '----> 1 plot_shot_map(shots, by="body_part")', "KeyError: 'body_part'"],
+  }]),
+]);
+const checksEntry: NotebookEntry = {
+  path: checksPath,
+  file: { filename: checksPath, status: 'modified', additions: 14, deletions: 5, patch: '' },
+  base: buildReviewDoc(parseNotebook(checksBase)),
+  head: buildReviewDoc(parseNotebook(checksHead)),
+  commentable: parsePatch(''),
+};
+const checksPr = { number: 43, title: 'Shot map from the database', url: 'https://github.com/' };
+const checksModel = {
+  ...buildViewModel(checksEntry, checksPr),
+  findings: checkNotebook(diffCells(checksEntry.base.notebook.cells, checksEntry.head.notebook.cells)),
+};
+
+const syncBase = `"""Copy the shot data to the analytics bucket."""
+import requests
+
+
+def upload(path: str) -> None:
+    with open(path, "rb") as f:
+        requests.put(BUCKET_URL, data=f)
+`;
+const syncHead = `"""Copy the shot data to the analytics bucket."""
+import requests
+
+GITHUB_TOKEN = "${ghToken}"
+CACHE = "/Users/tom/Library/Caches/shots"
+
+
+def upload(path: str) -> None:
+    with open(path, "rb") as f:
+        requests.put(BUCKET_URL, data=f, headers={"Authorization": f"Bearer {GITHUB_TOKEN}"})
+`;
+const syncFile = { filename: 'src/xg/sync.py', status: 'modified' as const, additions: 3, deletions: 1, patch: '' };
+const syncModel = buildFileViewModel(syncFile, syncBase, syncHead, checksPr);
+const syncAdded = syncModel.cells[0].ops.flatMap(o => (o.op === 'add' ? [{ index: o.h, text: syncHead.split('\n')[o.h] }] : []));
+const checksFileModel = { ...syncModel, findings: checkFile(syncFile.filename, syncBase.split('\n'), syncAdded) };
+
 const THEME = `/* The theme variables VS Code gives a webview, from the Dark Modern theme. */
 html {
   --vscode-font-family: system-ui, "Segoe UI", Ubuntu, sans-serif; --vscode-font-size: 13px;
@@ -141,6 +223,8 @@ writeFileSync('out/demo/data.js', [
   `window.__THREADS__ = ${JSON.stringify(threads)};`,
   `window.__FILE_MODEL__ = ${JSON.stringify(fileModel)};`,
   `window.__FILE_THREADS__ = ${JSON.stringify(fileThreads)};`,
+  `window.__CHECKS_MODEL__ = ${JSON.stringify(checksModel)};`,
+  `window.__CHECKS_FILE_MODEL__ = ${JSON.stringify(checksFileModel)};`,
 ].join('\n') + '\n');
 writeFileSync('out/demo/index.html', `<!DOCTYPE html>
 <html lang="en">
@@ -164,7 +248,7 @@ window.acquireVsCodeApi = () => ({
   postMessage(m) {
     // Answer like the extension does, so a new comment shows where it will land on GitHub.
     if (m.type === 'plan') {
-      deliver({ type: 'plan', requestId: m.requestId, describe: 'Will post as a line comment · cell line 2 → ${path} L41' });
+      deliver({ type: 'plan', requestId: m.requestId, describe: location.hash.startsWith('#checks') ? 'Will post as a line comment → ' + model.path : 'Will post as a line comment · cell line 2 → ${path} L41' });
     }
     if (m.type === 'setCommentFilter') {
       panelState.comments = m.filter;
@@ -179,10 +263,14 @@ window.acquireVsCodeApi = () => ({
 <script src="dist/webview.js"></script>
 <script>
 // Scenes for the README screenshots: index.html#outputs (a changed plot), #comment, #submit, and
-// #file (another file of the pull request).
+// #file (another file of the pull request). The checks: #checks (a notebook with findings),
+// #checks-list (their list in the toolbar), #checks-comment (a comment started from one) and
+// #checks-file (a Python module with findings).
 const scene = location.hash.slice(1);
-deliver({ type: 'model', model: scene === 'file' ? window.__FILE_MODEL__ : window.__MODEL__ });
-deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : window.__THREADS__ });
+const checks = scene.startsWith('checks');
+const model = scene === 'file' ? window.__FILE_MODEL__ : scene === 'checks-file' ? window.__CHECKS_FILE_MODEL__ : checks ? window.__CHECKS_MODEL__ : window.__MODEL__;
+deliver({ type: 'model', model });
+deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : checks ? [] : window.__THREADS__ });
 deliver({ type: 'state', state: panelState });
 // Headless Firefox captures from the top of the page, so a scene hides the cells above its subject.
 const scrollTo = el => {
@@ -205,6 +293,12 @@ if (scene === 'comment') {
   area.value = 'Should other body parts (chest, knee) get their own flag, or is "header vs. not" enough?';
   area.dispatchEvent(new Event('input'));
   scrollTo(document.querySelector('section.cell[data-key="load"]'));
+}
+if (scene === 'checks-list') {
+  document.querySelector('.checks-wrap > button').click();
+}
+if (scene === 'checks-comment') {
+  document.querySelector('.finding[data-finding="0"] button').click();
 }
 if (scene === 'submit') {
   document.querySelector('.submit-wrap > button').click();

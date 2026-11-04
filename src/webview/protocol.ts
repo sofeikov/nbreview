@@ -1,6 +1,9 @@
 // Messages and data shared by the extension host and the visual review page.
 import type { ReactionContent } from '../core/reactions.ts';
 import type { CommentFilter } from '../core/commentFilter.ts';
+import type { Finding } from '../core/checks.ts';
+
+export type { Finding };
 
 export type Side = 'LEFT' | 'RIGHT';
 
@@ -28,6 +31,8 @@ export interface ViewModel {
   fileStats: { additions: number; deletions: number };
   stats: { additions: number; deletions: number; modified: number; added: number; removed: number; moved: number };
   cells: CellVM[];
+  /** Hygiene checks on what the pull request adds to this file: keys, local paths, run order, outputs. */
+  findings?: Finding[];
 }
 
 export interface CellVM {

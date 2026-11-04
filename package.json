@@ -2,7 +2,7 @@
   "name": "nbreview",
   "displayName": "Notebook Review for GitHub Pull Requests (Jupyter .ipynb)",
   "description": "Review Jupyter notebooks (.ipynb) in GitHub pull requests inside VS Code: rendered cell-by-cell diffs of code, Markdown, LaTeX and outputs, with line comments on any cell that post to GitHub as a normal PR review.",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "publisher": "KonstantinSofeikov",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -596,6 +596,11 @@
           "type": "boolean",
           "default": true,
           "description": "Use the token from `gh auth token` when the GitHub CLI is signed in, before asking for VS Code's GitHub sign-in."
+        },
+        "nbreview.checks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check what a pull request adds for keys and passwords, absolute local paths and, in notebooks, cells run out of order, outputs not updated after the code changed, error outputs and outputs over 1 MB. Findings show in the review page and the Review panel."
         },
         "nbreview.hideNoise": {
           "type": "boolean",
