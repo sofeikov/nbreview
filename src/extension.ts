@@ -148,6 +148,8 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand('nbreview.close', async () => {
+      // A pull request still loading is dropped too.
+      opens++;
       state.setSession(undefined);
       await ctx.globalState.update('activePr', undefined);
       await vscode.commands.executeCommand('setContext', 'nbreview.active', false);
@@ -369,6 +371,13 @@ function parsePrInput(input: string, fallback?: { owner: string; repo: string })
   return undefined;
 }
 
+/**
+ * Counts the pull requests asked for (and closes). A load that ends after a newer one was asked
+ * for is dropped: the reopen of the last pull request at start-up can take a while, and mustn't
+ * replace one the reviewer opened meanwhile.
+ */
+let opens = 0;
+
 async function openPr(arg?: string, focus = true): Promise<void> {
   let input = arg;
   if (!input) {
@@ -385,6 +394,7 @@ async function openPr(arg?: string, focus = true): Promise<void> {
     void vscode.window.showErrorMessage(`Couldn't read a pull request from "${input}".`);
     return;
   }
+  const ticket = ++opens;
   const gh = new GitHub(await getToken(true));
   let session: ReviewSession | undefined;
   const title = `Loading #${target.number}`;
@@ -395,6 +405,9 @@ async function openPr(arg?: string, focus = true): Promise<void> {
       }),
     ),
   );
+  if (ticket !== opens) {
+    return;
+  }
   const key = `${target.owner}/${target.repo}#${target.number}`;
   await ctx.globalState.update('lastPr', key);
   await ctx.globalState.update('activePr', key);

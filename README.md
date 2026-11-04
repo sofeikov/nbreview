@@ -174,6 +174,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.23.1
+- **Fix: a pull request opened right after VS Code started was replaced by the previous one.** At start-up the extension reopens the pull request you were reviewing. When that took a while and you opened another pull request meanwhile, the previous one came back a few seconds later and the new one's tabs closed. The pull request you open last now stays open; **Close** also stops a reopen that is still loading.
+
 ### 0.23.0
 - **Go to definition without a clone.** Ctrl+click (⌘+click) a name in the review page also works when no clone of the pull request's repository is open in VS Code. The extension copies the files it needs from the pull request's latest commit to its own storage, and your language server reads them there: other notebook cells, the same file and installed libraries. For Python, a name imported from another file of the repository is followed through its import statement, also through a package's `__init__.py`. A note says once that a copy is used. The name is now underlined while Ctrl (⌘) is down also without a clone.
 - With a clone, a Python name that the language server doesn't find (as in a `src/` layout it isn't set up for) is also followed through its import statement. Words in comments and strings are not followed.
