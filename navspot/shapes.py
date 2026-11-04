@@ -31,5 +31,5 @@ def filler_8(x):
     return x + 8
 
 
-def ring(r):
-    return Circle(r)
+def ring(r, scale=1):
+    return Circle(r * scale)
