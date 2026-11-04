@@ -38,7 +38,10 @@ export class VisualReview implements vscode.Disposable {
     private readonly text: TextReview,
     private readonly ctx: vscode.ExtensionContext,
   ) {
-    this.nav = new Navigator(state);
+    // VS Code gives the storage folder as a `vscode-userdata:` URI; language servers such as Pylance
+    // only read `file:` documents, so the copies are opened by their path on disk.
+    const storage = ctx.globalStorageUri.scheme === 'vscode-userdata' ? vscode.Uri.file(ctx.globalStorageUri.fsPath) : ctx.globalStorageUri;
+    this.nav = new Navigator(state, storage);
     this.disposables.push(
       this.nav,
       this.nav.onDidChange(() => [...this.panels].forEach(([path, panel]) => void this.sync(panel, path, {}))),

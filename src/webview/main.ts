@@ -1580,7 +1580,7 @@ const highlights = (globalThis as unknown as { CSS?: { highlights?: Map<string, 
 const HighlightClass = (globalThis as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
 
 function showNavTarget(e: MouseEvent | undefined): void {
-  const t = e && panel.local && navKey(e) ? navTarget(e) : undefined;
+  const t = e && navKey(e) ? navTarget(e) : undefined;
   const range = t && textRange(t.textEl, t.id.start, t.id.end);
   document.body.classList.toggle('nav-target', !!range);
   if (highlights && HighlightClass) {
@@ -1604,7 +1604,7 @@ document.documentElement.addEventListener('mouseleave', () => showNavTarget(unde
 app.addEventListener('click', e => {
   // A drag that selected text isn't a click on a name. The click goes to the extension even
   // before the page knows of a local clone (it is looked up after the page is drawn): the
-  // extension then looks itself, and says what to open if there is none.
+  // extension then looks itself, and uses a copy of the pull request's files if there is none.
   if (!navKey(e) || !(window.getSelection()?.isCollapsed ?? true)) {
     return;
   }
