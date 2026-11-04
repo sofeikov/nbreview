@@ -245,3 +245,31 @@ test('marking many files viewed sends them as aliased mutations, 50 to a request
     fake.restore();
   }
 });
+
+test('a pull request compares with the merge base, not with the tip of the base branch', async () => {
+  const realFetch = globalThis.fetch;
+  const urls: string[] = [];
+  let compareStatus = 200;
+  globalThis.fetch = (async (url: string) => {
+    urls.push(url);
+    if (url.includes('/compare/')) {
+      return new Response(JSON.stringify({ merge_base_commit: { sha: 'm'.repeat(40) } }), { status: compareStatus });
+    }
+    return new Response(JSON.stringify({
+      node_id: 'PR_1', title: 't', html_url: 'u', user: { login: 'a' }, commits: 2,
+      base: { ref: 'main', sha: 'b'.repeat(40) }, head: { ref: 'feat', sha: 'h'.repeat(40) },
+    }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const gh = new GitHub('t');
+    const info = await gh.getPr('o', 'r', 1);
+    assert.equal(info.baseSha, 'm'.repeat(40));
+    assert.equal(info.headSha, 'h'.repeat(40));
+    assert.match(urls[1], new RegExp(`/repos/o/r/compare/${'b'.repeat(40)}\\.\\.\\.${'h'.repeat(40)}`));
+    // When GitHub can't compare the two, the tip of the base branch is the best there is.
+    compareStatus = 404;
+    assert.equal((await gh.getPr('o', 'r', 1)).baseSha, 'b'.repeat(40));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

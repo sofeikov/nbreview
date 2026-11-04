@@ -23,6 +23,10 @@ export interface PrInfo {
   author: string;
   baseRef: string;
   headRef: string;
+  /**
+   * The merge base of the base branch and the head: GitHub's "Files changed" and its patches
+   * compare the head with this commit, not with the tip of the base branch.
+   */
   baseSha: string;
   headSha: string;
   /** How many commits the pull request has. */
@@ -356,6 +360,10 @@ export class GitHub {
 
   async getPr(owner: string, repo: string, number: number): Promise<PrInfo> {
     const pr = await this.json<any>(`/repos/${owner}/${repo}/pulls/${number}`);
+    // When the base branch has moved on, its tip can already hold some of the pull request's
+    // changes (another pull request merged them first). Reading the old side there would show
+    // those changes as unchanged, so read it at the merge base, as GitHub does.
+    const mergeBase = await this.mergeBase(owner, repo, pr.base.sha, pr.head.sha);
     return {
       owner,
       repo,
@@ -366,10 +374,23 @@ export class GitHub {
       author: pr.user?.login ?? '',
       baseRef: pr.base.ref,
       headRef: pr.head.ref,
-      baseSha: pr.base.sha,
+      baseSha: mergeBase ?? pr.base.sha,
       headSha: pr.head.sha,
       commits: pr.commits ?? 0,
     };
+  }
+
+  /** The merge base of two commits, or undefined when GitHub can't compare them. */
+  async mergeBase(owner: string, repo: string, base: string, head: string): Promise<string | undefined> {
+    if (base === head) {
+      return base;
+    }
+    // One commit per page: only the merge base is wanted, not the commit list.
+    const res = await this.request(`/repos/${owner}/${repo}/compare/${base}...${head}?per_page=1`);
+    if (!res.ok) {
+      return undefined;
+    }
+    return ((await res.json()) as any).merge_base_commit?.sha;
   }
 
   async listFiles(owner: string, repo: string, number: number): Promise<PrFile[]> {

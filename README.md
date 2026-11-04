@@ -167,6 +167,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.21.1
+- **Fix: changes shown as unchanged when the base branch has moved on.** The old side of each file was read at the latest commit of the base branch. When that branch had since taken some of the same changes (for example from another merged pull request), those cells and lines showed as unchanged. The old side is now read where the pull request branched off, as on github.com.
+
 ### 0.21.0
 - **Pick what to compare.** The review page's **Whole PR / Since your review** switch is now a picker, as on github.com: **All changes**, **Since your review**, or the changes in one commit (click) or a run of commits (Shift-click). It lists the pull request's commits with their authors and times, greys out those that don't change the open file, and marks your last review. The commits the page compares are ticked.
 - **Since your review by default.** A file that changed after your last review now opens on the changes since then. Any other file opens on all its changes. A range you pick applies to every file until you pick another.
