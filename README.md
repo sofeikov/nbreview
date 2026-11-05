@@ -176,6 +176,10 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.24.1
+- **Fix: "Since your review" showed nothing after you replied to a thread following a push.** GitHub puts the pull request's latest commit on every review you make, including one that only holds replies, so a reply sent after new commits made your "last review" the latest commit and hid every change since the review you actually did. A review that only replies to existing threads, with no text and no new comment, no longer counts as your last review.
+- **Picking a range reads the pull request again.** Choosing All changes, Since your review or a commit in the list now fetches the latest state first, so new commits and a new review show up without a separate Refresh.
+
 ### 0.24.0
 - **Go to definition stays in the review.** When the definition is in a file that the pull request changes, the review page shows it instead of an editor: in the same notebook the page scrolls to the cell, and for another file its review page opens at the line. The line is unfolded and the name is marked for a moment, with its diff and comments. **Back** in the toolbar, or Alt+Left, returns to where you clicked. Definitions in other files and libraries still open in VS Code's editor, and a name with several definitions still opens VS Code's peek view. A page that shows an older commit (a range picked in the commit list) opens the definition in the editor.
 

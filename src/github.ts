@@ -592,15 +592,21 @@ export class GitHub {
     return { viewed, dismissed };
   }
 
-  /** The viewer's last submitted review of the pull request, if any. */
+  /**
+   * The viewer's last submitted review of the pull request, if any. A review made only of replies
+   * to existing threads doesn't count: GitHub puts the pull request's head at that moment on it
+   * (a reply after a push is on the new head), but it says nothing about the new commits having
+   * been read, and counting it would hide every change since the real review.
+   */
   async lastReview(owner: string, repo: string, number: number): Promise<LastReview | undefined> {
     const data: any = await this.graphql(
       `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-        reviews(last:100){nodes{viewerDidAuthor state submittedAt commit{oid}}}}}}`,
+        reviews(last:100){nodes{viewerDidAuthor state submittedAt body commit{oid} comments(first:50){nodes{replyTo{id}}}}}}}}`,
       { o: owner, r: repo, n: number },
     );
     const mine = (data.repository.pullRequest.reviews.nodes as any[])
-      .filter(r => r.viewerDidAuthor && r.state !== 'PENDING' && r.submittedAt && r.commit?.oid);
+      .filter(r => r.viewerDidAuthor && r.state !== 'PENDING' && r.submittedAt && r.commit?.oid)
+      .filter(r => r.state !== 'COMMENTED' || r.body?.trim() || (r.comments?.nodes as any[] | undefined)?.some(c => !c.replyTo));
     const last = mine[mine.length - 1];
     return last && { sha: last.commit.oid, submittedAt: last.submittedAt };
   }

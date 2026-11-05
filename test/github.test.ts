@@ -174,10 +174,12 @@ test('resolving, reacting, and editing or deleting a published comment', async (
 test('the last review is the viewer\'s latest submitted one', async () => {
   const fake = fakeGraphql(() => ({
     repository: { pullRequest: { reviews: { nodes: [
-      { viewerDidAuthor: true, state: 'COMMENTED', submittedAt: '2026-10-01T10:00:00Z', commit: { oid: 'a'.repeat(40) } },
+      { viewerDidAuthor: true, state: 'COMMENTED', submittedAt: '2026-10-01T10:00:00Z', commit: { oid: 'a'.repeat(40) }, comments: { nodes: [{ replyTo: null }] } },
       { viewerDidAuthor: true, state: 'CHANGES_REQUESTED', submittedAt: '2026-10-02T10:00:00Z', commit: { oid: 'b'.repeat(40) } },
       { viewerDidAuthor: false, state: 'APPROVED', submittedAt: '2026-10-03T10:00:00Z', commit: { oid: 'c'.repeat(40) } },
       { viewerDidAuthor: true, state: 'PENDING', submittedAt: null, commit: { oid: 'd'.repeat(40) } },
+      // Only replies, made after a push: GitHub stamps the new head on it, but it reviewed nothing.
+      { viewerDidAuthor: true, state: 'COMMENTED', submittedAt: '2026-10-04T10:00:00Z', body: '', commit: { oid: 'e'.repeat(40) }, comments: { nodes: [{ replyTo: { id: 'x' } }] } },
     ] } } },
   }));
   try {

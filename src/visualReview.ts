@@ -300,6 +300,9 @@ export class VisualReview implements vscode.Disposable {
         return;
       case 'setRange':
         this.setRange(msg.choice);
+        // A choice is made to see what the pull request is now, so it is read again: new commits
+        // change what "since your review" and the commit list are.
+        void vscode.commands.executeCommand('nbreview.refresh');
         return;
       case 'loadCommits':
         await this.sendCommits(panel, nbPath);
