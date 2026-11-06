@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { parseNotebook } from '../src/core/notebook.ts';
 import { buildReviewDoc, docLineForSource, headerLine } from '../src/core/reviewDoc.ts';
 import { linesText, notebookPlace, previewText } from '../src/core/pending.ts';
+import { buildPendingList } from '../src/viewModel.ts';
 
 const head = parseNotebook(readFileSync(join(process.cwd(), 'test', 'fixtures', 'small.head.ipynb'), 'utf8'));
 const doc = buildReviewDoc(head);
@@ -31,4 +32,14 @@ test('a notebook comment is placed by cell and line, counted from 1', () => {
   assert.equal(notebookPlace(doc, header, header), 'Cell 2');
   assert.equal(notebookPlace(doc, 9999, 9999), 'notebook');
   assert.equal(notebookPlace(undefined, 0, 0), 'notebook');
+});
+
+test('the Submit review box gets each pending comment rendered, with code highlighted', () => {
+  const [one, two] = buildPendingList([
+    { id: 'a', threadId: 't', path: 'src/a.py', where: 'lines 3–4', reply: true, preview: '', text: 'Use **this**' },
+    { id: 'b', threadId: 'u', path: 'n.ipynb', where: 'Cell 1', reply: false, preview: '', text: '```python\nx = 1\n```' },
+  ]);
+  assert.deepEqual({ id: one.id, path: one.path, where: one.where, reply: one.reply }, { id: 'a', path: 'src/a.py', where: 'lines 3–4', reply: true });
+  assert.match(one.html, /<strong>this<\/strong>/);
+  assert.match(two.html, /hljs-number/);
 });

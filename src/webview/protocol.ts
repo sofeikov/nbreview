@@ -131,10 +131,23 @@ export interface ThreadVM {
   comments: CommentVM[];
 }
 
+/** One of the viewer's pending comments, for the list in the Submit review box. */
+export interface PendingVM {
+  id: string;
+  path: string;
+  /** "Cell 4, line 2", "lines 12–14" or "whole file". */
+  where: string;
+  reply: boolean;
+  /** The comment rendered as Markdown, code highlighted. */
+  html: string;
+}
+
 export interface PanelState {
   viewed: boolean;
   /** Comments in the pending review on GitHub, on any file. */
   pending: number;
+  /** The same comments, in the Review panel's order of files. */
+  pendingList: PendingVM[];
   /** The viewer has a pending review; GitHub doesn't take single comments next to one. */
   pendingReview: boolean;
   /** Which threads are shown; the page gets all of them and leaves the others out. */
@@ -233,6 +246,6 @@ export type WebviewMessage =
   | { type: 'setViewed'; viewed: boolean }
   | { type: 'openTextDiff'; cellId?: string; side?: Side }
   | { type: 'openOverview' }
-  /** List the viewer's pending comments, on every file, to jump to one. */
-  | { type: 'goToPending' }
+  /** Jump to one of the viewer's pending comments, on this file or another. */
+  | { type: 'goToPendingComment'; id: string }
   | { type: 'openExternal'; url: string };

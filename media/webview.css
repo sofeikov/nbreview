@@ -553,6 +553,21 @@ textarea {
 }
 .submit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .muted { color: var(--muted); font-size: 12px; }
+.pending-list {
+  max-height: 210px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.pending-item { padding: 6px 8px; cursor: pointer; }
+.pending-item + .pending-item { border-top: 1px solid var(--border); }
+.pending-item:hover, .pending-item:focus-visible { background: var(--vscode-list-hoverBackground); outline: none; }
+.pending-where { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 2px; }
+.pending-where .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A long comment shows its start, fading out, so one comment can't fill the box. */
+.pending-item .body { max-height: 7.5em; overflow: hidden; font-size: 12px; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+.pending-item .body pre { margin: 4px 0; overflow-x: auto; }
 .submit-options { display: flex; flex-direction: column; gap: 2px; margin: 10px 0 4px; }
 .submit-options .option { display: flex; align-items: flex-start; gap: 8px; padding: 5px 6px; border-radius: 4px; cursor: pointer; }
 .submit-options .option:hover { background: var(--vscode-list-hoverBackground); }

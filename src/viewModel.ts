@@ -7,9 +7,10 @@ import { formatSize, imageMime, imageSize } from './core/binary.ts';
 import { diffCells, onlyWhitespaceDiffers } from './core/cellDiff.ts';
 import { anchorForDocLines, type ReviewDoc } from './core/reviewDoc.ts';
 import { parseBody } from './core/anchor.ts';
+import type { PendingComment } from './core/pending.ts';
 import { highlightLines, renderCommentBody, renderMarkdownCell } from './render.ts';
 import { renderMarkdownDiff } from './mdDiff.ts';
-import type { Anchor, CellVM, CommentVM, OutputVM, ThreadVM, ViewModel } from './webview/protocol.ts';
+import type { Anchor, CellVM, CommentVM, OutputVM, PendingVM, ThreadVM, ViewModel } from './webview/protocol.ts';
 
 /** What a page compares when it isn't the whole pull request (see ViewModel.range). */
 export type PageRange = NonNullable<ViewModel['range']>;
@@ -274,6 +275,11 @@ function cellTitle(cell: NbCell): string {
     ? cell.source.find(l => l.trim())?.replace(/^#+\s*/, '')
     : cell.source.find(l => l.trim() && !/^#\s?\|/.test(l));
   return (line ?? '').trim().slice(0, 100);
+}
+
+/** The pending comments for the Submit review box, each rendered as it is in its thread. */
+export function buildPendingList(comments: PendingComment[]): PendingVM[] {
+  return comments.map(c => ({ id: c.id, path: c.path, where: c.where, reply: c.reply, html: renderCommentBody(c.text) }));
 }
 
 export function buildThreads(entry: NotebookEntry, placed: PlacedThread[], describe: (p: PlacedThread) => string): ThreadVM[] {

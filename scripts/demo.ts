@@ -6,7 +6,7 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { parseNotebook } from '../src/core/notebook.ts';
 import { buildReviewDoc, docLineForSource } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
-import { buildFileThreads, buildFileViewModel, buildThreads, buildViewModel } from '../src/viewModel.ts';
+import { buildFileThreads, buildFileViewModel, buildPendingList, buildThreads, buildViewModel } from '../src/viewModel.ts';
 import type { FileThread, NotebookEntry, PlacedThread, ReviewSession } from '../src/session.ts';
 import type { GhOverview } from '../src/github.ts';
 import { buildOverview } from '../src/overviewModel.ts';
@@ -235,11 +235,20 @@ html {
   --vscode-errorForeground: #f85149; --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
 }`;
 
+// The pending comments listed in the Submit review box, on several files.
+const pendingList = buildPendingList([
+  { id: 'p1', threadId: 't1', path: 'nbs/02_xg_model.ipynb', where: 'Cell 6, line 3', reply: false, preview: '', text: 'The curve is **much closer to the diagonal** now. Can we add the Brier score next to it?' },
+  { id: 'p2', threadId: 't2', path: 'nbs/02_xg_model.ipynb', where: 'Cell 9, line 2', reply: false, preview: '', text: 'Could this use the vectorised form?\n\n```python\nxg = np.where(dist > 0, 1 / (1 + np.exp(-z)), 0.0)\n```' },
+  { id: 'p3', threadId: 't3', path: 'src/xg/train.py', where: 'lines 41–44', reply: true, preview: '', text: 'Agreed, a seed here would make the folds reproducible.' },
+  { id: 'p4', threadId: 't4', path: 'README.md', where: 'whole file', reply: false, preview: '', text: 'Please document how to regenerate the plots.' },
+]);
+
 mkdirSync('out/demo', { recursive: true });
 cpSync('dist', 'out/demo/dist', { recursive: true });
 writeFileSync('out/demo/data.js', [
   `window.__MODEL__ = ${JSON.stringify(model)};`,
   `window.__THREADS__ = ${JSON.stringify(threads)};`,
+  `window.__PENDING__ = ${JSON.stringify(pendingList)};`,
   `window.__FILE_MODEL__ = ${JSON.stringify(fileModel)};`,
   `window.__FILE_THREADS__ = ${JSON.stringify(fileThreads)};`,
   `window.__CHECKS_MODEL__ = ${JSON.stringify(checksModel)};`,
@@ -266,7 +275,7 @@ ${THEME}
 // Messages are delivered synchronously so the page is fully drawn when the load event fires
 // (headless screenshots are taken then).
 const deliver = data => window.dispatchEvent(new MessageEvent('message', { data }));
-const panelState = { viewed: false, pending: 1, pendingReview: true, comments: 'all' };
+const panelState = { viewed: false, pending: 4, pendingList: [], pendingReview: true, comments: 'all' };
 window.__posted = [];
 window.acquireVsCodeApi = () => ({
   postMessage(m) {
@@ -309,6 +318,7 @@ if (scene.startsWith('range')) {
     ? { choice: { kind: 'since' }, label: 'Since your review', auto: true, readOnly: false, review: { label: 'your review on 2 Nov (8d02be8)', sha: window.__REVIEW_SHA__ }, commits: 4, head: window.__COMMITS__[3].sha }
     : { choice: { kind: 'commits', first, last: first }, label: 'Commit ' + first.slice(0, 7), auto: false, readOnly: true, review: { label: 'your review on 2 Nov (8d02be8)', sha: window.__REVIEW_SHA__ }, commits: 4, head: window.__COMMITS__[3].sha };
 }
+panelState.pendingList = window.__PENDING__;
 deliver({ type: 'state', state: panelState });
 // Headless Firefox captures from the top of the page, so a scene hides the cells above its subject.
 const scrollTo = el => {

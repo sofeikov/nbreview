@@ -16,6 +16,8 @@ export interface PendingComment {
   reply: boolean;
   /** What the comment says, in one line. */
   preview: string;
+  /** What the comment says, in full (Markdown). */
+  text: string;
   /** For a notebook's text diff: the side and 0-based line of the review document. */
   docLine?: { side: 'LEFT' | 'RIGHT'; line: number };
 }

@@ -44,7 +44,7 @@ let model: ViewModel | undefined;
 let threads: ThreadVM[] = [];
 /** The threads on the page: those the Comments filter lets through. */
 let shown: ThreadVM[] = [];
-let panel: PanelState = { viewed: false, pending: 0, pendingReview: false, comments: 'all' };
+let panel: PanelState = { viewed: false, pending: 0, pendingList: [], pendingReview: false, comments: 'all' };
 /** The Comments filter's menu is open. */
 let filterOpen = false;
 /** The list of check findings is open. */
@@ -529,9 +529,8 @@ function renderSubmitBox(): HTMLElement {
   const problem = submitProblem();
   return h('div', { class: 'submit-box', role: 'dialog', 'aria-label': 'Finish your review' },
     h('div', { class: 'submit-head' }, h('b', { text: 'Finish your review' }), h('span', { class: 'spacer' }),
-      n
-        ? button([icon('list-flat'), `${n} pending comment${n === 1 ? '' : 's'}`], () => { close(); post({ type: 'goToPending' }); }, { class: 'ghost', title: 'List your pending comments, on every file, and jump to one' })
-        : h('span', { class: 'muted', text: 'no pending comments' })),
+      h('span', { class: 'muted', text: n ? `${n} pending comment${n === 1 ? '' : 's'}` : 'no pending comments' })),
+    pendingList(close),
     area,
     h('div', { class: 'submit-options' }, ...options.map(([value, label, hint]) =>
       h('label', { class: `option${submitBox.event === value ? ' on' : ''}` },
@@ -543,6 +542,31 @@ function renderSubmitBox(): HTMLElement {
       h('span', { class: 'hint', id: 'submit-hint', text: problem ?? 'Ctrl+Enter to submit' }),
       button('Cancel', close),
       button(submitBox.sending ? 'Submitting…' : 'Submit review', send, { class: 'primary', id: 'submit-send', disabled: submitBox.sending || !!problem })));
+}
+
+/**
+ * Your pending comments, on every file, in a box of limited height that scrolls: each as it will
+ * read on GitHub (Markdown, code highlighted), with its file and place. A click closes the box and
+ * jumps to the comment, on this page or another file's.
+ */
+function pendingList(close: () => void): HTMLElement | null {
+  if (!panel.pendingList.length) {
+    return null;
+  }
+  return h('div', { class: 'pending-list', 'aria-label': 'Your pending comments' },
+    ...panel.pendingList.map(c => {
+      const go = () => { close(); post({ type: 'goToPendingComment', id: c.id }); };
+      return h('div', {
+        class: 'pending-item',
+        role: 'button',
+        tabindex: '0',
+        title: 'Jump to this comment',
+        onclick: go,
+        onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } },
+      },
+      h('div', { class: 'pending-where' }, icon(c.reply ? 'comment' : 'edit'), h('b', { text: c.path.split('/').pop() ?? c.path }), h('span', { class: 'muted', text: `${c.where}${c.reply ? ' · reply' : ''}`, title: c.path })),
+      h('div', { class: 'body markdown', html: c.html }));
+    }));
 }
 
 /** "Discard review", with a second click to confirm: it deletes every pending comment on GitHub. */

@@ -134,7 +134,8 @@ export class ReviewState {
     const add = (gh: GhThread, path: string, where: string, docLine?: PendingComment['docLine']) => {
       gh.comments.forEach((c, i) => {
         if (c.pending) {
-          out.push({ id: c.id, threadId: gh.id, path, where, reply: i > 0, preview: previewText(parseBody(c.body).text), docLine });
+          const text = parseBody(c.body).text;
+          out.push({ id: c.id, threadId: gh.id, path, where, reply: i > 0, preview: previewText(text), text, docLine });
         }
       });
     };

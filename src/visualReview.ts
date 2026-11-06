@@ -13,6 +13,7 @@ import { resolveRange, type RangeChoice, type ResolvedRange } from './core/range
 import { Navigator, type LocalRepo } from './navigation.ts';
 import { pageTitle, pathFromPageTitle } from './paths.ts';
 import { showIfGitHubDown } from './notify.ts';
+import { pendingInOrder } from './tree.ts';
 
 export class VisualReview implements vscode.Disposable {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
@@ -362,9 +363,13 @@ export class VisualReview implements vscode.Disposable {
       case 'openOverview':
         await vscode.commands.executeCommand('nbreview.openOverview');
         return;
-      case 'goToPending':
-        await vscode.commands.executeCommand('nbreview.goToPendingComment');
+      case 'goToPendingComment': {
+        const comment = this.state.pendingComments().find(c => c.id === msg.id);
+        if (comment) {
+          await vscode.commands.executeCommand('nbreview.goToPendingComment', comment);
+        }
         return;
+      }
       case 'openExternal':
         if (/^https?:\/\//.test(msg.url)) {
           await vscode.env.openExternal(vscode.Uri.parse(msg.url));
@@ -453,7 +458,7 @@ export class VisualReview implements vscode.Disposable {
         const list = (s.fileThreads.get(nbPath) ?? []).filter(f => keepThread(f.side, r));
         this.post(panel, { type: 'threads', threads: vm.buildFileThreads(list, gh => this.state.describe(gh)) });
       }
-      this.post(panel, this.stateMessage(nbPath, range?.state, local));
+      this.post(panel, this.stateMessage(nbPath, range?.state, local, vm));
       return;
     }
     if (s && entry && what.model) {
@@ -473,7 +478,7 @@ export class VisualReview implements vscode.Disposable {
       const threads = s && entry ? vm.buildThreads(entry, placed, p => this.state.describe(p.gh)) : [];
       this.post(panel, { type: 'threads', threads });
     }
-    this.post(panel, this.stateMessage(nbPath, range?.state, local));
+    this.post(panel, this.stateMessage(nbPath, range?.state, local, vm));
   }
 
   /**
@@ -648,13 +653,14 @@ export class VisualReview implements vscode.Disposable {
     [...this.panels].forEach(([path, panel]) => void this.sync(panel, path, {}));
   }
 
-  private stateMessage(nbPath: string, range: RangeState | undefined, local: LocalRepo | undefined): HostMessage {
+  private stateMessage(nbPath: string, range: RangeState | undefined, local: LocalRepo | undefined, vm: typeof import('./viewModel.ts')): HostMessage {
     const last = this.backStack().at(-1);
     return {
       type: 'state',
       state: {
         viewed: this.state.isViewed(nbPath),
         pending: this.state.pendingCount(),
+        pendingList: vm.buildPendingList(pendingInOrder(this.state)),
         pendingReview: this.state.hasPendingReview(),
         comments: this.state.commentFilter(),
         ...(range ? { range } : {}),
