@@ -10,6 +10,7 @@ import type { ReviewSession, NotebookEntry } from './session.ts';
 import { parseBody, planComment, replaceBodyText, type GhThreadTarget, type Side } from './core/anchor.ts';
 import { planFileComment } from './core/fileComments.ts';
 import { isCommentFilter, showsThread, type CommentFilter } from './core/commentFilter.ts';
+import { linesText, notebookPlace, previewText, type PendingComment } from './core/pending.ts';
 import type { GhThread, ReactionContent } from './github.ts';
 import type { ReviewDoc } from './core/reviewDoc.ts';
 import type { Finding } from './core/checks.ts';
@@ -67,8 +68,10 @@ export class ReviewState {
   constructor(private readonly ctx: vscode.ExtensionContext) {}
 
   setSession(session: ReviewSession | undefined): void {
+    const filter = this.commentFilter();
     this.session = session;
-    this.changed.fire({ session: true, drafts: true, threads: true, viewed: true });
+    // The filter belongs to one pull request, so another one may bring the default back.
+    this.changed.fire({ session: true, drafts: true, threads: true, viewed: true, ...(this.commentFilter() !== filter ? { filter: true } : {}) });
   }
 
   prKey(): string {
@@ -116,6 +119,35 @@ export class ReviewState {
 
   draftsFor(nbPath: string): Draft[] {
     return this.drafts().filter(d => d.nbPath === nbPath);
+  }
+
+  /**
+   * Every comment in the pending review, on any file, with what it says and where it is: for
+   * finding one again. In no particular order; the views sort them in the Review panel's order.
+   */
+  pendingComments(): PendingComment[] {
+    const s = this.session;
+    const out: PendingComment[] = [];
+    if (!s) {
+      return out;
+    }
+    const add = (gh: GhThread, path: string, where: string, docLine?: PendingComment['docLine']) => {
+      gh.comments.forEach((c, i) => {
+        if (c.pending) {
+          out.push({ id: c.id, threadId: gh.id, path, where, reply: i > 0, preview: previewText(parseBody(c.body).text), docLine });
+        }
+      });
+    };
+    for (const p of s.placed) {
+      const start = p.startDocLine ?? p.docLine;
+      add(p.gh, p.nbPath, notebookPlace(this.doc(p.nbPath, p.side), start, p.docLine), { side: p.side, line: start });
+    }
+    for (const list of s.fileThreads.values()) {
+      for (const f of list) {
+        add(f.gh, f.path, f.gh.subjectType === 'FILE' ? 'whole file' : linesText(f.startDocLine ?? f.docLine, f.docLine));
+      }
+    }
+    return out;
   }
 
   /** Comments in the pending review, on any file. */
@@ -275,18 +307,20 @@ export class ReviewState {
   // --- Which threads are shown --------------------------------------------------------------
 
   /**
-   * All threads, the unresolved ones, or none. The last choice is remembered for every pull
-   * request; the setting gives the default. (Commands don't write settings: right after an
-   * update VS Code may not have registered a new one yet.)
+   * All threads, the unresolved ones, or none. A choice is remembered for the pull request it was
+   * made on only: hiding comments on one pull request doesn't hide them on the next, which gets
+   * the setting's default. (Commands don't write settings: right after an update VS Code may not
+   * have registered a new one yet.)
    */
   commentFilter(): CommentFilter {
-    const chosen = this.ctx.globalState.get('commentFilter') ?? vscode.workspace.getConfiguration('nbreview').get('showComments');
+    const saved = this.ctx.globalState.get<{ pr?: string; filter?: unknown }>('commentFilterFor');
+    const chosen = saved && saved.pr === this.prKey() ? saved.filter : vscode.workspace.getConfiguration('nbreview').get('showComments');
     return isCommentFilter(chosen) ? chosen : 'all';
   }
 
-  /** Sets which threads are shown; `undefined` goes back to the setting. */
+  /** Sets which threads are shown on this pull request; `undefined` goes back to the setting. */
   async setCommentFilter(filter: CommentFilter | undefined): Promise<void> {
-    await this.ctx.globalState.update('commentFilter', filter);
+    await this.ctx.globalState.update('commentFilterFor', filter ? { pr: this.prKey(), filter } : undefined);
     this.changed.fire({ filter: true });
   }
 

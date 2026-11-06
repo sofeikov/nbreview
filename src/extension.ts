@@ -6,8 +6,9 @@ import { ReviewState } from './state.ts';
 import { TextReview } from './textReview.ts';
 import { VisualReview } from './visualReview.ts';
 import { OverviewPage } from './overview.ts';
-import { FilesTree, fileLayout, initFileLayout, nodePath, nodePaths, onDidChangeFileLayout, reviewOrder, setFileLayout, type Node } from './tree.ts';
+import { FilesTree, fileLayout, initFileLayout, nodePath, nodePaths, onDidChangeFileLayout, pendingInOrder, reviewOrder, setFileLayout, type Node } from './tree.ts';
 import { allFolders } from './paths.ts';
+import type { PendingComment } from './core/pending.ts';
 import { showError } from './notify.ts';
 import { PrBadges, PrList, pickPullRequest, type RepoRef } from './prList.ts';
 
@@ -123,6 +124,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return state.session.notebooks.has(path) || view === 'visual' ? visual.open(path, undefined, { since: true }) : text.openSinceReviewDiff(path);
     }),
     vscode.commands.registerCommand('nbreview.openOverview', () => overview.open()),
+    vscode.commands.registerCommand('nbreview.goToPendingComment', (comment?: PendingComment) => goToPendingComment(comment).catch(showError)),
     vscode.commands.registerCommand('nbreview.openOnGitHub', () => state.session && vscode.env.openExternal(vscode.Uri.parse(state.session.pr.url))),
     vscode.commands.registerCommand('nbreview.submitReview', (request?: SubmitRequest) =>
       request?.event ? submit(request) : submitInteractive().catch(showError)),
@@ -273,6 +275,42 @@ async function setFolderViewed(node: Node | undefined, viewed: boolean): Promise
   if (paths?.length) {
     await state.setViewed(paths, viewed);
   }
+}
+
+/**
+ * Jumps to one of the viewer's pending comments: the one clicked in the Review panel, or one picked
+ * from a searchable list of them all (what each says, and where).
+ */
+async function goToPendingComment(comment?: PendingComment): Promise<void> {
+  if (!state.session) {
+    return;
+  }
+  let target = comment;
+  if (!target) {
+    const all = pendingInOrder(state);
+    if (!all.length) {
+      void vscode.window.showInformationMessage('You have no pending comments on this pull request.');
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      all.map(c => ({ label: `$(${c.reply ? 'comment' : 'edit'}) ${c.preview}`, description: c.where, detail: c.path, comment: c })),
+      { placeHolder: `Your ${all.length} pending comment${all.length === 1 ? '' : 's'}: pick one to jump to it`, matchOnDescription: true, matchOnDetail: true },
+    );
+    target = picked?.comment;
+  }
+  if (!target) {
+    return;
+  }
+  const view = vscode.workspace.getConfiguration('nbreview').get<string>('defaultView', 'visual');
+  if (view === 'text') {
+    if (state.entry(target.path)) {
+      await text.openDiff(target.path, target.docLine && { side: target.docLine.side, docLine: target.docLine.line });
+    } else {
+      await text.openFileDiff(target.path);
+    }
+    return;
+  }
+  await visual.showThread(target.path, target.threadId);
 }
 
 /** Opens the next file not marked viewed, in the panel's order, after the given one. */

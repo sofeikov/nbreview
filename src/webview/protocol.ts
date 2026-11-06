@@ -202,6 +202,8 @@ export type HostMessage =
   | { type: 'reveal'; cellKey: string }
   /** Show a line, unfolded, and mark the name on it: a definition, or where Back returns to. */
   | { type: 'goTo'; spot: PageSpot }
+  /** Scroll to a conversation, unfolded, and flash it: where "Your pending comments" leads. */
+  | { type: 'revealThread'; threadId: string }
   | { type: 'commits'; head: string; commits: CommitVM[]; error?: string }
   /** A short note, such as where a definition came from. */
   | { type: 'toast'; message: string }
@@ -231,4 +233,6 @@ export type WebviewMessage =
   | { type: 'setViewed'; viewed: boolean }
   | { type: 'openTextDiff'; cellId?: string; side?: Side }
   | { type: 'openOverview' }
+  /** List the viewer's pending comments, on every file, to jump to one. */
+  | { type: 'goToPending' }
   | { type: 'openExternal'; url: string };

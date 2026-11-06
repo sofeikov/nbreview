@@ -63,6 +63,8 @@ let pickedChoice: RangeChoice | undefined;
  * says it is still to be scrolled to: a new page gets it before its model.
  */
 let spot: { at: PageSpot; pending: boolean } | undefined;
+/** A conversation to scroll to as soon as the page has it ("Your pending comments" leads here). */
+let wantedThread: { id: string; until: number } | undefined;
 /** Until when the place go to definition showed is marked. */
 let spotMarkUntil = 0;
 /**
@@ -527,7 +529,9 @@ function renderSubmitBox(): HTMLElement {
   const problem = submitProblem();
   return h('div', { class: 'submit-box', role: 'dialog', 'aria-label': 'Finish your review' },
     h('div', { class: 'submit-head' }, h('b', { text: 'Finish your review' }), h('span', { class: 'spacer' }),
-      h('span', { class: 'muted', text: n ? `${n} pending comment${n === 1 ? '' : 's'}` : 'no pending comments' })),
+      n
+        ? button([icon('list-flat'), `${n} pending comment${n === 1 ? '' : 's'}`], () => { close(); post({ type: 'goToPending' }); }, { class: 'ghost', title: 'List your pending comments, on every file, and jump to one' })
+        : h('span', { class: 'muted', text: 'no pending comments' })),
     area,
     h('div', { class: 'submit-options' }, ...options.map(([value, label, hint]) =>
       h('label', { class: `option${submitBox.event === value ? ' on' : ''}` },
@@ -1790,6 +1794,31 @@ function showSpot(): void {
   setTimeout(markSpot, 3100);
 }
 
+/** Unfolds the wanted conversation and scrolls to it, once the page has it. */
+function showThread(): void {
+  const want = wantedThread;
+  if (!model || !want) {
+    return;
+  }
+  if (!threads.some(t => t.id === want.id)) {
+    if (Date.now() > want.until) {
+      wantedThread = undefined;
+      toast('That comment isn’t on this page.');
+    }
+    return;
+  }
+  wantedThread = undefined;
+  ui.threadOpen[want.id] = true;
+  persist();
+  render();
+  const el = app.querySelector<HTMLElement>(`.thread[data-thread="${CSS.escape(want.id)}"]`);
+  if (el) {
+    reveal(el);
+  } else {
+    toast('That comment isn’t on this page.');
+  }
+}
+
 /**
  * Scrolls to a line at once, not smoothly: the page draws itself again when its comments come, and
  * keeps the scroll position it has then, which would stop a smooth scroll half-way. Some lines
@@ -1922,10 +1951,17 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       model = msg.model;
       render();
       showSpot();
+      showThread();
       break;
     case 'goTo':
       spot = { at: msg.spot, pending: true };
       showSpot();
+      break;
+    case 'revealThread':
+      // The threads may still be on their way, or come again for another range: it waits a while.
+      wantedThread = { id: msg.threadId, until: Date.now() + 4000 };
+      showThread();
+      setTimeout(showThread, 4100);
       break;
     case 'threads':
       threads = msg.threads;
@@ -1947,6 +1983,7 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       }
       resolving.clear();
       render();
+      showThread();
       break;
     case 'toast':
       toast(msg.message);

@@ -45,6 +45,7 @@ const RUN = [
   { command: 'nbreview.openChangesSinceReview', args: ['README.md'] },
   { command: 'nbreview.openOverview' },
   { command: 'nbreview.openOnGitHub' },
+  { command: 'nbreview.goToPendingComment' },
   { command: 'nbreview.markViewed' },
   { command: 'nbreview.markNotViewed' },
   { command: 'nbreview.markFolderViewed' },

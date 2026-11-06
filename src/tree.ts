@@ -6,12 +6,16 @@ import type { ReviewState } from './state.ts';
 import type { GhThread } from './github.ts';
 import type { CommentFilter } from './core/commentFilter.ts';
 import type { Tone } from './core/prStatus.ts';
+import type { PendingComment } from './core/pending.ts';
 import type { OverviewPage } from './overview.ts';
 import { findingPlace, type Finding } from './core/checks.ts';
 import { basename, buildFolderTree, dirname, shortPath, treeOrder, type FolderNode } from './paths.ts';
 
 export type Node =
   | { kind: 'pr' }
+  /** The viewer's pending comments, listed so one can be found again. */
+  | { kind: 'pending'; count: number }
+  | { kind: 'pendingComment'; comment: PendingComment }
   | { kind: 'group'; id: Group; label: string; paths: string[] }
   | { kind: 'folder'; group: Group; folder: FolderNode }
   | { kind: 'notebook'; entry: NotebookEntry }
@@ -65,11 +69,19 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
       return [];
     }
     if (!node) {
-      const nodes: Node[] = [{ kind: 'pr' }, { kind: 'group', id: 'notebooks', label: 'Notebooks', paths: [...s.notebooks.keys()] }];
+      const nodes: Node[] = [{ kind: 'pr' }];
+      const pending = this.state.pendingCount();
+      if (pending) {
+        nodes.push({ kind: 'pending', count: pending });
+      }
+      nodes.push({ kind: 'group', id: 'notebooks', label: 'Notebooks', paths: [...s.notebooks.keys()] });
       if (s.others.length) {
         nodes.push({ kind: 'group', id: 'other', label: 'Other files', paths: s.others.map(o => o.file.filename) });
       }
       return nodes;
+    }
+    if (node.kind === 'pending') {
+      return pendingInOrder(this.state).map(comment => ({ kind: 'pendingComment', comment }));
     }
     if (node.kind === 'group') {
       if (fileLayout() === 'tree') {
@@ -105,6 +117,24 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
         item.iconPath = new vscode.ThemeIcon(status?.verdict.tone === 'merged' ? 'git-merge' : 'git-pull-request', status && toneColor(status.verdict.tone));
         item.contextValue = 'pr';
         item.command = { command: 'nbreview.openOverview', title: 'Show Overview' };
+        return item;
+      }
+      case 'pending': {
+        const item = new vscode.TreeItem('Your pending comments', vscode.TreeItemCollapsibleState.Expanded);
+        item.id = 'pending';
+        item.description = String(node.count);
+        item.tooltip = 'Comments in your pending review, not yet submitted. Click one to jump to it.';
+        item.iconPath = new vscode.ThemeIcon('edit');
+        return item;
+      }
+      case 'pendingComment': {
+        const { comment: c } = node;
+        const item = new vscode.TreeItem(c.preview);
+        item.id = `pending:${c.id}`;
+        item.description = `${basename(c.path)} · ${c.where}`;
+        item.tooltip = `${c.reply ? 'Pending reply' : 'Pending comment'} on ${c.path}, ${c.where}\n\n${c.preview}`;
+        item.iconPath = new vscode.ThemeIcon(c.reply ? 'comment' : 'edit');
+        item.command = { command: 'nbreview.goToPendingComment', title: 'Go to comment', arguments: [c] };
         return item;
       }
       case 'group': {
@@ -200,6 +230,13 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
   private checkbox(path: string): vscode.TreeItemCheckboxState {
     return this.state.isViewed(path) ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
   }
+}
+
+/** The pending comments in the order of the panel's files, then by line. */
+export function pendingInOrder(state: ReviewState): PendingComment[] {
+  const order = new Map(reviewOrder(state).map((p, i) => [p, i]));
+  const at = (c: PendingComment) => order.get(c.path) ?? order.size;
+  return state.pendingComments().sort((a, b) => at(a) - at(b) || (a.docLine?.line ?? 0) - (b.docLine?.line ?? 0));
 }
 
 function notebookNodes(state: ReviewState): Node[] {

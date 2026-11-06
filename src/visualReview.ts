@@ -92,7 +92,7 @@ export class VisualReview implements vscode.Disposable {
     vscode.Disposable.from(...this.disposables).dispose();
   }
 
-  open(nbPath: string, revealCellId?: string, options: { since?: boolean; viewColumn?: vscode.ViewColumn; goTo?: PageSpot } = {}): void {
+  open(nbPath: string, revealCellId?: string, options: { since?: boolean; viewColumn?: vscode.ViewColumn; goTo?: PageSpot; thread?: string } = {}): void {
     // The history button is on files changed since the review, which the default shows since
     // then: going back to the default shows it, and leaves the other files as they were.
     if (options.since && this.chosen) {
@@ -107,6 +107,9 @@ export class VisualReview implements vscode.Disposable {
       if (options.goTo) {
         this.post(existing, { type: 'goTo', spot: options.goTo });
       }
+      if (options.thread) {
+        this.post(existing, { type: 'revealThread', threadId: options.thread });
+      }
       return;
     }
     if (!this.state.session || !this.reviewable(nbPath)) {
@@ -118,7 +121,7 @@ export class VisualReview implements vscode.Disposable {
       { viewColumn: options.viewColumn ?? vscode.ViewColumn.Active, preserveFocus: false },
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [this.dist()], enableFindWidget: true },
     );
-    this.adopt(panel, nbPath, revealCellId, options.goTo);
+    this.adopt(panel, nbPath, revealCellId, options.goTo, options.thread);
   }
 
   /** Brings back review tabs that were open when VS Code was reloaded. */
@@ -196,13 +199,14 @@ export class VisualReview implements vscode.Disposable {
     return vscode.Uri.joinPath(this.ctx.extensionUri, 'dist');
   }
 
-  private adopt(panel: vscode.WebviewPanel, nbPath: string, revealCellId?: string, goTo?: PageSpot): void {
+  private adopt(panel: vscode.WebviewPanel, nbPath: string, revealCellId?: string, goTo?: PageSpot, thread?: string): void {
     panel.title = this.title(nbPath);
     panel.iconPath = vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'icon.svg');
     panel.webview.html = this.html(panel.webview, this.dist(), nbPath);
     this.panels.set(nbPath, panel);
     let pendingReveal = revealCellId;
     let pendingGoTo = goTo;
+    let pendingThread = thread;
     panel.onDidDispose(() => {
       this.panels.delete(nbPath);
       this.modelSyncs.delete(panel);
@@ -220,6 +224,11 @@ export class VisualReview implements vscode.Disposable {
       if (msg.type === 'ready' && pendingGoTo) {
         this.post(panel, { type: 'goTo', spot: pendingGoTo });
         pendingGoTo = undefined;
+      }
+      // The page keeps it until the thread has come and been drawn.
+      if (msg.type === 'ready' && pendingThread) {
+        this.post(panel, { type: 'revealThread', threadId: pendingThread });
+        pendingThread = undefined;
       }
     });
   }
@@ -352,6 +361,9 @@ export class VisualReview implements vscode.Disposable {
         return;
       case 'openOverview':
         await vscode.commands.executeCommand('nbreview.openOverview');
+        return;
+      case 'goToPending':
+        await vscode.commands.executeCommand('nbreview.goToPendingComment');
         return;
       case 'openExternal':
         if (/^https?:\/\//.test(msg.url)) {
@@ -610,6 +622,20 @@ export class VisualReview implements vscode.Disposable {
     this.goTo(spot.path, strip(spot));
     this.syncStates();
     return true;
+  }
+
+  /**
+   * Shows a conversation on its file's review page, opening the page if it isn't open. A page of
+   * an earlier commit takes no threads, so it goes back to the default range first.
+   */
+  async showThread(path: string, threadId: string): Promise<void> {
+    if (!this.state.session || !this.reviewable(path)) {
+      return;
+    }
+    if ((await this.range(path))?.resolved.readOnly) {
+      this.setRange(undefined);
+    }
+    this.open(path, undefined, { thread: threadId });
   }
 
   /** Shows a place on a file's review page, opening the page if it isn't open. */
