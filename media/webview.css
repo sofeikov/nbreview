@@ -553,6 +553,9 @@ textarea {
 }
 .submit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .muted { color: var(--muted); font-size: 12px; }
+.pending-section { margin-top: 6px; }
+.pending-toggle { display: flex; align-items: center; gap: 6px; padding: 2px 0; margin-bottom: 4px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.pending-toggle .count { padding: 0 6px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 11px; }
 .pending-list {
   max-height: 210px;
   overflow-y: auto;
