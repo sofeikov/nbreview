@@ -104,5 +104,6 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
   2. Update the checkout: `git -C ~/my/nbreview pull --ff-only`.
   3. Detach the worktree (`git switch --detach origin/main`) and delete the branch.
   4. Rebuild in `~/my/nbreview`: `npm ci`, `npm run typecheck`, `npm test`, `npm run smoke` and `npm run package`. The `.vsix` it leaves is the build.
+- **Publishing is by tag, through trusted publishing.** Pushing `vX.Y.Z` (the version in `package.json`, a commit on `main`) runs `.github/workflows/release.yml`. It waits for the maintainer's approval in the `marketplace` GitHub environment, then publishes with `vsce publish --oidc`; no token is stored. The Marketplace policy "nbreview release" accepts only that workflow file and environment name, so renaming either breaks publishing. Run `npm run smoke` locally first: CI doesn't. Agents never push release tags.
 - Don't install the extension into the maintainer's VS Code unless asked: the maintainer installs it from the Marketplace.
 - Don't touch global git config, or history outside this repository.
