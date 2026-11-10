@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnOf, headCellOf, headLineOf, identifierAt, isRemoteOf, matchCell, matchLine, shortPlace } from '../src/core/navigate.ts';
+import { columnOf, headCellOf, headLineOf, githubFileUrl, identifierAt, isRemoteOf, matchCell, matchLine, shortPlace } from '../src/core/navigate.ts';
 
 test('identifierAt finds the name under the cursor, also just after it', () => {
   const line = 'result = area(2, 3)';
@@ -88,4 +88,12 @@ test('headCellOf keeps the cell at the latest commit, and matches it by id or so
   assert.equal(headCellOf(head, { index: 0, id: 'b', source: 'old' }, false), 1, 'by id');
   assert.equal(headCellOf(head, { index: 0, source: 'def f():\n    pass' }, false), 1, 'by source');
   assert.equal(headCellOf(head, { index: 0, id: 'z', source: 'other' }, false), undefined);
+});
+
+test('githubFileUrl links a file or folder at a commit', () => {
+  const pr = 'https://github.com/o/r/pull/7';
+  assert.equal(githubFileUrl(pr, 'abc123', 'src/a.py'), 'https://github.com/o/r/blob/abc123/src/a.py');
+  assert.equal(githubFileUrl(pr, 'abc123', 'src', true), 'https://github.com/o/r/tree/abc123/src');
+  assert.equal(githubFileUrl(pr, 'abc123', 'my nb/a#1.ipynb'), 'https://github.com/o/r/blob/abc123/my%20nb/a%231.ipynb', 'each segment encoded, slashes kept');
+  assert.equal(githubFileUrl('https://ghe.example.com/o/r/pull/7/files', 'abc', 'x.py'), 'https://ghe.example.com/o/r/blob/abc/x.py', 'other hosts');
 });

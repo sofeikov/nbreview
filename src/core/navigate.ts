@@ -103,6 +103,17 @@ export function isRemoteOf(url: string, owner: string, repo: string): boolean {
 }
 
 /**
+ * The github.com page of a file (or, with `folder`, a directory) of the pull request's repository
+ * at one commit, a permalink that keeps working after the branch moves or is deleted. `prUrl` is
+ * the pull request's own address, which also tells the host. Each path segment is encoded.
+ */
+export function githubFileUrl(prUrl: string, sha: string, path: string, folder = false): string {
+  const m = /^(https?:\/\/[^/]+\/[^/]+\/[^/]+)\//.exec(prUrl);
+  const repo = m ? m[1] : prUrl.replace(/\/pull\/\d+.*$/, '');
+  return `${repo}/${folder ? 'tree' : 'blob'}/${sha}/${path.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/**
  * A short name for a file in a list of definitions: its name, and where it is, relative to a
  * workspace folder, or from the package folder of an installed library or stub
  * (`site-packages/`, `stubs/`, `stdlib/`), instead of a long absolute path.

@@ -32,6 +32,11 @@ export class VisualReview implements vscode.Disposable {
    */
   private readonly modelSyncs = new Map<vscode.WebviewPanel, number>();
   private readonly nav: Navigator;
+
+  /** The workspace folder that clones the pull request's repository, if one is open. */
+  localRepo(): Promise<LocalRepo | undefined> {
+    return this.nav.localRepo();
+  }
   /**
    * Where Back returns to, latest last: the places that go to definition left for another place
    * on the review pages. Kept for one pull request.

@@ -177,6 +177,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.26.0
+- **Copy a file's path from the Review panel.** Right-click a file or folder and choose **Copy Local Path** (the file in the clone that is open in your window), **Copy Relative Path** (from the repository's top) or **Copy GitHub Link** (a permanent link to the file at the pull request's latest commit, or at its base for a deleted file). Select several rows to copy one line each.
+
 ### 0.25.2
 - **No change to the extension.** Releases are now published from GitHub Actions with Marketplace trusted publishing instead of an upload by hand.
 

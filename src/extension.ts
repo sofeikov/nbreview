@@ -6,8 +6,9 @@ import { ReviewState } from './state.ts';
 import { TextReview } from './textReview.ts';
 import { VisualReview } from './visualReview.ts';
 import { OverviewPage } from './overview.ts';
-import { FilesTree, fileLayout, initFileLayout, nodePath, nodePaths, onDidChangeFileLayout, pendingInOrder, reviewOrder, setFileLayout, type Node } from './tree.ts';
+import { FilesTree, fileLayout, initFileLayout, nodePath, nodePaths, nodeTarget, onDidChangeFileLayout, pendingInOrder, reviewOrder, setFileLayout, type Node } from './tree.ts';
 import { allFolders } from './paths.ts';
+import { githubFileUrl } from './core/navigate.ts';
 import type { PendingComment } from './core/pending.ts';
 import { showError } from './notify.ts';
 import { PrBadges, PrList, pickPullRequest, type RepoRef } from './prList.ts';
@@ -132,6 +133,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nbreview.markNotViewed', (arg?: vscode.Uri | string) => setActiveViewed(arg, false)),
     vscode.commands.registerCommand('nbreview.markFolderViewed', (node?: Node) => setFolderViewed(node, true).catch(showError)),
     vscode.commands.registerCommand('nbreview.markFolderNotViewed', (node?: Node) => setFolderViewed(node, false).catch(showError)),
+    vscode.commands.registerCommand('nbreview.copyLocalPath', (node?: Node, nodes?: Node[]) => copyPaths('local', node, nodes).catch(showError)),
+    vscode.commands.registerCommand('nbreview.copyRelativePath', (node?: Node, nodes?: Node[]) => copyPaths('relative', node, nodes).catch(showError)),
+    vscode.commands.registerCommand('nbreview.copyGitHubLink', (node?: Node, nodes?: Node[]) => copyPaths('github', node, nodes).catch(showError)),
     vscode.commands.registerCommand('nbreview.nextFile', (arg?: vscode.Uri | string) => nextFile(arg).catch(showError)),
     vscode.window.onDidChangeActiveTextEditor(updateActiveContext),
     state.onDidChange(updateActiveContext),
@@ -241,6 +245,37 @@ function updateFilterContext(): void {
 function setActiveViewed(arg: vscode.Uri | string | undefined, viewed: boolean): Promise<void> | undefined {
   const path = reviewPath(arg);
   return path ? state.setViewed([path], viewed).catch(showError) : undefined;
+}
+
+/**
+ * Copies where the files or folders clicked in the Review panel are, as a path in the clone that
+ * is open in this window (`local`), a path from the repository's top (`relative`), or a
+ * github.com link at the pull request's head, or at its base for a deleted file (`github`).
+ * Several selected rows give one line each.
+ */
+async function copyPaths(kind: 'local' | 'relative' | 'github', node?: Node, nodes?: Node[]): Promise<void> {
+  const s = state.session;
+  const picked = nodes?.length && node && nodes.includes(node) ? nodes : node ? [node] : [];
+  const targets = picked.map(nodeTarget).filter(<T>(t: T | undefined): t is T => !!t);
+  if (!s || !targets.length) {
+    return;
+  }
+  let root: string | undefined;
+  if (kind === 'local') {
+    root = (await visual.localRepo())?.folder.fsPath;
+    if (!root) {
+      void vscode.window.showInformationMessage(`No folder open in this window is a clone of ${s.pr.owner}/${s.pr.repo}, so there is no local path. Copy the relative path or the GitHub link instead.`);
+      return;
+    }
+  }
+  const lines = targets.map(t => {
+    if (kind === 'relative') {
+      return t.path;
+    }
+    return kind === 'local' ? vscode.Uri.joinPath(vscode.Uri.file(root!), t.path).fsPath : githubFileUrl(s.pr.url, t.removed ? s.pr.baseSha : s.pr.headSha, t.path, t.folder);
+  });
+  await vscode.env.clipboard.writeText(lines.join('\n'));
+  void vscode.window.setStatusBarMessage(lines.length === 1 ? `Copied ${lines[0]}` : `Copied ${lines.length} paths`, 3000);
 }
 
 /**

@@ -234,6 +234,15 @@ export function nodePath(node: Node): string | undefined {
   return node.kind === 'notebook' ? node.entry.path : node.kind === 'file' ? node.other.file.filename : undefined;
 }
 
+/** The repository path a node names, for the copy commands: a file, or a folder (`folder`). */
+export function nodeTarget(node: Node): { path: string; folder: boolean; removed: boolean } | undefined {
+  if (node.kind === 'folder') {
+    return { path: node.folder.path, folder: true, removed: false };
+  }
+  const file = node.kind === 'notebook' ? node.entry.file : node.kind === 'file' ? node.other.file : undefined;
+  return file && { path: file.filename, folder: false, removed: file.status === 'removed' };
+}
+
 /** The files a node stands for: itself, or everything below a folder or group. */
 export function nodePaths(node: Node): string[] {
   if (node.kind === 'group') {
