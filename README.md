@@ -177,6 +177,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.25.2
+- **No change to the extension.** Releases are now published from GitHub Actions with Marketplace trusted publishing instead of an upload by hand.
+
 ### 0.25.1
 - **Pending comments are listed in the Submit review box.** Instead of a section in the Review panel, click **Submit review** and the box shows your pending comments on every file, in a foldable **Pending comments** section under the Comment, Approve and Request changes options, as on github.com, in a scrolling list of limited height: each rendered as it will read on GitHub (Markdown, code blocks highlighted) with its file and cell or line. A click on one closes the box and jumps to it. **Notebook Review: Go to Pending Comment…** still gives a searchable pick.
 
