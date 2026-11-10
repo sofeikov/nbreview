@@ -53,6 +53,7 @@ const RUN = [
   { command: 'nbreview.copyLocalPath' },
   { command: 'nbreview.copyRelativePath' },
   { command: 'nbreview.copyGitHubLink' },
+  { command: 'nbreview.copyPrLink' },
   { command: 'nbreview.discardReview' },
   { command: 'nbreview.close' },
   { command: 'nbreview.back' },

@@ -244,6 +244,9 @@ export class OverviewPage implements vscode.Disposable {
           await vscode.env.openExternal(vscode.Uri.parse(msg.url));
         }
         return;
+      case 'copyLink':
+        await vscode.commands.executeCommand('nbreview.copyPrLink');
+        return;
     }
   }
 

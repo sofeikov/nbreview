@@ -2,7 +2,7 @@
   "name": "nbreview",
   "displayName": "Notebook Review for GitHub Pull Requests (Jupyter .ipynb)",
   "description": "Review Jupyter notebooks (.ipynb) in GitHub pull requests inside VS Code: rendered cell-by-cell diffs of code, Markdown, LaTeX and outputs, with line comments on any cell that post to GitHub as a normal PR review.",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "publisher": "KonstantinSofeikov",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -273,6 +273,13 @@
         "enablement": "nbreview.active"
       },
       {
+        "command": "nbreview.copyPrLink",
+        "title": "Copy Pull Request Link",
+        "category": "Notebook Review",
+        "icon": "$(copy)",
+        "enablement": "nbreview.active"
+      },
+      {
         "command": "nbreview.copyLocalPath",
         "title": "Copy Local Path",
         "category": "Notebook Review",
@@ -411,6 +418,16 @@
           "command": "nbreview.openFileDiff",
           "when": "view == nbreview.files && viewItem =~ /^file/",
           "group": "inline@2"
+        },
+        {
+          "command": "nbreview.copyPrLink",
+          "when": "view == nbreview.files && viewItem == pr",
+          "group": "inline@1"
+        },
+        {
+          "command": "nbreview.copyPrLink",
+          "when": "view == nbreview.files && viewItem == pr",
+          "group": "9_copy@1"
         },
         {
           "command": "nbreview.copyLocalPath",

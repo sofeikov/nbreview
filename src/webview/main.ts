@@ -165,6 +165,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
       h('span', { class: 'dir', text: slash >= 0 ? m.path.slice(0, slash + 1) : '' }),
       h('span', { class: 'file', text: m.path.slice(slash + 1) }),
       button(`#${m.pr.number}`, () => post({ type: 'openOverview' }), { class: 'pr', title: `${m.pr.title}: show the overview (status, description and conversation)` }),
+      button(icon('copy'), () => post({ type: 'copyLink', url: m.pr.url }), { class: 'icon-btn', title: 'Copy the link to this pull request' }),
       ...chips,
       h('span', { class: 'summary', text: (m.kind === 'file' ? fileSummary(m) : describe.join(' · ') || 'no cell changes') + (m.range ? ` ${m.range.describe}` : '') }),
     ),

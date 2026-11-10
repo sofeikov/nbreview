@@ -248,4 +248,6 @@ export type WebviewMessage =
   | { type: 'openOverview' }
   /** Jump to one of the viewer's pending comments, on this file or another. */
   | { type: 'goToPendingComment'; id: string }
-  | { type: 'openExternal'; url: string };
+  | { type: 'openExternal'; url: string }
+  /** Copies the pull request's GitHub link to the clipboard. */
+  | { type: 'copyLink'; url: string };

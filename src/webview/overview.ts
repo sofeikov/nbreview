@@ -207,6 +207,7 @@ function renderHeader(m: OverviewVM): HTMLElement {
       h('span', { class: 'spacer' }),
       h('span', { class: 'fetched', title: `Fetched ${new Date(m.fetchedAt).toLocaleString()}`, text: loading ? 'Updating…' : `Updated ${timeAgo(m.fetchedAt)}` }),
       refreshButton(),
+      button(icon('copy'), () => post({ type: 'copyLink', url: p.url }), { class: 'icon-btn', title: 'Copy the link to this pull request' }),
       button([icon('github'), 'Open on GitHub'], () => post({ type: 'openExternal', url: p.url }), { class: 'ghost', title: p.url })),
     h('h1', { class: 'ov-title', id: 'ov-title' }, h('span', { text: p.title }), ' ', h('span', { class: 'num', text: `#${p.number}` })),
     h('div', { class: 'ov-meta' },

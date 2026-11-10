@@ -177,6 +177,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.26.1
+- **Copy the pull request's link.** The pull request row at the top of the Review panel has a copy button (also in its right-click menu), and the review page and the Overview have a small copy icon in their headers. All three copy the GitHub link of the pull request.
+
 ### 0.26.0
 - **Copy a file's path from the Review panel.** Right-click a file or folder and choose **Copy Local Path** (the file in the clone that is open in your window), **Copy Relative Path** (from the repository's top) or **Copy GitHub Link** (a permanent link to the file at the pull request's latest commit, or at its base for a deleted file). Select several rows to copy one line each.
 

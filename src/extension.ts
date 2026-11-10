@@ -135,6 +135,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nbreview.markFolderNotViewed', (node?: Node) => setFolderViewed(node, false).catch(showError)),
     vscode.commands.registerCommand('nbreview.copyLocalPath', (node?: Node, nodes?: Node[]) => copyPaths('local', node, nodes).catch(showError)),
     vscode.commands.registerCommand('nbreview.copyRelativePath', (node?: Node, nodes?: Node[]) => copyPaths('relative', node, nodes).catch(showError)),
+    vscode.commands.registerCommand('nbreview.copyPrLink', async () => {
+      const url = state.session?.pr.url;
+      if (url) {
+        await vscode.env.clipboard.writeText(url);
+        void vscode.window.setStatusBarMessage(`Copied ${url}`, 3000);
+      }
+    }),
     vscode.commands.registerCommand('nbreview.copyGitHubLink', (node?: Node, nodes?: Node[]) => copyPaths('github', node, nodes).catch(showError)),
     vscode.commands.registerCommand('nbreview.nextFile', (arg?: vscode.Uri | string) => nextFile(arg).catch(showError)),
     vscode.window.onDidChangeActiveTextEditor(updateActiveContext),

@@ -157,4 +157,6 @@ export type OverviewMessage =
   | { type: 'deleteBranch' }
   /** Loads the pull request's files again, after new commits. */
   | { type: 'reloadPr' }
-  | { type: 'openExternal'; url: string };
+  | { type: 'openExternal'; url: string }
+  /** Copies the pull request's GitHub link to the clipboard. */
+  | { type: 'copyLink'; url: string };
