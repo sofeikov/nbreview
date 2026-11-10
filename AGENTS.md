@@ -104,6 +104,14 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
   2. Update the checkout: `git -C ~/my/nbreview pull --ff-only`.
   3. Detach the worktree (`git switch --detach origin/main`) and delete the branch.
   4. Rebuild in `~/my/nbreview`: `npm ci`, `npm run typecheck`, `npm test`, `npm run smoke` and `npm run package`. The `.vsix` it leaves is the build.
-- **Publishing is by tag, through trusted publishing.** Pushing `vX.Y.Z` (the version in `package.json`, a commit on `main`) runs `.github/workflows/release.yml`. It waits for the maintainer's approval in the `marketplace` GitHub environment, then publishes with `vsce publish --oidc`; no token is stored. The Marketplace policy "nbreview release" accepts only that workflow file and environment name, so renaming either breaks publishing. Run `npm run smoke` locally first: CI doesn't. Agents never push release tags.
+- **Publishing is by tag, through trusted publishing.** Pushing `vX.Y.Z` (the version in `package.json`, a commit on `main`) runs `.github/workflows/release.yml`. It waits for approval in the `marketplace` GitHub environment, then publishes with `vsce publish --oidc`; no token is stored. The Marketplace policy "nbreview release" accepts only that workflow file and environment name, so renaming either breaks publishing.
+  - **Agents release only when the maintainer asks for a release.** `gh` is signed in as the maintainer, an admin, so an agent's token can push the tag (the tag ruleset lets admins bypass it) and approve the run. That is the intended route, and it is also why the rule is "only on request": nothing else stops an agent.
+  - **To release:**
+    1. Confirm the version with the maintainer. Everything must be merged to `main`, with the version bumped in `package.json` and a changelog entry.
+    2. Run `npm run typecheck`, `npm test` and `npm run smoke` in `~/my/nbreview` on an up-to-date `main`. CI runs only the first two.
+    3. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. The build job fails on a tag that isn't on `main` or doesn't match `package.json`.
+    4. Find the run with `gh run list --workflow release.yml --limit 1`. When it waits for the `marketplace` environment, approve it: `gh api -X POST repos/sofeikov/nbreview/actions/runs/<run id>/pending_deployments -F 'environment_ids[]=26806270688' -f state=approved -f comment='release vX.Y.Z'`. Then `gh run watch <run id>`.
+    5. Check the result: `npx --yes @vscode/vsce show KonstantinSofeikov.nbreview` should list the new version.
+  - **Never** publish with a personal access token or by hand, and never change the Marketplace policy, the `marketplace` environment or the rulesets without asking. If a release fails, report the log and stop; don't retag or retry on your own.
 - Don't install the extension into the maintainer's VS Code unless asked: the maintainer installs it from the Marketplace.
 - Don't touch global git config, or history outside this repository.
