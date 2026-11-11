@@ -7,7 +7,7 @@ import { TextReview } from './textReview.ts';
 import { VisualReview } from './visualReview.ts';
 import { OverviewPage } from './overview.ts';
 import { FilesTree, fileLayout, initFileLayout, nodePath, nodePaths, nodeTarget, onDidChangeFileLayout, pendingInOrder, reviewOrder, setFileLayout, type Node } from './tree.ts';
-import { allFolders } from './paths.ts';
+import { allFolders, viewedToggle } from './paths.ts';
 import { githubFileUrl } from './core/navigate.ts';
 import type { PendingComment } from './core/pending.ts';
 import { showError } from './notify.ts';
@@ -133,6 +133,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nbreview.markNotViewed', (arg?: vscode.Uri | string) => setActiveViewed(arg, false)),
     vscode.commands.registerCommand('nbreview.markFolderViewed', (node?: Node) => setFolderViewed(node, true).catch(showError)),
     vscode.commands.registerCommand('nbreview.markFolderNotViewed', (node?: Node) => setFolderViewed(node, false).catch(showError)),
+    // Space in the Review panel. A key press passes no row, so the command finds them itself.
+    vscode.commands.registerCommand('nbreview.toggleViewed', async () => {
+      const rows = await rowsForSpace();
+      const toggle = viewedToggle(rows.flatMap(nodePaths), p => state.isViewed(p));
+      return toggle && state.setViewed(toggle.paths, toggle.viewed).catch(showError);
+    }),
     vscode.commands.registerCommand('nbreview.copyLocalPath', (node?: Node, nodes?: Node[]) => copyPaths('local', node, nodes).catch(showError)),
     vscode.commands.registerCommand('nbreview.copyRelativePath', (node?: Node, nodes?: Node[]) => copyPaths('relative', node, nodes).catch(showError)),
     vscode.commands.registerCommand('nbreview.copyPrLink', async () => {
@@ -252,6 +258,42 @@ function updateFilterContext(): void {
 function setActiveViewed(arg: vscode.Uri | string | undefined, viewed: boolean): Promise<void> | undefined {
   const path = reviewPath(arg);
   return path ? state.setViewed([path], viewed).catch(showError) : undefined;
+}
+
+/**
+ * The rows Space acts on, as in the Explorer: the focused row, or the whole selection when the
+ * focused row is part of it. The arrow keys move the focus and leave the selection where it was,
+ * and the extension API shows only the selection. So this lets VS Code's own "toggle selection"
+ * command flip the focused row in the selection, reads which row changed, and flips it back.
+ */
+async function rowsForSpace(): Promise<readonly Node[]> {
+  const key = (n: Node) => `${n.kind}:${nodePaths(n).join('\n')}`;
+  const before = treeView.selection;
+  const beforeKeys = new Set(before.map(key));
+  const after = await selectionAfter('list.toggleSelection');
+  const afterKeys = new Set(after.map(key));
+  const added = after.filter(n => !beforeKeys.has(key(n)));
+  if (added.length || before.some(n => !afterKeys.has(key(n)))) {
+    await selectionAfter('list.toggleSelection');
+  }
+  return added.length ? added : before;
+}
+
+/** Runs a command that changes the tree's selection, and waits (a short while at most) for the extension host to hear of it. */
+async function selectionAfter(command: string): Promise<readonly Node[]> {
+  const changed = new Promise<void>(done => {
+    const sub = treeView.onDidChangeSelection(() => {
+      sub.dispose();
+      done();
+    });
+    setTimeout(() => {
+      sub.dispose();
+      done();
+    }, 300);
+  });
+  await vscode.commands.executeCommand(command);
+  await changed;
+  return treeView.selection;
 }
 
 /**

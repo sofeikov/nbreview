@@ -232,7 +232,18 @@ test('threads on ordinary files go on their own line', () => {
   assert.deepEqual(locateFileThread({ ...base, line: null, subjectType: 'FILE' }), { side: 'RIGHT', docLine: 0, note: 'file comment' });
 });
 
-import { allFolders, buildFolderTree, pageTitle, pathFromPageTitle, treeOrder } from '../src/paths.ts';
+import { allFolders, buildFolderTree, pageTitle, pathFromPageTitle, treeOrder, viewedToggle } from '../src/paths.ts';
+
+test('Space in the Review panel marks the selection viewed, or unmarks it when all of it is viewed', () => {
+  const viewed = new Set(['a.py', 'b.py']);
+  const isViewed = (p: string) => viewed.has(p);
+  assert.deepEqual(viewedToggle(['a.py', 'c.py'], isViewed), { paths: ['a.py', 'c.py'], viewed: true });
+  assert.deepEqual(viewedToggle(['a.py', 'b.py'], isViewed), { paths: ['a.py', 'b.py'], viewed: false });
+  assert.deepEqual(viewedToggle(['c.py'], isViewed), { paths: ['c.py'], viewed: true });
+  // A file listed twice (selected itself and below a selected folder) counts once.
+  assert.deepEqual(viewedToggle(['a.py', 'a.py'], isViewed), { paths: ['a.py'], viewed: false });
+  assert.equal(viewedToggle([], isViewed), undefined);
+});
 
 test('changed files group into folders, single-folder chains merged', () => {
   const root = buildFolderTree([

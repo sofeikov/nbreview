@@ -50,6 +50,7 @@ const RUN = [
   { command: 'nbreview.markNotViewed' },
   { command: 'nbreview.markFolderViewed' },
   { command: 'nbreview.markFolderNotViewed' },
+  { command: 'nbreview.toggleViewed' },
   { command: 'nbreview.copyLocalPath' },
   { command: 'nbreview.copyRelativePath' },
   { command: 'nbreview.copyGitHubLink' },

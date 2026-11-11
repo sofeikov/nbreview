@@ -79,6 +79,16 @@ export function allFolders(paths: string[]): { path: string; files: string[] }[]
 }
 
 /**
+ * What pressing Space on a row of the Review panel does: unmark the files when all of
+ * them are viewed, else mark them all. This is the same as clicking the checkbox of a folder, which
+ * is ticked only when every file below it is viewed. A file under a selected folder counts once.
+ */
+export function viewedToggle(paths: string[], isViewed: (path: string) => boolean): { paths: string[]; viewed: boolean } | undefined {
+  const unique = [...new Set(paths)];
+  return unique.length ? { paths: unique, viewed: !unique.every(isViewed) } : undefined;
+}
+
+/**
  * The review page's tab title. An updated extension finds the file a tab of the previous version
  * shows from it, so its format has to stay the same.
  */
