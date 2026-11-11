@@ -495,6 +495,9 @@ async function openPr(arg?: string, focus = true): Promise<void> {
   await vscode.commands.executeCommand('setContext', 'nbreview.active', true);
   state.setSession(session);
   if (focus) {
+    // Show the Overview, so the editor area isn't empty after the pull request loads. A refresh
+    // or the reopen after a reload passes focus = false and leaves the tabs as they are.
+    overview.open();
     await vscode.commands.executeCommand('nbreview.files.focus');
   }
 }
