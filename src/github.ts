@@ -459,15 +459,18 @@ export class GitHub {
 
   /**
    * The review threads of a pull request, including the comments of the viewer's pending review
-   * (GitHub shows those to their author only), and the id of that pending review if there is one.
+   * (GitHub shows those to their author only), the id of that pending review if there is one,
+   * and whether the viewer opened the pull request (GitHub refuses their approval or request for changes).
    */
-  async getThreads(owner: string, repo: string, number: number): Promise<{ threads: GhThread[]; pendingReviewId?: string }> {
+  async getThreads(owner: string, repo: string, number: number): Promise<{ threads: GhThread[]; pendingReviewId?: string; viewerIsAuthor: boolean }> {
     const threads: GhThread[] = [];
     let pendingReviewId: string | undefined;
+    let viewerIsAuthor = false;
     let after: string | null = null;
     for (;;) {
       const data: any = await this.graphql(
         `query($o:String!,$r:String!,$n:Int!,$after:String){repository(owner:$o,name:$r){pullRequest(number:$n){
+          viewerDidAuthor
           reviews(states:PENDING, first:10){nodes{id viewerDidAuthor}}
           reviewThreads(first:100, after:$after){pageInfo{hasNextPage endCursor} nodes{
             id path line startLine originalLine diffSide subjectType isResolved isOutdated viewerCanResolve viewerCanUnresolve
@@ -477,6 +480,7 @@ export class GitHub {
       );
       const pr = data.repository.pullRequest;
       pendingReviewId ??= pr.reviews.nodes.find((r: any) => r.viewerDidAuthor)?.id;
+      viewerIsAuthor = !!pr.viewerDidAuthor;
       const page = pr.reviewThreads;
       for (const t of page.nodes) {
         threads.push({
@@ -517,7 +521,7 @@ export class GitHub {
       }
       after = page.pageInfo.endCursor;
     }
-    return { threads: threads.filter(t => t.comments.length > 0), pendingReviewId };
+    return { threads: threads.filter(t => t.comments.length > 0), pendingReviewId, viewerIsAuthor };
   }
 
   /**

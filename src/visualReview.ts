@@ -670,6 +670,7 @@ export class VisualReview implements vscode.Disposable {
         pending: this.state.pendingCount(),
         pendingList: vm.buildPendingList(pendingInOrder(this.state)),
         pendingReview: this.state.hasPendingReview(),
+        ...(this.state.viewerIsAuthor() ? { ownPr: true } : {}),
         comments: this.state.commentFilter(),
         ...(range ? { range } : {}),
         ...(local ? { local: { branch: local.branch, atHead: local.atHead } } : {}),

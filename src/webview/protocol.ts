@@ -150,6 +150,8 @@ export interface PanelState {
   pendingList: PendingVM[];
   /** The viewer has a pending review; GitHub doesn't take single comments next to one. */
   pendingReview: boolean;
+  /** The viewer opened the pull request: Approve and Request changes are greyed out, as GitHub refuses them. */
+  ownPr?: boolean;
   /** Which threads are shown; the page gets all of them and leaves the others out. */
   comments: CommentFilter;
   /** What the page compares, and the choices of the range picker; undefined when there is nothing to pick. */

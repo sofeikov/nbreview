@@ -490,6 +490,12 @@ function outputCommentable(side: Side): boolean {
   return model?.kind !== 'file' && commentable(side);
 }
 
+/** Why Approve and Request changes are greyed out on the viewer's own pull request (GitHub refuses both). */
+const OWN_PR_NOTES: Partial<Record<'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES', string>> = {
+  APPROVE: "You can't approve your own pull request.",
+  REQUEST_CHANGES: "You can't request changes on your own pull request.",
+};
+
 // "Finish your review", like on GitHub: a summary, how to submit, and the pending count.
 const submitBox: { open: boolean; text: string; event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'; sending: boolean; error?: string } = {
   open: false,
@@ -499,6 +505,10 @@ const submitBox: { open: boolean; text: string; event: 'COMMENT' | 'APPROVE' | '
 };
 
 function submitProblem(): string | undefined {
+  const ownPrNote = OWN_PR_NOTES[submitBox.event];
+  if (ownPrNote && panel.ownPr) {
+    return ownPrNote;
+  }
   if (submitBox.event === 'REQUEST_CHANGES' && !panel.pending && !submitBox.text.trim()) {
     return 'Write a summary or add a comment to request changes.';
   }
@@ -521,6 +531,12 @@ function renderSubmitBox(): HTMLElement {
   const close = () => { submitBox.open = false; render(); };
   const area = textarea('submit-summary', submitBox.text, v => { submitBox.text = v; updateSubmitState(); }, send, close);
   area.placeholder = 'Leave a summary (optional)';
+  // On the viewer's own pull request only Comment is open: the others say why they are greyed out.
+  const ownNote = (event: typeof submitBox.event) => (panel.ownPr ? OWN_PR_NOTES[event] : undefined);
+  // A choice made before the page learnt the pull request is the viewer's own falls back to Comment.
+  if (ownNote(submitBox.event)) {
+    submitBox.event = 'COMMENT';
+  }
   const options: [typeof submitBox.event, string, string][] = [
     ['COMMENT', 'Comment', 'Send feedback without approving.'],
     ['APPROVE', 'Approve', 'Approve the pull request.'],
@@ -532,10 +548,12 @@ function renderSubmitBox(): HTMLElement {
     h('div', { class: 'submit-head' }, h('b', { text: 'Finish your review' }), h('span', { class: 'spacer' }),
       h('span', { class: 'muted', text: n ? `${n} pending comment${n === 1 ? '' : 's'}` : 'no pending comments' })),
     area,
-    h('div', { class: 'submit-options' }, ...options.map(([value, label, hint]) =>
-      h('label', { class: `option${submitBox.event === value ? ' on' : ''}` },
-        h('input', { type: 'radio', name: 'event', value, checked: submitBox.event === value, onchange: () => { submitBox.event = value; render(); focus('submit-summary'); } }),
-        h('span', {}, h('b', { text: label }), h('span', { class: 'muted', text: hint }))))),
+    h('div', { class: 'submit-options' }, ...options.map(([value, label, hint]) => {
+      const note = ownNote(value);
+      return h('label', { class: `option${submitBox.event === value ? ' on' : ''}${note ? ' disabled' : ''}`, title: note },
+        h('input', { type: 'radio', name: 'event', value, disabled: !!note, checked: submitBox.event === value, onchange: () => { submitBox.event = value; render(); focus('submit-summary'); } }),
+        h('span', {}, h('b', { text: label }), h('span', { class: 'muted', text: note ?? hint })));
+    })),
     pendingList(close),
     submitBox.error && h('div', { class: 'submit-error', text: submitBox.error }),
     h('div', { class: 'actions' },

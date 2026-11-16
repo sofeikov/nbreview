@@ -156,6 +156,11 @@ export class ReviewState {
     return this.session?.pendingCount ?? 0;
   }
 
+  /** Whether the viewer opened the pull request, so can't approve it or request changes. */
+  viewerIsAuthor(): boolean {
+    return !!this.session?.viewerIsAuthor;
+  }
+
   /** Whether the viewer has a pending review, which GitHub doesn't allow single comments next to. */
   hasPendingReview(): boolean {
     return !!this.session?.pendingReviewId;

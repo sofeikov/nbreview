@@ -577,6 +577,8 @@ textarea {
 .submit-options .option.on { background: var(--vscode-list-inactiveSelectionBackground, var(--vscode-list-hoverBackground)); }
 .submit-options .option input { margin: 3px 0 0; accent-color: var(--accent); }
 .submit-options .option > span { display: flex; flex-direction: column; }
+.submit-options .option.disabled { opacity: 0.55; cursor: default; }
+.submit-options .option.disabled:hover { background: none; }
 .submit-error { margin-top: 6px; color: var(--vscode-errorForeground); font-size: 12px; }
 
 /* --- Comments filter ----------------------------------------------------------------------- */

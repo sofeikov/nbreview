@@ -177,6 +177,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.27.1
+- **Approve and Request changes are greyed out on your own pull request.** GitHub doesn't let the author of a pull request approve it or request changes on it, so submitting either failed with a GraphQL error. In the **Submit review** box both options are now greyed out with a note saying why, and the Submit Review command shows the same note instead of sending the review. Comment works as before.
+
 ### 0.27.0
 - **Space marks the current row viewed.** Click a file, a folder, **Notebooks** or **Other files** in the Review panel, or move to one with the arrow keys, and press Space to toggle its Viewed checkbox: no need to aim at the checkbox with the mouse. On a folder or group, Space marks every file below it, or unmarks them when all of them are viewed. Space keeps its usual meaning in the panel's search box. The command is **Notebook Review: Toggle Viewed on the Current Row**, and you can rebind the key.
 

@@ -551,9 +551,19 @@ export interface SubmitRequest {
   body: string;
 }
 
+/** Why Approve and Request changes are greyed out on the viewer's own pull request (GitHub refuses both). */
+const OWN_PR_NOTES: Partial<Record<ReviewEvent, string>> = {
+  APPROVE: "You can't approve your own pull request.",
+  REQUEST_CHANGES: "You can't request changes on your own pull request.",
+};
+
 /** Why a review can't be submitted as asked, or undefined when it can. */
 function submitProblem(event: ReviewEvent, body: string): string | undefined {
   const pending = state.pendingCount();
+  const ownPrNote = OWN_PR_NOTES[event];
+  if (ownPrNote && state.viewerIsAuthor()) {
+    return ownPrNote;
+  }
   if (event === 'REQUEST_CHANGES' && !pending && !body.trim()) {
     return 'GitHub needs a summary or at least one comment to request changes.';
   }
@@ -575,10 +585,16 @@ async function submitInteractive(): Promise<void> {
   const n = state.pendingCount();
   const pendingText = n ? `${n} pending comment${n === 1 ? '' : 's'}` : 'no pending comments';
   type Item = vscode.QuickPickItem & { event: ReviewEvent };
+  // A quick pick can't grey out an item, so on the viewer's own pull request the two GitHub
+  // refuses say why, and picking one shows the reason instead of submitting.
+  const own = (item: Item): Item =>
+    state.viewerIsAuthor() && OWN_PR_NOTES[item.event]
+      ? { ...item, description: 'Not available on your own pull request', detail: OWN_PR_NOTES[item.event] }
+      : item;
   const items: Item[] = [
     { label: '$(comment) Comment', description: 'Send feedback without approving', event: 'COMMENT', alwaysShow: true },
-    { label: '$(check) Approve', description: 'Approve the pull request', event: 'APPROVE', alwaysShow: true },
-    { label: '$(request-changes) Request changes', description: 'Ask for changes before merging', event: 'REQUEST_CHANGES', alwaysShow: true },
+    own({ label: '$(check) Approve', description: 'Approve the pull request', event: 'APPROVE', alwaysShow: true }),
+    own({ label: '$(request-changes) Request changes', description: 'Ask for changes before merging', event: 'REQUEST_CHANGES', alwaysShow: true }),
   ];
   const picker = vscode.window.createQuickPick<Item>();
   picker.title = `Submit review on #${s.pr.number} · ${pendingText}`;

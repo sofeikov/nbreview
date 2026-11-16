@@ -65,6 +65,8 @@ export class ReviewSession {
   fileThreads = new Map<string, FileThread[]>();
   /** The viewer's pending review on GitHub, if they have started one. */
   pendingReviewId: string | undefined;
+  /** The viewer opened this pull request: GitHub doesn't let them approve it or request changes. */
+  viewerIsAuthor = false;
   /** Comments in the pending review, on any file (some may not be on notebooks). */
   pendingCount = 0;
   /** GitHub "Viewed" state per file path. */
@@ -108,6 +110,7 @@ export class ReviewSession {
     session.viewed = viewed.viewed;
     session.viewedDismissed = viewed.dismissed;
     session.lastReview = lastReview;
+    session.viewerIsAuthor = found.viewerIsAuthor;
     progress?.(`Loading ${files.filter(isNotebook).length} notebooks…`);
     await Promise.all([session.loadFiles(), session.loadChangesSinceReview()]);
     await session.placeThreads(found.threads, found.pendingReviewId);
@@ -320,6 +323,7 @@ export class ReviewSession {
 
   async loadThreads(): Promise<void> {
     const found = await this.gh.getThreads(this.pr.owner, this.pr.repo, this.pr.number);
+    this.viewerIsAuthor = found.viewerIsAuthor;
     await this.placeThreads(found.threads, found.pendingReviewId);
   }
 

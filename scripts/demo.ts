@@ -299,7 +299,8 @@ window.acquireVsCodeApi = () => ({
 <script src="data.js"></script>
 <script src="dist/webview.js"></script>
 <script>
-// Scenes for the README screenshots: index.html#outputs (a changed plot), #comment, #submit, and
+// Scenes for the README screenshots: index.html#outputs (a changed plot), #comment, #submit
+// (#submit-own: on the viewer's own pull request, with Approve and Request changes greyed out), and
 // #file (another file of the pull request). The checks: #checks (a notebook with findings),
 // #checks-list (their list in the toolbar), #checks-comment (a comment started from one) and
 // #checks-file (a Python module with findings). #nav shows code navigation (Ctrl held over a
@@ -319,6 +320,9 @@ if (scene.startsWith('range')) {
     : { choice: { kind: 'commits', first, last: first }, label: 'Commit ' + first.slice(0, 7), auto: false, readOnly: true, review: { label: 'your review on 2 Nov (8d02be8)', sha: window.__REVIEW_SHA__ }, commits: 4, head: window.__COMMITS__[3].sha };
 }
 panelState.pendingList = window.__PENDING__;
+if (scene === 'submit-own') {
+  panelState.ownPr = true;
+}
 deliver({ type: 'state', state: panelState });
 // Headless Firefox captures from the top of the page, so a scene hides the cells above its subject.
 const scrollTo = el => {
@@ -393,7 +397,7 @@ if (scene === 'checks-list') {
 if (scene === 'checks-comment') {
   document.querySelector('.finding[data-finding="0"] button').click();
 }
-if (scene === 'submit') {
+if (scene === 'submit' || scene === 'submit-own') {
   document.querySelector('.submit-wrap > button').click();
   const area = document.querySelector('.submit-box textarea');
   area.value = 'Nice improvement. One question on the tuning, otherwise good to go.';
