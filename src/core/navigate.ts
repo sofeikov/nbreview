@@ -154,3 +154,53 @@ export function headCellOf(head: { id: string; source: string }[], local: { inde
   }
   return matchCell(head, local.id, local.source);
 }
+
+/** A file written to the copy of a pull request: its time and size on disk just after. */
+export interface CopiedFile {
+  mtime: number;
+  size: number;
+}
+
+/**
+ * The record of a copy's files, by path in the repository, from its JSON. Anything unreadable
+ * (no record yet, a record cut off half-way) is an empty record: the files are then fetched again.
+ */
+export function readCopyRecord(json: string | undefined): Map<string, CopiedFile> {
+  const out = new Map<string, CopiedFile>();
+  let data: unknown;
+  try {
+    data = json ? JSON.parse(json) : undefined;
+  } catch {
+    return out;
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    for (const [path, f] of Object.entries(data as Record<string, unknown>)) {
+      const { mtime, size } = (f ?? {}) as Partial<CopiedFile>;
+      if (typeof mtime === 'number' && typeof size === 'number') {
+        out.set(path, { mtime, size });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * What to do with a file of the copy before reading it: use it as it is, fetch it from the pull
+ * request again, or refuse it. `onDisk` is the time and size of the file found at its path,
+ * undefined when there is none.
+ * - A file changed since it was written (the viewer edited and saved it) is fetched again, so a
+ *   click never reads anything but the pull request's file.
+ * - On Windows and macOS, paths that differ only in case (`Geo.py`, `geo.py`) are one file. When
+ *   the file found was written for another such path, it can't also hold this one.
+ */
+export function copiedFileUse(record: Map<string, CopiedFile>, path: string, onDisk: CopiedFile | undefined): 'use' | 'fetch' | 'refuse' {
+  if (!onDisk) {
+    return 'fetch';
+  }
+  const mine = record.get(path);
+  if (mine) {
+    return mine.mtime === onDisk.mtime && mine.size === onDisk.size ? 'use' : 'fetch';
+  }
+  const lower = path.toLowerCase();
+  return [...record.keys()].some(p => p.toLowerCase() === lower) ? 'refuse' : 'fetch';
+}

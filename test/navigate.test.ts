@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnOf, headCellOf, headLineOf, githubFileUrl, identifierAt, isRemoteOf, matchCell, matchLine, shortPlace } from '../src/core/navigate.ts';
+import { columnOf, copiedFileUse, headCellOf, headLineOf, githubFileUrl, identifierAt, isRemoteOf, matchCell, matchLine, readCopyRecord, shortPlace } from '../src/core/navigate.ts';
 
 test('identifierAt finds the name under the cursor, also just after it', () => {
   const line = 'result = area(2, 3)';
@@ -96,4 +96,32 @@ test('githubFileUrl links a file or folder at a commit', () => {
   assert.equal(githubFileUrl(pr, 'abc123', 'src', true), 'https://github.com/o/r/tree/abc123/src');
   assert.equal(githubFileUrl(pr, 'abc123', 'my nb/a#1.ipynb'), 'https://github.com/o/r/blob/abc123/my%20nb/a%231.ipynb', 'each segment encoded, slashes kept');
   assert.equal(githubFileUrl('https://ghe.example.com/o/r/pull/7/files', 'abc', 'x.py'), 'https://ghe.example.com/o/r/blob/abc/x.py', 'other hosts');
+});
+
+test('copiedFileUse reuses a copied file only while it is as it was written', () => {
+  const record = new Map([['geo/Shapes.py', { mtime: 1000, size: 42 }]]);
+  assert.equal(copiedFileUse(record, 'geo/Shapes.py', { mtime: 1000, size: 42 }), 'use');
+  assert.equal(copiedFileUse(record, 'geo/Shapes.py', { mtime: 2000, size: 42 }), 'fetch', 'edited and saved: a new time');
+  assert.equal(copiedFileUse(record, 'geo/Shapes.py', { mtime: 1000, size: 50 }), 'fetch', 'a new size');
+  assert.equal(copiedFileUse(record, 'geo/Shapes.py', undefined), 'fetch', 'deleted');
+  assert.equal(copiedFileUse(record, 'other.py', undefined), 'fetch', 'not copied yet');
+  assert.equal(copiedFileUse(record, 'other.py', { mtime: 5, size: 5 }), 'fetch', 'on disk but not recorded, as from an older version');
+});
+
+test('copiedFileUse refuses a path that differs only in case from a copied one, where they are one file', () => {
+  const record = new Map([['geo/Shapes.py', { mtime: 1000, size: 42 }]]);
+  // Windows and macOS: the other path finds the copied file.
+  assert.equal(copiedFileUse(record, 'geo/shapes.py', { mtime: 1000, size: 42 }), 'refuse');
+  assert.equal(copiedFileUse(record, 'Geo/Shapes.py', { mtime: 1000, size: 42 }), 'refuse', 'a folder of the path');
+  // Linux: the other path is another file, not there yet.
+  assert.equal(copiedFileUse(record, 'geo/shapes.py', undefined), 'fetch');
+  const both = new Map([...record, ['geo/shapes.py', { mtime: 1001, size: 7 }]]);
+  assert.equal(copiedFileUse(both, 'geo/shapes.py', { mtime: 1001, size: 7 }), 'use', 'both copied, on a file system that tells them apart');
+});
+
+test('readCopyRecord reads the record of a copy, and anything unreadable as empty', () => {
+  assert.deepEqual([...readCopyRecord('{"a.py":{"mtime":1,"size":2},"b.py":{"mtime":"x"},"c.py":null}')], [['a.py', { mtime: 1, size: 2 }]]);
+  assert.equal(readCopyRecord(undefined).size, 0);
+  assert.equal(readCopyRecord('{"a.py":{"mt').size, 0, 'cut off half-way');
+  assert.equal(readCopyRecord('[1]').size, 0);
 });

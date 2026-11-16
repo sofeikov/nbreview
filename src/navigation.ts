@@ -11,7 +11,7 @@ import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
 import type { ReviewState } from './state.ts';
 import type { ReviewSession } from './session.ts';
-import { columnOf, headCellOf, headLineOf, isRemoteOf, matchCell, matchLine, shortPlace } from './core/navigate.ts';
+import { columnOf, copiedFileUse, headCellOf, headLineOf, isRemoteOf, matchCell, matchLine, readCopyRecord, shortPlace, type CopiedFile } from './core/navigate.ts';
 import type { PageSpot } from './webview/protocol.ts';
 import { importedName, importTargets, moduleFiles, topLevelLine, type ImportTarget } from './core/pyImports.ts';
 
@@ -42,6 +42,8 @@ interface Place {
 const COPY_DAYS = 7;
 /** The file in a copy whose time says when the copy was last used. */
 const USED = '.nbreview-used';
+/** The file in a copy that records the time and size of each file written to it (`CopiedFile`). */
+const RECORD = '.nbreview-files.json';
 /** At most this many modules are looked at for one click: each can be several GitHub requests. */
 const MAX_MODULES = 12;
 
@@ -76,6 +78,9 @@ export class Navigator {
   private pruning?: Promise<void>;
   /** Files of a copy being fetched: two clicks at once share one fetch and one write. */
   private readonly fetching = new Map<string, Promise<vscode.Uri | undefined>>();
+  /** The record of each copy's files, by the copy's folder: read once, then kept here. */
+  private readonly records = new Map<string, Promise<Map<string, CopiedFile>>>();
+  private saving = Promise.resolve();
 
   /**
    * Shows a definition on the review page of its file, when that page shows the pull request's
@@ -390,17 +395,26 @@ export class Navigator {
       return undefined;
     }
     const uri = vscode.Uri.joinPath(place.folder, path);
-    const exists = () => vscode.workspace.fs.stat(uri).then(() => uri, () => undefined);
+    const fs = vscode.workspace.fs;
     const copy = place.copy;
     if (!copy) {
-      return exists();
+      return fs.stat(uri).then(() => uri, () => undefined);
+    }
+    if (path === USED || path === RECORD) {
+      return undefined;
     }
     const key = uri.toString();
     let p = this.fetching.get(key);
     if (!p) {
       p = (async () => {
-        if (await exists()) {
-          return uri;
+        // The copy's files are ordinary files that the viewer can edit, and on Windows and macOS
+        // two paths that differ only in case are one file: the record says whether the file
+        // found is the pull request's.
+        const record = await this.record(place.folder);
+        const onDisk = () => fs.stat(uri).then(st => ({ mtime: st.mtime, size: st.size }), () => undefined);
+        const use = copiedFileUse(record, path, await onDisk());
+        if (use !== 'fetch') {
+          return use === 'use' ? uri : undefined;
         }
         const bytes = await copy.session.bytesAt(path, copy.sha).catch(() => undefined);
         if (!bytes) {
@@ -410,20 +424,51 @@ export class Navigator {
         // full disk) mustn't leave a short file that later clicks take as the copy.
         const part = vscode.Uri.joinPath(uri, `../.${uri.path.split('/').pop()}.${process.pid}.part`);
         try {
-          await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, '..'));
-          await vscode.workspace.fs.writeFile(part, bytes);
-          await vscode.workspace.fs.rename(part, uri, { overwrite: true });
-          return uri;
+          await fs.createDirectory(vscode.Uri.joinPath(uri, '..'));
+          await fs.writeFile(part, bytes);
+          await fs.rename(part, uri, { overwrite: true });
         } catch {
           // A name the file system refuses (`con.py` on Windows), or a full disk.
-          await vscode.workspace.fs.delete(part).then(undefined, () => undefined);
+          await fs.delete(part).then(undefined, () => undefined);
           return undefined;
         }
+        const written = await onDisk();
+        if (written) {
+          record.set(path, written);
+          await this.saveRecord(place.folder, record);
+        }
+        return uri;
       })();
       this.fetching.set(key, p);
       void p.finally(() => this.fetching.delete(key));
     }
     return p;
+  }
+
+  /** The record of the files written to a copy (empty for a copy made before there was one). */
+  private record(folder: vscode.Uri): Promise<Map<string, CopiedFile>> {
+    const key = folder.toString();
+    let r = this.records.get(key);
+    if (!r) {
+      r = Promise.resolve(vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder, RECORD)))
+        .then(bytes => readCopyRecord(new TextDecoder().decode(bytes)), () => readCopyRecord(undefined));
+      this.records.set(key, r);
+    }
+    return r;
+  }
+
+  /**
+   * Writes a copy's record. One write at a time, each of the whole record, so a later write has
+   * all an earlier one had. Not written, the record only makes files be fetched again.
+   */
+  private saveRecord(folder: vscode.Uri, record: Map<string, CopiedFile>): Promise<void> {
+    const fs = vscode.workspace.fs;
+    this.saving = this.saving.then(async () => {
+      const part = vscode.Uri.joinPath(folder, `${RECORD}.${process.pid}.part`);
+      await fs.writeFile(part, new TextEncoder().encode(JSON.stringify(Object.fromEntries(record))));
+      await fs.rename(part, vscode.Uri.joinPath(folder, RECORD), { overwrite: true });
+    }).catch(() => undefined);
+    return this.saving;
   }
 
   /**
