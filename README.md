@@ -177,6 +177,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.27.4
+- **The Ctrl+hover underline no longer gets stuck.** On the review page, the name under the mouse is underlined while Ctrl (⌘ on macOS) is down. If the keyboard focus was in another editor, releasing Ctrl didn't remove the underline until the mouse moved, because the page gets no key events without the focus. The underline now shows only while the review page has the focus. Ctrl+click works as before.
+
 ### 0.27.3
 - **Go to definition without a clone always reads the pull request's files.** Without a clone, the files a definition opens from are copied from the pull request to the extension's storage, and VS Code lets you edit them. If you changed one and saved it, later clicks read your edited file instead of the pull request's. A copied file that has changed since it was written is now fetched again from the pull request first.
 - **Paths that differ only in case no longer get mixed up in the copy.** On Windows and macOS, `Geo.py` and `geo.py` are one file on disk, so the second could read the first one's content and a definition could go to the wrong file. The copy now records which file it wrote, and go to definition doesn't use the copy for the second path.
