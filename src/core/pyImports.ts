@@ -171,11 +171,14 @@ function parse(lines: string[], first: number, filePath: string): Statement | un
   return st;
 }
 
-/** Every import statement of a file's lines (also indented ones, as in a function or a `try`). */
-function statements(lines: string[], filePath: string): Statement[] {
+/**
+ * Every import statement of a file's lines (also indented ones, as in a function or a `try`),
+ * but not an example of one inside a docstring.
+ */
+function statements(lines: string[], filePath: string, open = openStrings(lines)): Statement[] {
   const out: Statement[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (/^\s*(?:from|import)\s/.test(lines[i])) {
+    if (!open[i] && /^\s*(?:from|import)\s/.test(lines[i])) {
       const st = parse(lines, i, filePath);
       if (st) {
         out.push(st);
@@ -210,11 +213,11 @@ export function importedName(source: string, name: string, filePath: string): Im
 }
 
 /**
- * Whether a column of a line is code: not in a comment or in a string on that line. Strings over
- * several lines (docstrings) aren't seen.
+ * What is open at a column of a line: the quote of a string, `#` in a comment, or undefined in
+ * code. `open` is the string of three quotes still open from an earlier line, if any.
  */
-export function inCode(text: string, col: number): boolean {
-  let quote: string | undefined;
+function openAt(text: string, col: number, open?: string): string | undefined {
+  let quote = open;
   for (let i = 0; i < col && i < text.length; i++) {
     const ch = text[i];
     if (quote) {
@@ -225,13 +228,37 @@ export function inCode(text: string, col: number): boolean {
         quote = undefined;
       }
     } else if (ch === '#') {
-      return false;
+      return '#';
     } else if (ch === '"' || ch === "'") {
       quote = text.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch;
       i += quote.length - 1;
     }
   }
-  return !quote;
+  return quote;
+}
+
+/**
+ * Whether a column of a line is code: not in a comment or in a string. `open` is the string of
+ * three quotes (a docstring) still open at the start of the line, from `openStrings`.
+ */
+export function inCode(text: string, col: number, open?: string): boolean {
+  return openAt(text, col, open) === undefined;
+}
+
+/**
+ * For each line, the string of three quotes (`"""` or `'''`) still open at its start, or
+ * undefined: the lines of a docstring are text, not code. Strings with one quote end with
+ * their line.
+ */
+export function openStrings(lines: string[]): (string | undefined)[] {
+  const out: (string | undefined)[] = [];
+  let open: string | undefined;
+  for (const line of lines) {
+    out.push(open);
+    const q = openAt(line, line.length, open);
+    open = q?.length === 3 ? q : undefined;
+  }
+  return out;
 }
 
 /**
@@ -240,14 +267,15 @@ export function inCode(text: string, col: number): boolean {
  * name isn't imported. A notebook gives the source of its code cells, one after the other.
  */
 export function importTargets(lines: string[], line: number, start: number, filePath: string): ImportTarget[] {
-  const all = statements(lines, filePath);
+  const open = openStrings(lines);
+  const all = statements(lines, filePath, open);
   const inside = all.find(st => line >= st.line && line <= st.end);
   if (inside) {
     return inside.words.find(w => w.token.line === line && w.token.start === start)?.targets ?? [];
   }
   // The names before the clicked one, as `geometry.shapes` in `geometry.shapes.area`.
   const text = lines[line] ?? '';
-  if (!inCode(text, start)) {
+  if (!inCode(text, start, open[line])) {
     return [];
   }
   const chain: string[] = [];

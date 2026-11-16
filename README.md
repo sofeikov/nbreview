@@ -177,6 +177,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.27.2
+- **Go to definition no longer takes an example in a docstring for an import.** A line such as `import shapes as sh` inside a `"""…"""` or `'''…'''` string was read as an import statement, so a Ctrl+click on `sh` later in the file could go to `shapes.py` although the file doesn't import it. Lines inside such strings, and names clicked in them, are now skipped.
+
 ### 0.27.1
 - **Approve and Request changes are greyed out on your own pull request.** GitHub doesn't let the author of a pull request approve it or request changes on it, so submitting either failed with a GraphQL error. In the **Submit review** box both options are now greyed out with a note saying why, and the Submit Review command shows the same note instead of sending the review. Comment works as before.
 

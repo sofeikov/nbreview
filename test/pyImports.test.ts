@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { importedName, importTargets, inCode, moduleFiles, topLevelLine } from '../src/core/pyImports.ts';
+import { importedName, importTargets, inCode, moduleFiles, openStrings, topLevelLine } from '../src/core/pyImports.ts';
 
 /** The targets of a click on the `n`th occurrence of `word` in the source. */
 function at(source: string, word: string, n = 0, filePath = 'pkg/mod.py') {
@@ -114,6 +114,31 @@ test('inCode says whether a column is code, not a comment or a string', () => {
   assert.equal(inCode(`s = "it's" + f'{area}'`, 16), false, 'inside an f-string');
   assert.equal(inCode('s = """doc""" + area', 16), true);
   assert.equal(inCode(String.raw`s = 'a\'b' + area`, 13), true, 'an escaped quote');
+});
+
+test('an import inside a docstring is text, not an import', () => {
+  const doc = '"""How to use it:\n\nimport shapes as sh\n"""\nx = sh.area(1)';
+  assert.deepEqual(at(doc, 'sh', 1), []);
+  assert.deepEqual(at(doc, 'shapes'), [], 'a click on the example itself');
+  const indented = "def f():\n    '''Example.\n\n    from geo import area\n    '''\n    return area(1)";
+  assert.deepEqual(at(indented, 'area', 1), [], "a docstring with '''");
+  const after = '"""Doc."""\nimport geo\n"""\nimport shapes as sh\n"""\ngeo.area(sh)';
+  assert.deepEqual(at(after, 'area')[0], { module: 'geo.area', fromTop: undefined }, 'a docstring closed on its own line');
+  assert.deepEqual(at(after, 'sh', 1), []);
+  const escaped = 's = """a \\""" b\nimport shapes as sh\n"""\nsh.area';
+  assert.deepEqual(at(escaped, 'area'), [], 'an escaped quote doesn\'t end the docstring');
+  assert.deepEqual(at('"""a\n"""import geo\ngeo.area', 'area'), [], 'not a statement: a line that starts in the string');
+  assert.deepEqual(at('"""a\ngeo.area is an example\n"""\nimport geo', 'area'), [], 'a name in a docstring');
+});
+
+test('openStrings says which lines start inside a string of three quotes', () => {
+  assert.deepEqual(openStrings(['x = """a', 'b', 'c"""', "y = '''d'''", '"#"', "z = '''", "'''"]), [
+    undefined, '"""', '"""', undefined, undefined, undefined, "'''",
+  ]);
+  assert.deepEqual(openStrings(["s = 'not \"\"\" open'", 'x']), [undefined, undefined], 'three quotes inside another string');
+  assert.deepEqual(openStrings(['# """ in a comment', 'x']), [undefined, undefined]);
+  assert.equal(inCode('end""" + area', 9, '"""'), true, 'code after the docstring ends');
+  assert.equal(inCode('still a docstring area', 17, '"""'), false);
 });
 
 test('importedName finds a re-export, as in __init__.py', () => {
