@@ -78,6 +78,21 @@ const SKIP = {
   'nbreview.unresolveThread': 'needs a comment thread',
 };
 
+// The test profile's user settings. Values must be in the form the VS Code under test expects:
+// VS Code migrates an old form (`extensions.autoUpdate: false`, now `'off'`) by writing the
+// settings file just after start, and a write at the same time then fails with a dialog.
+const USER_SETTINGS = {
+  // Dialogs in the page, where the driver can see them, instead of native ones.
+  'window.dialogStyle': 'custom',
+  'extensions.autoUpdate': 'off',
+  'extensions.autoCheckUpdates': false,
+  'extensions.autoRestart': false,
+  'update.mode': 'none',
+  'telemetry.telemetryLevel': 'off',
+  'workbench.startupEditor': 'none',
+  'security.workspace.trust.enabled': false,
+};
+
 const repo = resolve('.');
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
 const work = mkdtempSync(join(tmpdir(), 'nbreview-smoke-'));
@@ -189,17 +204,8 @@ async function scenario(name, { exe, cli, install, update, fresh, expect }) {
   mkdirSync(join(profile.userData, 'User'), { recursive: true });
   mkdirSync(smoke, { recursive: true });
   writeFileSync(join(folder, 'README.md'), '# smoke\n');
-  writeFileSync(join(profile.userData, 'User', 'settings.json'), JSON.stringify({
-    // Dialogs in the page, where the driver can see them, instead of native ones.
-    'window.dialogStyle': 'custom',
-    'extensions.autoUpdate': false,
-    'extensions.autoCheckUpdates': false,
-    'extensions.autoRestart': false,
-    'update.mode': 'none',
-    'telemetry.telemetryLevel': 'off',
-    'workbench.startupEditor': 'none',
-    'security.workspace.trust.enabled': false,
-  }));
+  const settingsFile = join(profile.userData, 'User', 'settings.json');
+  writeFileSync(settingsFile, JSON.stringify(USER_SETTINGS));
   const control = phase => writeFileSync(join(smoke, 'control.json'), JSON.stringify({ phase, fresh, run: RUN, skip: SKIP }));
   const installVsix = file => execFileSync(cli, ['--user-data-dir', profile.userData, '--extensions-dir', profile.extensions, '--install-extension', file, '--force'], { stdio: 'ignore' });
 
@@ -271,6 +277,12 @@ async function scenario(name, { exe, cli, install, update, fresh, expect }) {
       await Promise.race([exited, new Promise(r => setTimeout(r, 10000))]);
     }
   }
+  // A setting VS Code rewrote (a migration of an old value) means VS Code wrote the user
+  // settings while the commands ran; a second write at that moment fails with "Unable to write
+  // into user settings because the file has unsaved changes" (issue #25).
+  for (const key of rewrittenSettings(settingsFile)) {
+    notes.push(`VS Code rewrote the setting ${key}: write it in its current form in USER_SETTINGS`);
+  }
   // Errors from Notebook Review in the extension host log.
   for (const line of extensionHostLog(profile.userData)) {
     if (/\[error\]/.test(line) && /nbreview/i.test(line)) {
@@ -278,6 +290,17 @@ async function scenario(name, { exe, cli, install, update, fresh, expect }) {
     }
   }
   return { name, failures, notes, ran };
+}
+
+/** The keys of USER_SETTINGS whose value in the settings file is no longer the one written. */
+function rewrittenSettings(file) {
+  let now;
+  try {
+    now = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return ['(settings.json is not plain JSON any more)'];
+  }
+  return Object.keys(USER_SETTINGS).filter(key => JSON.stringify(now[key]) !== JSON.stringify(USER_SETTINGS[key]));
 }
 
 function lastActivation(smoke) {
