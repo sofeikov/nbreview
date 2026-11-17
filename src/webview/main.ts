@@ -1916,6 +1916,28 @@ function reveal(el: HTMLElement): void {
   el.classList.add('flash');
 }
 
+/**
+ * Scrolls a cross-reference's target to the top of the page, even when it is already in view, and
+ * tints it for a moment, so a click always shows where it went. A table's id is on its caption,
+ * which Quarto puts after the table: the table and its caption both count, from the top of the first.
+ */
+function revealXref(target: HTMLElement): void {
+  const els = [target];
+  if (target.classList.contains('tbl-cap')) {
+    const table = [target.previousElementSibling, target.nextElementSibling].find(el => el?.tagName === 'TABLE');
+    if (table) {
+      els.push(table as HTMLElement);
+    }
+  }
+  const top = Math.min(...els.map(el => el.getBoundingClientRect().top));
+  window.scrollTo({ top: window.scrollY + top - toolbarHeight(), behavior: 'smooth' });
+  for (const el of els) {
+    el.classList.remove('xref-flash');
+    void el.offsetWidth;
+    el.classList.add('xref-flash');
+  }
+}
+
 // Every link opens once, in the browser. Without this, VS Code also follows the link itself, and
 // other extensions (such as GitHub Pull Requests) can open github.com links inside VS Code too.
 window.addEventListener('click', e => {
@@ -1932,7 +1954,7 @@ window.addEventListener('click', e => {
     // A Quarto cross-reference (`@sec-intro`) goes to its section or table, on the same side.
     const target = link.closest('.md-col')?.querySelector<HTMLElement>(`[id="${CSS.escape(decodeURIComponent(href.slice(1)))}"]`);
     if (target) {
-      reveal(target);
+      revealXref(target);
     }
   }
 }, true);

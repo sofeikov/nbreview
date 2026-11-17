@@ -476,7 +476,7 @@ function blocksRule(s: StateCore): void {
       const label = q.eqLabels.get(tok.map[1] - 1);
       if (label) {
         const num = next('eq');
-        tok.meta = { ...tok.meta, eqnum: num };
+        tok.meta = { ...tok.meta, eqnum: num, eqid: label };
         register(label, { prefix: XREF_PREFIXES.eq, num });
       }
     } else if (tok.type === 'quarto_div_open') {
@@ -491,6 +491,11 @@ function blocksRule(s: StateCore): void {
         const id = parseAttrs(text).id;
         if (id?.startsWith('fig-')) {
           register(id, { prefix: XREF_PREFIXES.fig, num: next('fig') });
+          // The figure's paragraph carries its id, which a click on `@fig-…` scrolls to.
+          const open = tokens[i - 1];
+          if (open?.type === 'paragraph_open' && !open.attrGet('id')) {
+            open.attrSet('id', id);
+          }
         }
         return image;
       });
@@ -808,8 +813,10 @@ export function quartoPlugin(md: MarkdownIt): void {
   if (math) {
     r.math_block = (tokens, idx, options, env, self) => {
       const html = math(tokens, idx, options, env, self);
-      const n = tokens[idx].meta?.eqnum as string | undefined;
-      return n ? `<div class="eq">${html}<span class="eqnum">(${n})</span></div>\n` : html;
+      const meta = tokens[idx].meta as { eqnum?: string; eqid?: string } | undefined;
+      const n = meta?.eqnum;
+      // The id is what a click on `@eq-…` scrolls to.
+      return n ? `<div class="eq"${meta.eqid ? ` id="${esc(meta.eqid)}"` : ''}>${html}<span class="eqnum">(${n})</span></div>\n` : html;
     };
   }
 }

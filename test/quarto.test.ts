@@ -79,6 +79,12 @@ test('Quarto: callouts, divs, code cells, raw blocks and shortcodes', () => {
   assert.doesNotMatch(render('![A plot](plot.png){#fig-plot}\n'), /\{#fig-plot\}/);
 });
 
+test('Quarto: equations, tables and figures carry the id a cross-reference scrolls to', () => {
+  assert.match(render('$$\nx = 1\n$$ {#eq-one}\n\nSee @eq-one.\n'), /<div class="eq" id="eq-one">/);
+  assert.match(render('| a |\n|---|\n| 1 |\n\n: Caption {#tbl-a}\n'), /<p class="tbl-cap" id="tbl-a"/);
+  assert.match(render('![A plot](plot.png){#fig-plot}\n'), /<p id="fig-plot"[^>]*><img/);
+});
+
 test('front matter shows as a title block, each field with its own lines', () => {
   const html = render('---\ntitle: The *title*\nsubtitle: Sub\nauthor:\n  - name: Jane Smith\ndate: 2026-11-16\nformat: html\n---\n\nText.\n');
   assert.match(html, /<div class="qmd-fm qmd-title" data-src="1-1">The <em>title<\/em><\/div>/);

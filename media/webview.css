@@ -345,7 +345,12 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .md-col table, .markdown table { border-collapse: collapse; margin: 0.5em 0; }
 .md-col th, .md-col td, .markdown th, .markdown td { border: 1px solid var(--border); padding: 3px 8px; }
 .md-col img { max-width: 100%; }
-.md-col :is(h1, h2, h3, h4, h5, h6, p).flash, .md-col .eq.flash { animation: flash 1.2s ease-out; border-radius: 3px; }
+/* Where a cross-reference leads: a soft tint that fades, so the eye finds it after the scroll. */
+.md-col .xref-flash { animation: xref-flash 1.6s ease-out; border-radius: 3px; }
+@keyframes xref-flash {
+  0%, 25% { background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33)); }
+  100% { background-color: transparent; }
+}
 
 /* Front matter of Markdown and Quarto files, as a title block. */
 .md-col .qmd-title { font-size: 1.7em; font-weight: 600; line-height: 1.25; margin: 0.3em 0 0.1em; }

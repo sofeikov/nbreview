@@ -180,6 +180,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.28.1
+- **Clicking a Quarto cross-reference always shows where it went.** A reference to an equation (`@eq-…`) did nothing, and one to a figure (`@fig-…`) had nowhere to go: both now scroll to their target. A table reference scrolls to the top of the table, not to its caption below it. The target goes to the top of the page even when it was already in view, and is tinted for a moment so the eye finds it.
+
 ### 0.28.0
 - **Quarto (`.qmd`) files are rendered and diffed on the review page**, with the Quarto support of the Markdown Rendered Diff extension: section numbers, cross-references, table captions, equation numbers, citations (author and year from the BibTeX files the front matter names), callouts and other divs, code cells, raw blocks and shortcodes. A new section that renumbers the others doesn't mark the references to them as changed, and a changed citation is marked as one unit. Each paragraph inside a callout has its own `+`, and a click on a cross-reference goes to its section, table or equation. Before, a `.qmd` file showed as plain text.
 - **Front matter as a title block** in Markdown and Quarto files: title, subtitle, authors, date and abstract, then the other keys, each commentable and marked when it changed. Before, a Markdown file's front matter rendered as a heading.

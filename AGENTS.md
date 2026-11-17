@@ -111,8 +111,8 @@ Notebook Review (`KonstantinSofeikov.nbreview`) is a VS Code extension for revie
     1. Confirm the version with the maintainer. Everything must be merged to `main`, with the version bumped in `package.json` and a changelog entry.
     2. Run `npm run typecheck`, `npm test` and `npm run smoke` in `~/my/nbreview` on an up-to-date `main`. CI runs only the first two.
     3. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. The build job fails on a tag that isn't on `main` or doesn't match `package.json`.
-    4. Find the run with `gh run list --workflow release.yml --limit 1`. When it waits for the `marketplace` environment, approve it: `gh api -X POST repos/sofeikov/nbreview/actions/runs/<run id>/pending_deployments -F 'environment_ids[]=26806270688' -f state=approved -f comment='release vX.Y.Z'`. Then `gh run watch <run id>`.
-    5. Check the result: `npx --yes @vscode/vsce show KonstantinSofeikov.nbreview` should list the new version.
+    4. Find the run with `gh run list --workflow release.yml --limit 1`. When it waits for the `marketplace` environment, approve it: `gh api -X POST repos/sofeikov/nbreview/actions/runs/<run id>/pending_deployments -F 'environment_ids[]=26806270688' -f state=approved -f comment='release vX.Y.Z'`.
+    5. **Don't wait for the publish to finish.** Once the run is approved, report the run's link and stop: don't `gh run watch` it or poll the Marketplace. If the maintainer later asks whether it went out, `gh run view <run id>` gives the run's result and `npx --yes @vscode/vsce show KonstantinSofeikov.nbreview` should list the new version.
   - **Never** publish with a personal access token or by hand, and never change the Marketplace policy, the `marketplace` environment or the rulesets without asking. If a release fails, report the log and stop; don't retag or retry on your own.
 - Don't install the extension into the maintainer's VS Code unless asked: the maintainer installs it from the Marketplace.
 - Don't touch global git config, or history outside this repository.
