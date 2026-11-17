@@ -344,6 +344,21 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 }
 .md-col table, .markdown table { border-collapse: collapse; margin: 0.5em 0; }
 .md-col th, .md-col td, .markdown th, .markdown td { border: 1px solid var(--border); padding: 3px 8px; }
+/* Rows of a rendered table are commentable blocks. The button sits in the margin beside the row,
+   the row is tinted under the pointer, and a changed row gets the same bar as a changed paragraph. */
+.md-row > :first-child { position: relative; }
+.md-row > :first-child > .add-comment { left: -22px; top: 50%; margin-top: -9px; }
+.md-row:hover > :first-child > .add-comment, .md-row:focus-within > :first-child > .add-comment { opacity: 1; transform: scale(1); }
+.md-row.can-comment:hover > * { background: color-mix(in srgb, var(--vscode-focusBorder, #3794ff) 9%, transparent); }
+.md-row.changed-add > :first-child { box-shadow: inset 3px 0 0 var(--add-mark); }
+.md-row.changed-del > :first-child { box-shadow: inset 3px 0 0 var(--del-mark); }
+/* An added or removed row is tinted cell by cell; keep the grid lines drawn over the tint. */
+.md-col td.md-added, .md-col th.md-added, .md-col td.md-removed, .md-col th.md-removed { background-clip: padding-box; }
+/* A table with threads spans the column, so a thread is as wide as it is anywhere else. */
+.md-col table:has(> tbody > .md-row-threads, > thead > .md-row-threads) { width: 100%; }
+/* The threads on a row come in a full-width row of their own, without the table's grid. */
+.md-col .md-row-threads > td { border: 0; padding: 0 0 2px; background: transparent; }
+.md-col .md-row-threads .md-threads > * { margin: 6px 0 8px; }
 .md-col img { max-width: 100%; }
 /* Where a cross-reference leads: a soft tint that fades, so the eye finds it after the scroll. */
 .md-col .xref-flash { animation: xref-flash 1.6s ease-out; border-radius: 3px; }

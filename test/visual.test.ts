@@ -425,3 +425,14 @@ test('a changed code block in Markdown marks the changed lines, not the whole bl
   assert.match(head, /<pre class="md-code-diff md-changed" data-src="2-7">/, 'the block keeps its source lines for comments');
   assert.equal((head.match(/class="code-line/g) ?? []).length, 4);
 });
+
+test('every row of a rendered table carries its own source line, so it can be commented on alone', () => {
+  const html = renderMarkdownCell(['Intro', '', '| Setting | Value |', '|---|---|', '| Rate | 3 |', '| Batch | 256 |']);
+  assert.deepEqual([...html.matchAll(/<tr data-src="(\d+-\d+)"/g)].map(m => m[1]), ['2-2', '4-4', '5-5'], 'the header is line 2; the --- line is no row');
+});
+
+test('an added table row has all its cells marked as added', () => {
+  const { head } = renderMarkdownDiff(['| A | B |', '|---|---|', '| 1 | 2 |'], ['| A | B |', '|---|---|', '| 1 | 2 |', '| 3 | 4 |']);
+  assert.match(head, /<tr data-src="2-2">\s*<td>1<\/td>/, 'the unchanged row stays plain');
+  assert.match(head, /<tr data-src="3-3">\s*<td class="md-added">3<\/td>\s*<td class="md-added">4<\/td>/, 'the new row is marked in every cell');
+});

@@ -127,6 +127,30 @@ const quartoBib = parseBibtex(readFileSync('docs/demo/refs.bib', 'utf8'));
 const quartoFile = { filename: 'docs/value.qmd', status: 'modified' as const, additions: 9, deletions: 4, patch: '' };
 const quartoModel = buildFileViewModel(quartoFile, quartoBase, quartoHead, { number: 44, title: 'Explain the value estimates', url: 'https://github.com/' }, undefined, { bibliography: { base: quartoBib, head: quartoBib } });
 
+const quartoThreads = buildFileThreads([
+  {
+    path: quartoFile.filename, side: 'RIGHT', docLine: 27,
+    gh: {
+      id: 'q-thread-1', isResolved: false, isOutdated: false, viewerCanResolve: true, viewerCanUnresolve: false, subjectType: 'LINE',
+      comments: [{
+        id: 'qc-1', author: 'maria', body: '256 fits the small game, but the config in `configs/dqn.toml` uses 64. Which one should readers copy?',
+        createdAt: hoursAgo(4), url: 'https://github.com/', pending: false, viewerCanUpdate: false, viewerCanDelete: false,
+        reactions: [{ content: 'THUMBS_UP', count: 1, viewerHasReacted: false }],
+      }],
+    },
+  },
+  {
+    path: quartoFile.filename, side: 'RIGHT', docLine: 28,
+    gh: {
+      id: 'q-thread-2', isResolved: false, isOutdated: false, viewerCanResolve: false, viewerCanUnresolve: false, subjectType: 'LINE',
+      comments: [{
+        id: 'qc-2', author: 'you', body: 'New row: please say what a "step" is here, an environment step or an update?',
+        createdAt: hoursAgo(0.1), url: '', pending: true, viewerCanUpdate: true, viewerCanDelete: true, reactions: [],
+      }],
+    },
+  },
+] as unknown as FileThread[], () => 'Pending · comment on the table row → docs/value.qmd L29');
+
 // --- The checks: a notebook and a module that add a key, a password, a local path and more -------
 
 // Made-up keys, put together at run time so this file has nothing that looks like a key (GitHub's
@@ -261,6 +285,7 @@ writeFileSync('out/demo/data.js', [
   `window.__FILE_MODEL__ = ${JSON.stringify(fileModel)};`,
   `window.__FILE_THREADS__ = ${JSON.stringify(fileThreads)};`,
   `window.__QUARTO_MODEL__ = ${JSON.stringify(quartoModel)};`,
+  `window.__QUARTO_THREADS__ = ${JSON.stringify(quartoThreads)};`,
   `window.__CHECKS_MODEL__ = ${JSON.stringify(checksModel)};`,
   `window.__CHECKS_FILE_MODEL__ = ${JSON.stringify(checksFileModel)};`,
   `window.__SINCE_MODEL__ = ${JSON.stringify(sinceModel)};`,
@@ -292,7 +317,7 @@ window.acquireVsCodeApi = () => ({
     window.__posted.push(m);
     // Answer like the extension does, so a new comment shows where it will land on GitHub.
     if (m.type === 'plan') {
-      deliver({ type: 'plan', requestId: m.requestId, describe: location.hash.startsWith('#checks') ? 'Will post as a line comment → ' + model.path : 'Will post as a line comment · cell line 2 → ${path} L41' });
+      deliver({ type: 'plan', requestId: m.requestId, describe: location.hash.startsWith('#quarto') ? 'Will post as a line comment → docs/value.qmd L27' : location.hash.startsWith('#checks') ? 'Will post as a line comment → ' + model.path : 'Will post as a line comment · cell line 2 → ${path} L41' });
     }
     if (m.type === 'loadCommits') {
       deliver({ type: 'commits', head: window.__COMMITS__[3].sha, commits: window.__COMMITS__ });
@@ -319,10 +344,10 @@ const scene = location.hash.slice(1);
 // The range picker: #range (on "Since your review", the default) and #range-commit (one earlier
 // commit picked, so the page is read-only).
 const checks = scene.startsWith('checks');
-const models = { file: window.__FILE_MODEL__, quarto: window.__QUARTO_MODEL__, 'checks-file': window.__CHECKS_FILE_MODEL__, range: window.__SINCE_MODEL__, 'range-commit': window.__COMMIT_MODEL__ };
+const models = { file: window.__FILE_MODEL__, quarto: window.__QUARTO_MODEL__, 'quarto-rows': window.__QUARTO_MODEL__, 'checks-file': window.__CHECKS_FILE_MODEL__, range: window.__SINCE_MODEL__, 'range-commit': window.__COMMIT_MODEL__ };
 const model = models[scene] ?? (checks ? window.__CHECKS_MODEL__ : window.__MODEL__);
 deliver({ type: 'model', model });
-deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : checks || scene === 'range-commit' ? [] : window.__THREADS__ });
+deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : scene === 'quarto-rows' ? window.__QUARTO_THREADS__ : checks || scene === 'range-commit' ? [] : window.__THREADS__ });
 if (scene.startsWith('range')) {
   const first = window.__COMMITS__[0].sha;
   panelState.range = scene === 'range'
@@ -355,6 +380,22 @@ if (scene === 'comment') {
   area.value = 'Should other body parts (chest, knee) get their own flag, or is "header vs. not" enough?';
   area.dispatchEvent(new Event('input'));
   scrollTo(document.querySelector('section.cell[data-key="load"]'));
+}
+if (scene === 'quarto-rows') {
+  // The settings table of the Quarto document, with threads on two rows and a comment being
+  // started on the first one; the page is scrolled to the table.
+  const row = [...document.querySelectorAll('.md-col.side-RIGHT .md-row')].find(r => r.textContent.includes('Learning rate'));
+  row.querySelector('.add-comment').click();
+  const area = document.querySelector('.composer textarea');
+  area.value = 'Is this the rate for both networks, or only the online one?';
+  area.dispatchEvent(new Event('input'));
+  // Each column starts at its table; the headings and paragraphs above it are hidden.
+  for (const col of document.querySelectorAll('.md-col')) {
+    const table = col.querySelector('table');
+    for (let prev = table.previousElementSibling; prev; prev = prev.previousElementSibling) {
+      if (!prev.classList.contains('col-label')) { prev.style.display = 'none'; }
+    }
+  }
 }
 if (scene.startsWith('range')) {
   document.querySelector('.range-wrap > button').click();

@@ -180,6 +180,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.29.0
+- **Every row of a rendered table has its own `+`.** In Markdown and Quarto files and in notebook Markdown cells, a table was one block, so a comment on it landed on its last row. Now each row, the header included, is commented on by itself, and the comment goes to that row's line. The row is tinted under the pointer, a row with a changed cell gets the change bar in the margin, and the threads on a row show right below it. A table with threads spans the width of the column.
+
 ### 0.28.1
 - **Clicking a Quarto cross-reference always shows where it went.** A reference to an equation (`@eq-…`) did nothing, and one to a figure (`@fig-…`) had nowhere to go: both now scroll to their target. A table reference scrolls to the top of the table, not to its caption below it. The target goes to the top of the page even when it was already in view, and is tinted for a moment so the eye finds it.
 

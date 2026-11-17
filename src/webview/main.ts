@@ -1025,8 +1025,8 @@ function blockRange(el: HTMLElement): [number, number] | undefined {
  * into, so every list item and quoted paragraph can be commented on by itself. `item` is the
  * list item whose own text `el` holds.
  */
-function commentBlocks(parent: Element): { el: HTMLElement; item?: HTMLElement }[] {
-  const out: { el: HTMLElement; item?: HTMLElement }[] = [];
+function commentBlocks(parent: Element): { el: HTMLElement; item?: HTMLElement; row?: HTMLTableRowElement }[] {
+  const out: { el: HTMLElement; item?: HTMLElement; row?: HTMLTableRowElement }[] = [];
   for (const el of [...parent.children]) {
     if (!(el instanceof HTMLElement) || el.classList.contains('col-label')) {
       continue;
@@ -1034,6 +1034,13 @@ function commentBlocks(parent: Element): { el: HTMLElement; item?: HTMLElement }
     if (el.matches('ul, ol, blockquote, .qdiv')) {
       // A Quarto div (a callout, say) is looked into like a quote: its paragraphs are the blocks.
       out.push(...commentBlocks(el));
+    } else if (el.tagName === 'TABLE') {
+      // A table is looked into like a list: every row is a block, as it is one line of the source.
+      for (const row of el.querySelectorAll<HTMLTableRowElement>(':scope > thead > tr, :scope > tbody > tr, :scope > tr')) {
+        if (blockRange(row)) {
+          out.push({ el: row, row });
+        }
+      }
     } else if (el.tagName === 'LI') {
       // Items of a loose list hold their text in paragraphs, which are blocks of their own. In a
       // tight list the item's text is wrapped, so its button, change bar and threads stay beside
@@ -1055,16 +1062,52 @@ function commentBlocks(parent: Element): { el: HTMLElement; item?: HTMLElement }
   return out;
 }
 
+/**
+ * A row of a rendered table: a comment button beside it, a bar in the margin when a cell changed,
+ * and the threads on its line in a full-width row right below it. The line under the header (the
+ * `---` row) belongs to the header, so a thread made on it elsewhere still lands in the table.
+ */
+function decorateRow(row: HTMLTableRowElement, range: [number, number], side: Side, cellId: string, items: (ThreadVM | Composer)[], placed: Set<ThreadVM | Composer>): void {
+  row.classList.add('md-row');
+  if (row.querySelector('.md-changed, .md-added, .md-removed')) {
+    row.classList.add(side === 'LEFT' ? 'changed-del' : 'changed-add');
+  }
+  const first = row.cells[0];
+  if (commentable(side) && first) {
+    row.classList.add('can-comment');
+    first.prepend(button('+', () => openComposer({ side, cellId, kind: 'source', start: range[0], end: range[1] }), {
+      class: 'add-comment block',
+      title: 'Comment on this row',
+      'aria-label': 'Add comment on this row',
+    }));
+  }
+  const last = range[1] + (row.parentElement?.tagName === 'THEAD' ? 1 : 0);
+  const here = items.filter(x => {
+    const line = x.anchor.end ?? x.anchor.start ?? -1;
+    return line >= range[0] && line <= last && !placed.has(x);
+  });
+  if (here.length) {
+    here.forEach(x => placed.add(x));
+    const cols = [...(row.parentElement?.parentElement as HTMLTableElement | null)?.rows[0]?.cells ?? row.cells].reduce((n, c) => n + c.colSpan, 0);
+    row.after(h('tr', { class: 'md-row-threads' }, h('td', { colspan: cols },
+      h('div', { class: 'md-threads' }, ...here.map(x => ('comments' in x ? renderThread(x) : renderComposer(x)))))));
+  }
+}
+
 function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string): void {
   const placed = new Set<ThreadVM | Composer>();
   const items = [
     ...shown.filter(t => t.anchor.kind === 'source' && t.anchor.side === side && t.anchor.cellId === cellId),
     ...[...composers.values()].filter(x => x.anchor.kind === 'source' && x.anchor.side === side && x.anchor.cellId === cellId),
   ];
-  for (const { el: block, item } of commentBlocks(col)) {
+  for (const { el: block, item, row } of commentBlocks(col)) {
     // A list item's own lines are its text, without its nested list (see render.ts).
     const range = item ? item.dataset.src?.split('-').map(Number) as [number, number] | undefined : blockRange(block);
     if (!range) {
+      continue;
+    }
+    if (row) {
+      decorateRow(row, range, side, cellId, items, placed);
       continue;
     }
     block.classList.add('md-block');
