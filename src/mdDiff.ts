@@ -3,8 +3,9 @@
 // paragraph that changed shows the changed words marked, with its formatting kept, instead of
 // the whole paragraph being highlighted.
 import type MarkdownIt from 'markdown-it';
-import { cellMarkdown, escapeHtml, highlightLines } from './render.ts';
+import { cellMarkdown, escapeHtml, highlightLines, quartoMarkdown } from './render.ts';
 import { diffLines } from './core/cellDiff.ts';
+import { fenceLabel, fenceLanguage } from './core/quarto.ts';
 
 type Token = ReturnType<MarkdownIt['parse']>[number];
 
@@ -29,12 +30,22 @@ interface Atom {
 
 const WORD = /\s+|\p{N}+(?:[.,]\p{N}+)+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu;
 
+/** How the two versions are parsed: by default as notebook Markdown, each with its own env. */
+export interface MarkdownDiffOptions {
+  md?: MarkdownIt;
+  /** Values for the parser rules, such as the front matter and bibliography of a Quarto file. */
+  baseEnv?: Record<string, unknown>;
+  headEnv?: Record<string, unknown>;
+}
+
 /** HTML of both versions of a Markdown cell, with the changes marked. */
-export function renderMarkdownDiff(base: string[], head: string[]): { base: string; head: string } {
-  const md = cellMarkdown;
-  const env = {};
-  const a = md.parse(base.join('\n'), env);
-  const b = md.parse(head.join('\n'), env);
+export function renderMarkdownDiff(base: string[], head: string[], options: MarkdownDiffOptions = {}): { base: string; head: string } {
+  const md = options.md ?? cellMarkdown;
+  // One env per side: a Quarto document numbers its own sections and resolves its own references.
+  const envA = options.baseEnv ?? {};
+  const envB = options.headEnv ?? {};
+  const a = md.parse(base.join('\n'), envA);
+  const b = md.parse(head.join('\n'), envB);
   const leavesA = leaves(a);
   const leavesB = leaves(b);
 
@@ -53,7 +64,7 @@ export function renderMarkdownDiff(base: string[], head: string[]): { base: stri
       for (; j < k; j++) {
         mark(b, added[j], 'md-added');
       }
-      diffPair(a, x, b, added[k]);
+      diffPair(md, a, x, b, added[k]);
       j = k + 1;
     }
     for (; j < added.length; j++) {
@@ -72,7 +83,7 @@ export function renderMarkdownDiff(base: string[], head: string[]): { base: stri
     }
   }
   flush();
-  return { base: md.renderer.render(a, md.options, env), head: md.renderer.render(b, md.options, env) };
+  return { base: md.renderer.render(a, md.options, envA), head: md.renderer.render(b, md.options, envB) };
 }
 
 function leaves(tokens: Token[]): Leaf[] {
@@ -132,7 +143,7 @@ function mark(tokens: Token[], leaf: Leaf, cls: string): void {
   target?.attrJoin('class', cls);
 }
 
-function diffPair(a: Token[], x: Leaf, b: Token[], y: Leaf): void {
+function diffPair(md: MarkdownIt, a: Token[], x: Leaf, b: Token[], y: Leaf): void {
   const ta = a[x.index];
   const tb = b[y.index];
   if (isCode(ta) && isCode(tb)) {
@@ -140,8 +151,8 @@ function diffPair(a: Token[], x: Leaf, b: Token[], y: Leaf): void {
     const linesA = codeLines(ta);
     const linesB = codeLines(tb);
     const ops = diffLines(linesA, linesB);
-    replaceCode(ta, linesA, new Set(ops.flatMap(o => (o.op === 'del' ? [o.base] : []))), 'line-del');
-    replaceCode(tb, linesB, new Set(ops.flatMap(o => (o.op === 'add' ? [o.head] : []))), 'line-ins');
+    replaceCode(md, ta, linesA, new Set(ops.flatMap(o => (o.op === 'del' ? [o.base] : []))), 'line-del');
+    replaceCode(md, tb, linesB, new Set(ops.flatMap(o => (o.op === 'add' ? [o.head] : []))), 'line-ins');
     return;
   }
   if (ta.type !== 'inline' || tb.type !== 'inline') {
@@ -152,8 +163,8 @@ function diffPair(a: Token[], x: Leaf, b: Token[], y: Leaf): void {
   }
   mark(a, x, 'md-changed');
   mark(b, y, 'md-changed');
-  const atomsA = atomize(ta);
-  const atomsB = atomize(tb);
+  const atomsA = atomize(md, ta);
+  const atomsB = atomize(md, tb);
   const ops = diffLines(atomsA.map(t => t.key), atomsB.map(t => t.key));
   const delA = new Set<number>();
   const insB = new Set<number>();
@@ -189,8 +200,7 @@ function bridge(ops: ReturnType<typeof diffLines>, atoms: Atom[], marked: Set<nu
   }
 }
 
-function atomize(inline: Token): Atom[] {
-  const md = cellMarkdown;
+function atomize(md: MarkdownIt, inline: Token): Atom[] {
   const atoms: Atom[] = [];
   const stack: Token[] = [];
   for (const tok of inline.children ?? []) {
@@ -212,9 +222,11 @@ function atomize(inline: Token): Atom[] {
     } else if (tok.type === 'softbreak') {
       atoms.push({ key: `${ctxKey}| `, html: '\n', ctx, space: true });
     } else {
-      // Code spans, inline maths, images, line breaks: one unit each.
+      // Code spans, inline maths, images, line breaks: one unit each. A Quarto cross-reference or
+      // citation is compared by its source, so a renumbered section isn't a change.
       const html = md.renderer.renderInline([tok], md.options, {});
-      atoms.push({ key: `${ctxKey}|${tok.type}:${tok.content}:${html}`, html, ctx, space: false });
+      const what = tok.type.startsWith('quarto_') ? '' : html;
+      atoms.push({ key: `${ctxKey}|${tok.type}:${tok.content}:${what}`, html, ctx, space: false });
     }
   }
   return atoms;
@@ -256,14 +268,19 @@ function codeLines(t: Token): string[] {
  * Renders a code block as highlighted lines with the given ones marked. The block keeps its
  * source lines (`data-src`) so comments still anchor to it, and `md-changed` for the margin bar.
  */
-function replaceCode(t: Token, lines: string[], marked: Set<number>, cls: string): void {
-  const language = t.info.trim().split(/\s+/)[0] || 'plaintext';
+function replaceCode(md: MarkdownIt, t: Token, lines: string[], marked: Set<number>, cls: string): void {
+  const language = fenceLanguage(t.info) || 'plaintext';
   const html = highlightLines(lines, language)
     .map((line, i) => `<span class="code-line${marked.has(i) ? ` ${cls}` : ''}">${line || '&#8203;'}</span>`)
     .join('');
   const src = t.attrGet('data-src') ?? (t.map ? `${t.map[0]}-${Math.max(t.map[0], t.map[1] - 1)}` : '');
   t.type = 'html_block';
   t.content = `<pre class="md-code-diff md-changed" data-src="${escapeHtml(src)}"><code class="hljs">${html}</code></pre>\n`;
+  // A Quarto code cell keeps its label, as when it is rendered unchanged.
+  const label = md === quartoMarkdown ? fenceLabel(t.info, escapeHtml) : '';
+  if (label) {
+    t.content = `<div class="qcell${t.info.trim().startsWith('{=') ? ' raw' : ''}">${label}${t.content.trimEnd()}</div>\n`;
+  }
 }
 
 /** Makes an inline token render as the given HTML. */

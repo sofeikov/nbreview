@@ -10,6 +10,8 @@ import { parseBody } from './core/anchor.ts';
 import type { PendingComment } from './core/pending.ts';
 import { highlightLines, renderCommentBody, renderMarkdownCell } from './render.ts';
 import { renderMarkdownDiff } from './mdDiff.ts';
+import { renderDocument, renderDocumentDiff } from './mdDoc.ts';
+import { bibliographyPaths, parseBibtex, readFrontMatter, type Bibliography } from './core/quarto.ts';
 import type { Anchor, CellVM, CommentVM, OutputVM, PendingVM, ThreadVM, ViewModel } from './webview/protocol.ts';
 
 /** What a page compares when it isn't the whole pull request (see ViewModel.range). */
@@ -50,7 +52,7 @@ const LANGUAGES: Record<string, string> = {
   svg: 'xml', css: 'css', r: 'r', mk: 'makefile',
 };
 
-/** The language a file is highlighted in, or `markdown` for Markdown files, which are rendered. */
+/** The language a file is highlighted in, or `markdown` and `quarto` for the files that are rendered. */
 export function fileLanguage(path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1);
   if (/^(Dockerfile|Containerfile)(\..*)?$/.test(name)) {
@@ -60,7 +62,34 @@ export function fileLanguage(path: string): string {
     return 'makefile';
   }
   const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '';
+  if (ext === 'qmd') {
+    return 'quarto';
+  }
   return ext === 'md' || ext === 'markdown' ? 'markdown' : LANGUAGES[ext] ?? 'plaintext';
+}
+
+/**
+ * The bibliography that a Quarto file's front matter names, for the text of its citations: the
+ * BibTeX files read with `read` (at the same commit as the file) and merged. Undefined when the
+ * file names none, or none could be read; its citations then show their keys.
+ */
+export async function loadBibliography(path: string, text: string | undefined, read: (path: string) => Promise<string | undefined>): Promise<Bibliography | undefined> {
+  if (text === undefined || fileLanguage(path) !== 'quarto') {
+    return undefined;
+  }
+  const files = bibliographyPaths(path, readFrontMatter(text.replace(/\r\n/g, '\n').split('\n')).data);
+  const texts = await Promise.all(files.map(f => read(f).catch(() => undefined)));
+  const found = texts.filter((t): t is string => t !== undefined);
+  if (!found.length) {
+    return undefined;
+  }
+  const bib: Bibliography = new Map();
+  for (const t of found) {
+    for (const [k, v] of parseBibtex(t)) {
+      bib.set(k, v);
+    }
+  }
+  return bib;
 }
 
 /**
@@ -74,15 +103,16 @@ export function buildFileViewModel(
   head: string | undefined,
   pr: { number: number; title: string; url: string },
   range?: PageRange,
-  options: { hideNoise?: boolean } = {},
+  options: { hideNoise?: boolean; bibliography?: { base?: Bibliography; head?: Bibliography } } = {},
 ): ViewModel {
   const language = fileLanguage(file.filename);
+  const rendered = language === 'markdown' || language === 'quarto';
   // An SVG is shown as its source and, below it, as the picture.
   const svg = imageMime(file.filename) === 'image/svg+xml';
   const cell = (text: string | undefined): NbCell[] => (text === undefined ? [] : [{
     index: 0,
     id: 'file',
-    type: language === 'markdown' ? 'markdown' : 'code',
+    type: rendered ? 'markdown' : 'code',
     source: text.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n'),
     jsonLines: [],
     cellJsonLine: 0,
@@ -98,6 +128,7 @@ export function buildFileViewModel(
     pr,
     range,
     hideNoise: !!options.hideNoise,
+    bibliography: options.bibliography,
   });
 }
 
@@ -175,6 +206,8 @@ function modelFromCells(args: {
   pr: { number: number; title: string; url: string };
   range?: PageRange;
   hideNoise: boolean;
+  /** For a Quarto file: the bibliography of each version, for the text of its citations. */
+  bibliography?: { base?: Bibliography; head?: Bibliography };
 }): ViewModel {
   const { range, language } = args;
   const hide = args.hideNoise;
@@ -212,7 +245,7 @@ function modelFromCells(args: {
       headSource: p.head?.source ?? [],
       baseSameAsHead: same || undefined,
       ops: p.lines.map(l => (l.op === 'same' ? { op: 'same', b: l.base, h: l.head } : l.op === 'del' ? { op: 'del', b: l.base } : { op: 'add', h: l.head })),
-      ...markdownHtml(p, same),
+      ...(args.kind === 'file' ? documentHtml(p, same, args) : markdownHtml(p, same)),
       baseOutputs: (p.base?.outputs ?? []).map(outputVM),
       headOutputs: (p.head?.outputs ?? []).map(outputVM),
       title: cellTitle(any),
@@ -253,6 +286,26 @@ function markdownHtml(p: ReturnType<typeof diffCells>[number], same: boolean): {
   return {
     baseHtml: base && !same ? renderMarkdownCell(base.source) : undefined,
     headHtml: head ? renderMarkdownCell(head.source) : undefined,
+  };
+}
+
+/** Rendered Markdown or Quarto file of each version, its front matter as a title block. */
+function documentHtml(
+  p: ReturnType<typeof diffCells>[number],
+  same: boolean,
+  args: { language: string; bibliography?: { base?: Bibliography; head?: Bibliography } },
+): { baseHtml?: string; headHtml?: string } {
+  const base = p.base?.type === 'markdown' ? p.base : undefined;
+  const head = p.head?.type === 'markdown' ? p.head : undefined;
+  const quarto = args.language === 'quarto';
+  const bib = args.bibliography;
+  if (base && head && p.sourceChanged) {
+    const diff = renderDocumentDiff(base.source, head.source, { quarto, baseBibliography: bib?.base, headBibliography: bib?.head });
+    return { baseHtml: diff.base, headHtml: diff.head };
+  }
+  return {
+    baseHtml: base && !same ? renderDocument(base.source, { quarto, bibliography: bib?.base }) : undefined,
+    headHtml: head ? renderDocument(head.source, { quarto, bibliography: bib?.head }) : undefined,
   };
 }
 

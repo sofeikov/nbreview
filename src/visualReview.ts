@@ -527,7 +527,12 @@ export class VisualReview implements vscode.Disposable {
         : 'This is a binary file, so there is nothing to show line by line.';
       return { ...vm.buildFileViewModel(file, undefined, undefined, pr, page), notice };
     }
-    return vm.buildFileViewModel(file, old, head, pr, page, { hideNoise: this.hideNoise() });
+    // A Quarto file's citations show author and year from the BibTeX files it names, at the same commit.
+    const [baseBib, headBib] = await Promise.all([
+      vm.loadBibliography(file.previousFilename ?? path, old, p => s.contentAt(p, r?.from ?? s.pr.baseSha)),
+      vm.loadBibliography(path, head, p => s.contentAt(p, r?.to ?? s.pr.headSha)),
+    ]);
+    return vm.buildFileViewModel(file, old, head, pr, page, { hideNoise: this.hideNoise(), bibliography: { base: baseBib, head: headBib } });
   }
 
   /** An image file as its old and new pictures. */

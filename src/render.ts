@@ -16,6 +16,7 @@ import xml from 'highlight.js/lib/languages/xml';
 import css from 'highlight.js/lib/languages/css';
 import makefile from 'highlight.js/lib/languages/makefile';
 import r from 'highlight.js/lib/languages/r';
+import { quartoPlugin } from './core/quarto.ts';
 
 // Python for notebooks; the rest for the other files of a pull request (see fileLanguage).
 for (const [name, language] of Object.entries({ python, bash, sql, yaml, json, ini, dockerfile, javascript, typescript, xml, css, makefile, r })) {
@@ -29,44 +30,57 @@ function highlightFence(code: string, lang: string): string {
   return '';
 }
 
-const cellMd = new MarkdownIt({ html: true, linkify: true, highlight: highlightFence });
-/** The renderer for notebook Markdown cells, shared with the Markdown diff. */
-export const cellMarkdown = cellMd;
-(cellMd as any).use((katex as any).default ?? katex, { throwOnError: false });
+/**
+ * A parser for Markdown that is shown on the review page (notebook cells, Markdown and Quarto
+ * files), with maths, and with the source lines of every block (see below).
+ */
+function documentMarkdown(): MarkdownIt {
+  const md = new MarkdownIt({ html: true, linkify: true, highlight: highlightFence });
+  (md as any).use((katex as any).default ?? katex, { throwOnError: false });
 
-// Tag every block with the cell source lines it came from, so a comment on a rendered
-// paragraph can be anchored to those lines. A comment lands on the last line of its range, so
-// the range must end on the block's own text: markdown-it counts the blank lines after a list
-// item as part of it, and a list item's lines include its nested list.
-cellMd.core.ruler.push('nbreview_source_lines', state => {
-  const lines = state.src.split('\n');
-  state.tokens.forEach((token, i) => {
-    if (!token.map || token.nesting === -1 || !token.block) {
-      return;
-    }
-    let [start, end] = [token.map[0], token.map[1] - 1];
-    const first = state.tokens[i + 1];
-    if (token.type === 'list_item_open' && first?.type === 'paragraph_open' && first.map) {
-      [start, end] = [first.map[0], first.map[1] - 1];
-    }
-    while (end > start && !lines[end]?.trim()) {
-      end--;
-    }
-    token.attrSet('data-src', `${start}-${Math.max(start, end)}`);
+  // Tag every block with the cell source lines it came from, so a comment on a rendered
+  // paragraph can be anchored to those lines. A comment lands on the last line of its range, so
+  // the range must end on the block's own text: markdown-it counts the blank lines after a list
+  // item as part of it, and a list item's lines include its nested list.
+  md.core.ruler.push('nbreview_source_lines', state => {
+    const lines = state.src.split('\n');
+    state.tokens.forEach((token, i) => {
+      if (!token.map || token.nesting === -1 || !token.block) {
+        return;
+      }
+      let [start, end] = [token.map[0], token.map[1] - 1];
+      const first = state.tokens[i + 1];
+      if (token.type === 'list_item_open' && first?.type === 'paragraph_open' && first.map) {
+        [start, end] = [first.map[0], first.map[1] - 1];
+      }
+      while (end > start && !lines[end]?.trim()) {
+        end--;
+      }
+      token.attrSet('data-src', `${start}-${Math.max(start, end)}`);
+    });
   });
-});
 
-// Display maths is rendered by the KaTeX plugin, which drops token attributes; wrap it so it keeps
-// its source lines like every other block.
-for (const name of Object.keys(cellMd.renderer.rules).filter(n => n.startsWith('math_block'))) {
-  const original = cellMd.renderer.rules[name]!;
-  cellMd.renderer.rules[name] = (tokens, idx, options, env, self) => {
-    const src = tokens[idx].attrGet('data-src');
-    const cls = tokens[idx].attrGet('class');
-    const html = original(tokens, idx, options, env, self);
-    return src ? `<div data-src="${src}"${cls ? ` class="${cls}"` : ''}>${html}</div>` : html;
-  };
+  // Display maths is rendered by the KaTeX plugin, which drops token attributes; wrap it so it keeps
+  // its source lines like every other block.
+  for (const name of Object.keys(md.renderer.rules).filter(n => n.startsWith('math_block'))) {
+    const original = md.renderer.rules[name]!;
+    md.renderer.rules[name] = (tokens, idx, options, env, self) => {
+      const src = tokens[idx].attrGet('data-src');
+      const cls = tokens[idx].attrGet('class');
+      const html = original(tokens, idx, options, env, self);
+      return src ? `<div data-src="${src}"${cls ? ` class="${cls}"` : ''}>${html}</div>` : html;
+    };
+  }
+  return md;
 }
+
+const cellMd = documentMarkdown();
+/** The renderer for notebook Markdown cells and Markdown files, shared with the Markdown diff. */
+export const cellMarkdown = cellMd;
+
+/** The renderer for Quarto (.qmd) files: Markdown with Quarto's syntax (see core/quarto.ts). */
+export const quartoMarkdown = documentMarkdown();
+quartoPlugin(quartoMarkdown);
 
 const commentMd = new MarkdownIt({ html: true, linkify: true, breaks: true, highlight: highlightFence });
 

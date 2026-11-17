@@ -1,0 +1,44 @@
+---
+title: "Quarto fixture"
+author:
+  - name: Jane Smith
+number-sections: true
+bibliography: quarto.bib
+---
+
+## Introduction {#sec-intro}
+
+We follow @smith2020 and the set encoders of [@lee2019, p. 3]. The method is in @sec-method.
+
+## Method {#sec-method}
+
+The loss is @eq-loss. The rungs are in @tbl-rungs.
+
+$$
+L = \sum_i (y_i - \hat y_i)^2
+$$ {#eq-loss}
+
+| Rung | Holds |
+|---|---|
+| `L0` | the ball |
+| `L1` | the players |
+
+: The rungs {#tbl-rungs}
+
+::: {.callout-note}
+The rungs are nested.
+:::
+
+```{python}
+#| echo: false
+x = 1
+```
+
+## Notes {.unnumbered}
+
+Write to someone@example.com.
+
+## References {.unnumbered}
+
+::: {#refs}
+:::

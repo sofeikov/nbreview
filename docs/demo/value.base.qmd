@@ -1,0 +1,28 @@
+---
+title: "Value estimates for a simple game"
+number-sections: true
+bibliography: refs.bib
+---
+
+## Value of a state {#sec-value}
+
+The value of a state is the expected discounted sum of the rewards that follow it [@sutton2018]. @eq-value defines it, and @sec-settings gives the settings.
+
+$$
+V(s_t) = \mathbb{E}\Big[\sum_{k \ge 0} \gamma^k\, r_{t+k+1}\Big]
+$$ {#eq-value}
+
+::: {.callout-note}
+The game ends after $T$ steps.
+:::
+
+## Settings {#sec-settings}
+
+| Setting | Value |
+|---|---|
+| Learning rate | $3 \times 10^{-4}$ |
+| Batch size | 256 |
+
+: Training settings {#tbl-settings}
+
+The values in @tbl-settings are the defaults.

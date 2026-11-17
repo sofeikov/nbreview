@@ -7,6 +7,7 @@ import { parseNotebook } from '../src/core/notebook.ts';
 import { buildReviewDoc, docLineForSource } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
 import { buildFileThreads, buildFileViewModel, buildPendingList, buildThreads, buildViewModel } from '../src/viewModel.ts';
+import { parseBibtex } from '../src/core/quarto.ts';
 import type { FileThread, NotebookEntry, PlacedThread, ReviewSession } from '../src/session.ts';
 import type { GhOverview } from '../src/github.ts';
 import { buildOverview } from '../src/overviewModel.ts';
@@ -117,6 +118,14 @@ const fileThreads = buildFileThreads([
     },
   },
 ] as unknown as FileThread[], () => '');
+
+// --- A Quarto document: a new section that renumbers the rest, a changed citation and callout ---
+
+const quartoBase = readFileSync('docs/demo/value.base.qmd', 'utf8');
+const quartoHead = readFileSync('docs/demo/value.head.qmd', 'utf8');
+const quartoBib = parseBibtex(readFileSync('docs/demo/refs.bib', 'utf8'));
+const quartoFile = { filename: 'docs/value.qmd', status: 'modified' as const, additions: 9, deletions: 4, patch: '' };
+const quartoModel = buildFileViewModel(quartoFile, quartoBase, quartoHead, { number: 44, title: 'Explain the value estimates', url: 'https://github.com/' }, undefined, { bibliography: { base: quartoBib, head: quartoBib } });
 
 // --- The checks: a notebook and a module that add a key, a password, a local path and more -------
 
@@ -251,6 +260,7 @@ writeFileSync('out/demo/data.js', [
   `window.__PENDING__ = ${JSON.stringify(pendingList)};`,
   `window.__FILE_MODEL__ = ${JSON.stringify(fileModel)};`,
   `window.__FILE_THREADS__ = ${JSON.stringify(fileThreads)};`,
+  `window.__QUARTO_MODEL__ = ${JSON.stringify(quartoModel)};`,
   `window.__CHECKS_MODEL__ = ${JSON.stringify(checksModel)};`,
   `window.__CHECKS_FILE_MODEL__ = ${JSON.stringify(checksFileModel)};`,
   `window.__SINCE_MODEL__ = ${JSON.stringify(sinceModel)};`,
@@ -301,7 +311,7 @@ window.acquireVsCodeApi = () => ({
 <script>
 // Scenes for the README screenshots: index.html#outputs (a changed plot), #comment, #submit
 // (#submit-own: on the viewer's own pull request, with Approve and Request changes greyed out), and
-// #file (another file of the pull request). The checks: #checks (a notebook with findings),
+// #file (another file of the pull request), #quarto (a Quarto document). The checks: #checks (a notebook with findings),
 // #checks-list (their list in the toolbar), #checks-comment (a comment started from one) and
 // #checks-file (a Python module with findings). #nav shows code navigation (Ctrl held over a
 // name) and #navtest checks Ctrl+click in the browser, writing the results on the page.
@@ -309,7 +319,7 @@ const scene = location.hash.slice(1);
 // The range picker: #range (on "Since your review", the default) and #range-commit (one earlier
 // commit picked, so the page is read-only).
 const checks = scene.startsWith('checks');
-const models = { file: window.__FILE_MODEL__, 'checks-file': window.__CHECKS_FILE_MODEL__, range: window.__SINCE_MODEL__, 'range-commit': window.__COMMIT_MODEL__ };
+const models = { file: window.__FILE_MODEL__, quarto: window.__QUARTO_MODEL__, 'checks-file': window.__CHECKS_FILE_MODEL__, range: window.__SINCE_MODEL__, 'range-commit': window.__COMMIT_MODEL__ };
 const model = models[scene] ?? (checks ? window.__CHECKS_MODEL__ : window.__MODEL__);
 deliver({ type: 'model', model });
 deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : checks || scene === 'range-commit' ? [] : window.__THREADS__ });

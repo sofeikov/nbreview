@@ -1031,7 +1031,8 @@ function commentBlocks(parent: Element): { el: HTMLElement; item?: HTMLElement }
     if (!(el instanceof HTMLElement) || el.classList.contains('col-label')) {
       continue;
     }
-    if (el.matches('ul, ol, blockquote')) {
+    if (el.matches('ul, ol, blockquote, .qdiv')) {
+      // A Quarto div (a callout, say) is looked into like a quote: its paragraphs are the blocks.
       out.push(...commentBlocks(el));
     } else if (el.tagName === 'LI') {
       // Items of a loose list hold their text in paragraphs, which are blocks of their own. In a
@@ -1927,6 +1928,12 @@ window.addEventListener('click', e => {
   const href = link.getAttribute('href') ?? '';
   if (/^https?:\/\//.test(href)) {
     post({ type: 'openExternal', url: href });
+  } else if (href.startsWith('#') && href.length > 1) {
+    // A Quarto cross-reference (`@sec-intro`) goes to its section or table, on the same side.
+    const target = link.closest('.md-col')?.querySelector<HTMLElement>(`[id="${CSS.escape(decodeURIComponent(href.slice(1)))}"]`);
+    if (target) {
+      reveal(target);
+    }
   }
 }, true);
 

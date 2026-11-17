@@ -312,8 +312,8 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 /* Inside lists and quotes the button sits in the column's margin, level with the top of its block,
    so it doesn't cover a bullet or the quote bar. */
 .md-col { position: relative; }
-.md-col :is(li, blockquote) .md-block { position: static; }
-.md-col :is(li, blockquote) .md-block > .add-comment { left: 4px; top: auto; margin-top: 2px; }
+.md-col :is(li, blockquote, .qdiv) .md-block { position: static; }
+.md-col :is(li, blockquote, .qdiv) .md-block > .add-comment { left: 4px; top: auto; margin-top: 2px; }
 .md-threads > * { margin: 8px 0; }
 
 .markdown h1, .md-col h1 { font-size: 1.6em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
@@ -345,6 +345,47 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .md-col table, .markdown table { border-collapse: collapse; margin: 0.5em 0; }
 .md-col th, .md-col td, .markdown th, .markdown td { border: 1px solid var(--border); padding: 3px 8px; }
 .md-col img { max-width: 100%; }
+.md-col :is(h1, h2, h3, h4, h5, h6, p).flash, .md-col .eq.flash { animation: flash 1.2s ease-out; border-radius: 3px; }
+
+/* Front matter of Markdown and Quarto files, as a title block. */
+.md-col .qmd-title { font-size: 1.7em; font-weight: 600; line-height: 1.25; margin: 0.3em 0 0.1em; }
+.md-col .qmd-subtitle { font-size: 1.2em; color: var(--muted); margin-bottom: 0.3em; }
+.md-col .qmd-author, .md-col .qmd-date { color: var(--muted); }
+.md-col .qmd-abstract { margin: 0.6em 0; font-size: 0.95em; }
+.md-col .qmd-abstract-label { font-weight: 600; }
+.md-col .qmd-meta { font-size: 0.9em; color: var(--muted); margin: 2px 0; }
+.md-col .qmd-meta pre { margin: 2px 0 4px; }
+.md-col .qmd-more { display: inline; }
+.md-col .qmd-more summary { display: inline; cursor: pointer; }
+.md-col .qmd-more summary::marker, .md-col .qmd-more summary::-webkit-details-marker { display: none; }
+.md-col .qmd-more summary::before { content: '▸ '; }
+.md-col .qmd-more[open] summary::before { content: '▾ '; }
+.md-col .qmd-key { font-weight: 600; margin-right: 4px; }
+.md-col .qmd-key::after { content: ':'; }
+.md-col .qmd-fm-error { color: var(--vscode-errorForeground); font-size: 0.9em; }
+.md-col hr.qmd-fm-end { border: 0; border-top: 1px solid var(--border); margin: 0.7em 0; }
+
+/* Quarto: section numbers, cross-references, citations, callouts, code cells and raw blocks. */
+.md-col .secnum, .md-col .cap-label { color: var(--muted); font-weight: 600; margin-right: 2px; }
+.md-col .tbl-cap { font-size: 0.92em; color: var(--muted); }
+.md-col .xref { text-decoration: none; }
+.md-col .xref.missing, .md-col .cite.missing { color: var(--vscode-errorForeground); }
+.md-col .cite { color: var(--vscode-textLink-foreground); }
+.md-col .shortcode { opacity: 0.8; }
+.md-col .eq { display: flex; align-items: center; gap: 12px; }
+.md-col .eq > :first-child { flex: 1; min-width: 0; }
+.md-col .eqnum { color: var(--muted); }
+.md-col .callout { margin: 0.6em 0; padding: 4px 12px 6px; border-left: 4px solid var(--callout, var(--vscode-textLink-foreground)); background: color-mix(in srgb, var(--callout, var(--vscode-textLink-foreground)) 8%, transparent); border-radius: 3px; }
+.md-col .callout-title { font-weight: 600; margin: 2px 0; color: var(--callout, var(--vscode-textLink-foreground)); }
+.md-col .callout-tip { --callout: var(--vscode-charts-green, #388a34); }
+.md-col .callout-warning { --callout: var(--vscode-charts-yellow, #bf8803); }
+.md-col .callout-caution { --callout: var(--vscode-charts-orange, #d18616); }
+.md-col .callout-important { --callout: var(--vscode-charts-red, #e51400); }
+.md-col .quarto-refs { font-style: italic; color: var(--muted); margin: 0.5em 0; }
+.md-col .qcell { margin: 0.5em 0; }
+.md-col .qcell pre { margin-top: 0; }
+.md-col .cell-label { font-size: 0.8em; color: var(--muted); font-family: var(--vscode-editor-font-family); }
+.md-col .qcell.raw pre { opacity: 0.7; }
 .md-col .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
 
 /* --- Outputs ------------------------------------------------------------------------------- */

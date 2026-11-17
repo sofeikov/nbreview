@@ -1,0 +1,33 @@
+---
+title: "Value estimates for a simple game"
+number-sections: true
+bibliography: refs.bib
+---
+
+## Setup {#sec-setup}
+
+The agent sees a state $s_t$ and picks an action $a_t$, as in @mnih2015.
+
+## Value of a state {#sec-value}
+
+The value of a state is the expected discounted sum of the rewards that follow it [@sutton2018, ch. 3]. @eq-value defines it, and @sec-settings gives the settings.
+
+$$
+V(s_t) = \mathbb{E}\Big[\sum_{k \ge 0} \gamma^k\, r_{t+k+1}\Big]
+$$ {#eq-value}
+
+::: {.callout-note}
+The game ends after $T$ steps, or earlier when the agent loses.
+:::
+
+## Settings {#sec-settings}
+
+| Setting | Value |
+|---|---|
+| Learning rate | $3 \times 10^{-4}$ |
+| Batch size | 256 |
+| Target update | every 1000 steps |
+
+: Training settings {#tbl-settings}
+
+The values in @tbl-settings are the defaults.
