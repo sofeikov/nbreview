@@ -76,7 +76,7 @@ test('Quarto: callouts, divs, code cells, raw blocks and shortcodes', () => {
   const callout = render('::: {.callout-warning title="Careful"}\nText.\n:::\n');
   assert.match(callout, /<div class="qdiv callout callout-warning"><div class="callout-title">Careful<\/div>\n<p data-src="1-1">Text\.<\/p>/);
   assert.match(render('::: {.panel-tabset}\nA\n:::\n'), /<div class="qdiv panel-tabset">/);
-  assert.match(render('```{python}\nx = 1\n```\n'), /<div class="qcell"><div class="cell-label">python<\/div><pre><code[^>]*>x = <span class="hljs-number">1<\/span>/, 'highlighted as Python');
+  assert.match(render('```{python}\nx = 1\n```\n'), /<div class="qcell"><div class="cell-label">python<\/div><pre><code data-src="0-2" class="hljs language-python"><span class="code-line" data-src="1-1">x = <span class="hljs-number">1<\/span><\/span>/, 'highlighted as Python, line by line');
   assert.match(render('```{=latex}\n\\newpage\n```\n'), /<div class="qcell raw"><div class="cell-label">raw latex<\/div>/);
   assert.match(render('{{< pagebreak >}}\n'), /<span class="pagebreak">page break<\/span>/);
   assert.match(render('{{< lipsum 2 >}}\n'), /<code class="shortcode" title="Filled in by Quarto[^"]*">\{\{&lt; lipsum 2 &gt;\}\}<\/code>/);
@@ -190,7 +190,7 @@ test('Quarto: hidden code is folded, and figures and tables of cells are numbere
   assert.match(html, /<figure class="qfig" id="fig-a"><div class="qfig-ph">Figure made by this cell when the document is rendered<\/div><figcaption><span class="cap-label">Figure 1:<\/span> A <em>plot<\/em> of <a class="xref" href="#tbl-lit">Table 1<\/a><\/figcaption><\/figure>/);
   assert.match(html, /<figure class="qfig" id="tbl-made">.*<span class="cap-label">Table 2<\/span> <code class="qfig-id">tbl-made<\/code>/);
   assert.match(html, /<div class="qcell diagram"><div class="cell-label">mermaid diagram · drawn when the document is rendered<\/div><figure class="qfig" id="fig-flow"><pre>.*<figcaption><span class="cap-label">Figure 2:<\/span> The flow<\/figcaption>/s);
-  assert.match(html, /<div class="qcell"><div class="cell-label">python<\/div><pre><code[^>]*><span class="hljs-comment">#\| echo: true<\/span>\nshown/, 'options stay in the code under review');
+  assert.match(html, /<div class="qcell"><div class="cell-label">python<\/div><pre><code[^>]*><span class="code-line" data-src="\d+-\d+"><span class="hljs-comment">#\| echo: true<\/span><\/span><span class="code-line" data-src="\d+-\d+">shown/, 'options stay in the code under review');
   // A caption right after a cell that writes Markdown is that of the table the cell writes.
   const written = render('See @tbl-w.\n\n```{python}\n#| output: asis\nprint(table)\n```\n\n: Written {#tbl-w}\n');
   assert.match(text(written), /See Table 1\./);

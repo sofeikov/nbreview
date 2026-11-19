@@ -1021,17 +1021,34 @@ function blockRange(el: HTMLElement): [number, number] | undefined {
 }
 
 /**
- * The blocks of a rendered column that each get a comment button. Lists and quotes are looked
- * into, so every list item and quoted paragraph can be commented on by itself. `item` is the
- * list item whose own text `el` holds.
+ * A block of a rendered column that gets a comment button: `item` is the list item whose own text
+ * `el` holds, `row` a table row, and `code` says `el` is a line of the code block `code.block`.
  */
-function commentBlocks(parent: Element): { el: HTMLElement; item?: HTMLElement; row?: HTMLTableRowElement }[] {
-  const out: { el: HTMLElement; item?: HTMLElement; row?: HTMLTableRowElement }[] = [];
+interface CommentBlock {
+  el: HTMLElement;
+  item?: HTMLElement;
+  row?: HTMLTableRowElement;
+  code?: { block: HTMLElement; first?: number; last?: number };
+}
+
+/**
+ * The blocks of a rendered column that each get a comment button. Lists, quotes, tables and code
+ * blocks are looked into, so every list item, quoted paragraph, table row and code line can be
+ * commented on by itself.
+ */
+function commentBlocks(parent: Element): CommentBlock[] {
+  const out: CommentBlock[] = [];
   for (const el of [...parent.children]) {
     if (!(el instanceof HTMLElement) || el.classList.contains('col-label')) {
       continue;
     }
-    if (el.matches('ul, ol, blockquote, .qdiv')) {
+    const lines = el.matches('pre, .qcell') ? [...el.querySelectorAll<HTMLElement>('pre .code-line[data-src]')] : [];
+    if (lines.length) {
+      // A code block is looked into like a table: every line is a block. The first and last lines
+      // also take the threads on the fences, such as those made on the block before it had lines.
+      const whole = blockRange(el)!;
+      lines.forEach((line, i) => out.push({ el: line, code: { block: el, first: i === 0 ? whole[0] : undefined, last: i === lines.length - 1 ? whole[1] : undefined } }));
+    } else if (el.matches('ul, ol, blockquote, .qdiv')) {
       // A Quarto div (a callout, say) is looked into like a quote: its paragraphs are the blocks.
       out.push(...commentBlocks(el));
     } else if (el.tagName === 'TABLE') {
@@ -1094,13 +1111,51 @@ function decorateRow(row: HTMLTableRowElement, range: [number, number], side: Si
   }
 }
 
+/**
+ * A line of a rendered code block: a comment button beside it, a bar when the line changed, and the
+ * threads on its line right below it, inside the block. The block as a whole keeps the change bar
+ * and tint of a changed block, without a button of its own.
+ */
+function decorateCodeLine(line: HTMLElement, range: [number, number], code: NonNullable<CommentBlock['code']>, side: Side, cellId: string, items: (ThreadVM | Composer)[], placed: Set<ThreadVM | Composer>): void {
+  line.classList.add('md-line');
+  line.closest('pre')?.classList.add('md-lines');
+  const block = code.block;
+  if (!block.classList.contains('md-block')) {
+    block.classList.add('md-block');
+    if (block.matches('.md-changed, .md-added, .md-removed') || block.querySelector('.md-changed, .md-added, .md-removed')) {
+      block.classList.add(side === 'LEFT' ? 'changed-del' : 'changed-add');
+    }
+  }
+  if (line.matches('.line-ins, .line-del')) {
+    line.classList.add(side === 'LEFT' ? 'changed-del' : 'changed-add');
+  }
+  if (commentable(side)) {
+    line.classList.add('can-comment');
+    line.prepend(button('+', () => openComposer({ side, cellId, kind: 'source', start: range[0], end: range[1] }), {
+      class: 'add-comment block',
+      title: 'Comment on this line',
+      'aria-label': 'Add comment on this line',
+    }));
+  }
+  const from = code.first ?? range[0];
+  const to = code.last ?? range[1];
+  const here = items.filter(x => {
+    const n = x.anchor.end ?? x.anchor.start ?? -1;
+    return n >= from && n <= to && !placed.has(x);
+  });
+  if (here.length) {
+    here.forEach(x => placed.add(x));
+    line.after(h('div', { class: 'md-threads md-line-threads' }, ...here.map(x => ('comments' in x ? renderThread(x) : renderComposer(x)))));
+  }
+}
+
 function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string): void {
   const placed = new Set<ThreadVM | Composer>();
   const items = [
     ...shown.filter(t => t.anchor.kind === 'source' && t.anchor.side === side && t.anchor.cellId === cellId),
     ...[...composers.values()].filter(x => x.anchor.kind === 'source' && x.anchor.side === side && x.anchor.cellId === cellId),
   ];
-  for (const { el: block, item, row } of commentBlocks(col)) {
+  for (const { el: block, item, row, code } of commentBlocks(col)) {
     // A list item's own lines are its text, without its nested list (see render.ts).
     const range = item ? item.dataset.src?.split('-').map(Number) as [number, number] | undefined : blockRange(block);
     if (!range) {
@@ -1108,6 +1163,10 @@ function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string)
     }
     if (row) {
       decorateRow(row, range, side, cellId, items, placed);
+      continue;
+    }
+    if (code) {
+      decorateCodeLine(block, range, code, side, cellId, items, placed);
       continue;
     }
     block.classList.add('md-block');
@@ -1138,11 +1197,14 @@ function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string)
     col.append(h('div', { class: 'md-threads' }, ...rest.map(x => ('comments' in x ? renderThread(x) : renderComposer(x)))));
   }
   // Code a Quarto document doesn't show is folded; one opened or closed by hand stays so when the
-  // page is drawn again.
+  // page is drawn again, and one with threads on its lines starts open.
   for (const d of col.querySelectorAll<HTMLDetailsElement>('details.qcode')) {
     const key = `qcode:${c.key}:${side}:${d.querySelector<HTMLElement>('[data-src]')?.dataset.src ?? ''}`;
     if (key in ui.expanded) {
       d.open = ui.expanded[key];
+    } else if (d.querySelector('.md-threads')) {
+      // A thread on a line of folded code is not hidden until it is closed by hand.
+      d.open = true;
     }
     d.addEventListener('toggle', () => {
       ui.expanded[key] = d.open;
@@ -1974,11 +2036,17 @@ function reveal(el: HTMLElement): void {
  * Scrolls a cross-reference's target to the top of the page, even when it is already in view, and
  * tints it for a moment, so a click always shows where it went. A table's id is on its caption,
  * which Quarto puts after the table: the table and its caption both count, from the top of the first.
+ * A figure or table that a code cell makes is the whole cell: its code and its caption.
  */
 function revealXref(target: HTMLElement): void {
-  const els = [target];
+  const els = [target.closest<HTMLElement>('.qcell') ?? target];
   if (target.classList.contains('tbl-cap')) {
-    const table = [target.previousElementSibling, target.nextElementSibling].find(el => el?.tagName === 'TABLE');
+    // The table above the caption, or the cell that prints it; threads can sit in between.
+    let before = target.previousElementSibling;
+    while (before?.classList.contains('md-threads')) {
+      before = before.previousElementSibling;
+    }
+    const table = [before, target.nextElementSibling].find(el => el?.tagName === 'TABLE' || el?.classList.contains('qcell'));
     if (table) {
       els.push(table as HTMLElement);
     }

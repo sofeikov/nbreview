@@ -18,6 +18,8 @@ import makefile from 'highlight.js/lib/languages/makefile';
 import r from 'highlight.js/lib/languages/r';
 import { quartoPlugin } from './core/quarto.ts';
 
+type Token = ReturnType<MarkdownIt['parse']>[number];
+
 // Python for notebooks; the rest for the other files of a pull request (see fileLanguage).
 for (const [name, language] of Object.entries({ python, bash, sql, yaml, json, ini, dockerfile, javascript, typescript, xml, css, makefile, r })) {
   hljs.registerLanguage(name, language);
@@ -28,6 +30,32 @@ function highlightFence(code: string, lang: string): string {
     return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
   }
   return '';
+}
+
+/**
+ * A code block as highlighted lines, each with its source line (`data-src`): `skip` is the number
+ * of lines before the code, 1 for the opening fence. The block keeps its own source lines on `<code>`.
+ */
+function codeBlockHtml(t: Token, lang: string, skip: number): string {
+  const lines = t.content.replace(/\n$/, '').split('\n');
+  const known = !!lang && !!hljs.getLanguage(lang);
+  const first = t.map ? t.map[0] + skip : undefined;
+  return codeLinesHtml(highlightLines(lines, known ? lang : 'plaintext'), first, [], {
+    pre: '',
+    code: [...(t.attrs ?? []).filter(([k]) => k !== 'class'), ['class', ['hljs', known ? `language-${lang}` : '', t.attrGet('class') ?? ''].filter(Boolean).join(' ')]],
+  });
+}
+
+/**
+ * Highlighted lines in a `<pre>`: each line a `code-line` span with its source line when `first`
+ * is known, and the class in `marks[i]` (a changed line) when given.
+ */
+export function codeLinesHtml(lines: string[], first: number | undefined, marks: (string | undefined)[], attrs: { pre: string; code: [string, string][] }): string {
+  const body = lines
+    .map((line, i) => `<span class="code-line${marks[i] ? ` ${marks[i]}` : ''}"${first !== undefined ? ` data-src="${first + i}-${first + i}"` : ''}>${line || '&#8203;'}</span>`)
+    .join('');
+  const code = attrs.code.map(([k, v]) => ` ${k}="${escapeHtml(v)}"`).join('');
+  return `<pre${attrs.pre}><code${code}>${body}</code></pre>\n`;
 }
 
 /**
@@ -59,6 +87,12 @@ function documentMarkdown(): MarkdownIt {
       token.attrSet('data-src', `${start}-${Math.max(start, end)}`);
     });
   });
+
+  // A code block is drawn line by line, each line with its own source line, so a comment can go on
+  // one line of it, as on a line of a code cell. (The KaTeX plugin is set up without fenced maths,
+  // so a ```math block is code here too.)
+  md.renderer.rules.fence = (tokens, idx) => codeBlockHtml(tokens[idx], tokens[idx].info.trim().split(/\s+/)[0] ?? '', 1);
+  md.renderer.rules.code_block = (tokens, idx) => codeBlockHtml(tokens[idx], '', 0);
 
   // Display maths is rendered by the KaTeX plugin, which drops token attributes; wrap it so it keeps
   // its source lines like every other block.

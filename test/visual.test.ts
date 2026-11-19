@@ -419,11 +419,22 @@ test('a changed code block in Markdown marks the changed lines, not the whole bl
   const tree = ['# Layout', '', '```', 'nbs/', '  a.ipynb    Loads data', '  c.ipynb    Trains', '```'];
   const grown = ['# Layout', '', '```', 'nbs/', '  a.ipynb    Loads data', '  b.ipynb    The pitch grid', '  c.ipynb    Trains', '```'];
   const { base, head } = renderMarkdownDiff(tree, grown);
-  const marked = (html: string, cls: string) => [...html.matchAll(new RegExp(`class="code-line ${cls}">([^<]*)`, 'g'))].map(m => m[1]);
+  const marked = (html: string, cls: string) => [...html.matchAll(new RegExp(`class="code-line ${cls}"[^>]*>([^<]*)`, 'g'))].map(m => m[1]);
   assert.deepEqual(marked(head, 'line-ins'), ['  b.ipynb    The pitch grid']);
   assert.deepEqual(marked(base, 'line-del'), []);
   assert.match(head, /<pre class="md-code-diff md-changed" data-src="2-7">/, 'the block keeps its source lines for comments');
   assert.equal((head.match(/class="code-line/g) ?? []).length, 4);
+  // Each line keeps its own source line, after the opening fence, so it takes a comment by itself.
+  assert.match(head, /<span class="code-line line-ins" data-src="5-5">  b\.ipynb/);
+  assert.match(base, /<span class="code-line" data-src="3-3">nbs\/<\/span>/);
+});
+
+test('every line of a rendered code block carries its own source line', () => {
+  const html = renderMarkdownCell(['Intro', '', '```python', 'a = 1', '', 'b = 2', '```', '', '    indented', '    code']);
+  assert.match(html, /<pre><code data-src="2-6" class="hljs language-python"><span class="code-line" data-src="3-3">a = <span class="hljs-number">1<\/span><\/span><span class="code-line" data-src="4-4">&#8203;<\/span><span class="code-line" data-src="5-5">b = /);
+  assert.match(html, /<span class="code-line" data-src="8-8">indented<\/span><span class="code-line" data-src="9-9">code<\/span>/, 'an indented block has no fence line');
+  assert.match(renderMarkdownCell(['```text', '<b>', '```']), /data-src="1-1">&lt;b&gt;<\/span>/, 'an unknown language is escaped');
+  assert.match(renderMarkdownCell(['```math', 'x^2', '```']), /class="hljs"><span class="code-line" data-src="1-1">x\^2/, 'fenced maths stays code, as before');
 });
 
 test('every row of a rendered table carries its own source line, so it can be commented on alone', () => {

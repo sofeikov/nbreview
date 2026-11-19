@@ -303,7 +303,18 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 /* Formulas and code blocks change as a whole: tint them on each side. */
 .md-col .changed-del div.md-changed, .md-col div.md-changed.changed-del, .md-col .changed-del pre:has(code.md-changed) { background: color-mix(in srgb, var(--del-line) 55%, transparent); border-radius: 3px; }
 .md-col .changed-add div.md-changed, .md-col div.md-changed.changed-add, .md-col .changed-add pre:has(code.md-changed) { background: color-mix(in srgb, var(--add-line) 55%, transparent); border-radius: 3px; }
-.md-code-diff .code-line { display: block; min-height: 1.2em; }
+.md-col pre .code-line { display: block; min-height: 1.2em; }
+/* Lines of a rendered code block are commentable blocks. The block scrolls sideways, so its left
+   padding makes room for the button inside it; the line is tinted under the pointer, a changed
+   line gets a bar, and the threads on a line come right below it, in the page's own text. */
+.md-col pre.md-lines { padding-left: 28px; }
+.md-col .md-line { position: relative; }
+.md-col .md-line > .add-comment { left: -25px; top: 50%; margin-top: -9px; user-select: none; }
+.md-col .md-line:hover > .add-comment, .md-col .md-line:focus-within > .add-comment { opacity: 1; transform: scale(1); }
+.md-col .md-line.can-comment:hover { background: color-mix(in srgb, var(--vscode-focusBorder, #3794ff) 9%, transparent); }
+.md-col .md-line.changed-add { box-shadow: inset 3px 0 0 var(--add-mark); }
+.md-col .md-line.changed-del { box-shadow: inset 3px 0 0 var(--del-mark); }
+.md-col pre .md-line-threads { white-space: normal; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); margin: 4px 0 8px; }
 .md-code-diff .line-ins { background: color-mix(in srgb, var(--add-mark) 30%, transparent); }
 .md-code-diff .line-del { background: color-mix(in srgb, var(--del-mark) 30%, transparent); }
 .md-col .md-added { background: color-mix(in srgb, var(--add-line) 60%, transparent); border-radius: 3px; }
@@ -591,7 +602,7 @@ textarea {
   line-height: 1.45;
 }
 .actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
-.actions .hint { flex: 1; color: var(--muted); font-size: 11px; min-width: 120px; }
+.actions .hint { flex: 1; color: var(--muted); font-size: 11px; min-width: 120px; overflow-wrap: anywhere; }
 .composer { padding: 8px 12px 10px; border-color: var(--accent); }
 .submit-buttons { display: inline-flex; gap: 6px; }
 .composer-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }

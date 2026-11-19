@@ -3,7 +3,7 @@
 // paragraph that changed shows the changed words marked, with its formatting kept, instead of
 // the whole paragraph being highlighted.
 import type MarkdownIt from 'markdown-it';
-import { cellMarkdown, escapeHtml, highlightLines, quartoMarkdown } from './render.ts';
+import { cellMarkdown, codeLinesHtml, escapeHtml, highlightLines, quartoMarkdown } from './render.ts';
 import { diffLines } from './core/cellDiff.ts';
 import { cellHtml, fenceLabel, fenceLanguage } from './core/quarto.ts';
 
@@ -270,11 +270,11 @@ function codeLines(t: Token): string[] {
  */
 function replaceCode(md: MarkdownIt, t: Token, lines: string[], marked: Set<number>, cls: string, env: Record<string, unknown>): void {
   const language = fenceLanguage(t.info) || 'plaintext';
-  const html = highlightLines(lines, language)
-    .map((line, i) => `<span class="code-line${marked.has(i) ? ` ${cls}` : ''}">${line || '&#8203;'}</span>`)
-    .join('');
   const src = t.attrGet('data-src') ?? (t.map ? `${t.map[0]}-${Math.max(t.map[0], t.map[1] - 1)}` : '');
-  const pre = `<pre class="md-code-diff md-changed" data-src="${escapeHtml(src)}"><code class="hljs">${html}</code></pre>`;
+  // Each line keeps its own source line, after the opening fence, so it takes comments by itself.
+  const first = t.map ? t.map[0] + (t.type === 'fence' ? 1 : 0) : undefined;
+  const marks = lines.map((_l, i) => (marked.has(i) ? cls : undefined));
+  const pre = codeLinesHtml(highlightLines(lines, language), first, marks, { pre: ` class="md-code-diff md-changed" data-src="${escapeHtml(src)}"`, code: [['class', 'hljs']] }).trimEnd();
   // A Quarto code cell keeps its label, figures and folding, as when it is rendered unchanged.
   t.content = md === quartoMarkdown && fenceLabel(t.info, escapeHtml) ? cellHtml(md, t, pre, env) : `${pre}\n`;
   t.type = 'html_block';
