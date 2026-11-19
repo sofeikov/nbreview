@@ -406,6 +406,32 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .md-col .qcell pre { margin-top: 0; }
 .md-col .cell-label { font-size: 0.8em; color: var(--muted); font-family: var(--vscode-editor-font-family); }
 .md-col .qcell.raw pre { opacity: 0.7; }
+/* Code the document doesn't show, folded; figures and tables a cell makes, as placeholders. */
+.md-col .qcode > summary { cursor: pointer; list-style: none; padding: 2px 0; }
+.md-col .qcode > summary::-webkit-details-marker { display: none; }
+.md-col .qcode > summary::before { content: '▸ '; }
+.md-col .qcode[open] > summary::before { content: '▾ '; }
+.md-col .qcode[open] > summary { margin-bottom: 2px; }
+.md-col .qcell.code-excluded > .qcode > summary { opacity: 0.7; }
+.md-col .qfig { margin: 0.5em 0 0.8em; }
+.md-col .qfig > pre { margin: 0; }
+.md-col .qfig-id { font-size: 0.85em; color: var(--muted); }
+.md-col .qfig-ph { display: flex; align-items: center; justify-content: center; min-height: 40px; padding: 6px 12px; border: 1px dashed var(--border); border-radius: 4px; color: var(--muted); font-size: 0.9em; text-align: center; }
+.md-col .qfig figcaption { margin-top: 4px; font-size: 0.95em; }
+.md-col .qcell.diagram .qfig > pre { border-left: 3px solid var(--border); }
+/* Inline expressions: the value Quarto computes, shown by the code that computes it. */
+.md-col .qexpr { font-size: 0.85em; padding: 0 4px; border: 1px dotted var(--muted); border-radius: 3px; background: transparent; white-space: nowrap; cursor: help; }
+.md-col .shortcode-value { border-bottom: 1px dotted var(--muted); }
+.md-col .shortcode.missing { color: var(--vscode-errorForeground); }
+.md-col .pagebreak { display: inline-block; font-size: 0.8em; color: var(--muted); border-top: 1px dashed var(--border); padding: 0 8px; }
+.md-col kbd { font-family: var(--vscode-editor-font-family); font-size: 0.85em; padding: 0 4px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 3px; }
+/* Included files, and divs that lay out or condition their content. */
+.md-col .qinclude { margin: 0.6em 0; padding: 2px 12px 4px; border-left: 3px solid var(--border); }
+.md-col .qinclude-label, .md-col .qdiv-label { font-size: 0.8em; color: var(--muted); margin: 2px 0; }
+.md-col .qinclude.missing .qinclude-label { color: var(--vscode-errorForeground); }
+.md-col .qdiv:has(> .qdiv-label) { margin: 0.6em 0; padding: 2px 12px 4px; border: 1px dashed var(--border); border-radius: 4px; }
+.md-col .qdiv.columns { display: flex; gap: 16px; }
+.md-col .qdiv.column { flex: 1 1 0; min-width: 0; }
 .md-col .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
 
 /* --- Outputs ------------------------------------------------------------------------------- */

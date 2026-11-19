@@ -6,12 +6,13 @@
 import type MarkdownIt from 'markdown-it';
 import { cellMarkdown, escapeHtml, quartoMarkdown } from './render.ts';
 import { renderMarkdownDiff } from './mdDiff.ts';
-import { authorNames, blankFrontMatter, readFrontMatter, type Bibliography, type FrontMatter, type FrontMatterField } from './core/quarto.ts';
+import { authorNames, blankFrontMatter, mergeMeta, readFrontMatter, type FrontMatter, type FrontMatterField, type QuartoContext } from './core/quarto.ts';
 
 export interface DocOptions {
   /** Read Quarto's syntax (a .qmd file). */
   quarto?: boolean;
-  bibliography?: Bibliography;
+  /** For a Quarto file: its project, bibliography and included files. */
+  context?: QuartoContext;
 }
 
 /** The fields of a title block, in the order Quarto shows them. */
@@ -21,7 +22,7 @@ const TITLE_BLOCK = ['title', 'subtitle', 'author', 'date', 'abstract'];
 export function renderDocument(source: string[], options: DocOptions = {}): string {
   const md = options.quarto ? quartoMarkdown : cellMarkdown;
   const fm = readFrontMatter(source);
-  const env = { frontMatter: fm.data, bibliography: options.bibliography };
+  const env = docEnv(fm, options.context);
   return frontMatterHtml(md, fm, new Map(), env) + md.render(blankFrontMatter(source, fm).join('\n'), env);
 }
 
@@ -29,17 +30,29 @@ export function renderDocument(source: string[], options: DocOptions = {}): stri
 export function renderDocumentDiff(
   base: string[],
   head: string[],
-  options: { quarto?: boolean; baseBibliography?: Bibliography; headBibliography?: Bibliography } = {},
+  options: { quarto?: boolean; base?: QuartoContext; head?: QuartoContext } = {},
 ): { base: string; head: string } {
   const md = options.quarto ? quartoMarkdown : cellMarkdown;
   const fmA = readFrontMatter(base);
   const fmB = readFrontMatter(head);
-  const baseEnv = { frontMatter: fmA.data, bibliography: options.baseBibliography };
-  const headEnv = { frontMatter: fmB.data, bibliography: options.headBibliography };
+  const baseEnv = docEnv(fmA, options.base);
+  const headEnv = docEnv(fmB, options.head);
   const diff = renderMarkdownDiff(blankFrontMatter(base, fmA), blankFrontMatter(head, fmB), { md, baseEnv, headEnv });
   return {
     base: frontMatterHtml(md, fmA, fieldMarks(fmA, fmB, 'md-removed'), baseEnv) + diff.base,
     head: frontMatterHtml(md, fmB, fieldMarks(fmB, fmA, 'md-added'), headEnv) + diff.head,
+  };
+}
+
+/**
+ * The parser env of one version: the project's metadata under the front matter's, which is what
+ * section numbers and cell options read, the bibliography, and the rest of the context.
+ */
+function docEnv(fm: FrontMatter, context: QuartoContext | undefined): Record<string, unknown> {
+  return {
+    frontMatter: context?.project ? mergeMeta(context.project, fm.data) : fm.data,
+    bibliography: context?.bibliography,
+    quartoContext: context,
   };
 }
 

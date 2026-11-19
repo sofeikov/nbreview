@@ -11,7 +11,7 @@ import type { PendingComment } from './core/pending.ts';
 import { highlightLines, renderCommentBody, renderMarkdownCell } from './render.ts';
 import { renderMarkdownDiff } from './mdDiff.ts';
 import { renderDocument, renderDocumentDiff } from './mdDoc.ts';
-import { bibliographyPaths, parseBibtex, readFrontMatter, type Bibliography } from './core/quarto.ts';
+import { bibliographyPaths, includePaths, mergeMeta, parentDirs, parseBibtex, readFrontMatter, readYaml, type QuartoContext } from './core/quarto.ts';
 import type { Anchor, CellVM, CommentVM, OutputVM, PendingVM, ThreadVM, ViewModel } from './webview/protocol.ts';
 
 /** What a page compares when it isn't the whole pull request (see ViewModel.range). */
@@ -69,27 +69,62 @@ export function fileLanguage(path: string): string {
 }
 
 /**
- * The bibliography that a Quarto file's front matter names, for the text of its citations: the
- * BibTeX files read with `read` (at the same commit as the file) and merged. Undefined when the
- * file names none, or none could be read; its citations then show their keys.
+ * What a Quarto file takes from the files around it, read with `read` at the same commit as the
+ * file: the nearest `_quarto.yml` above it and the `_metadata.yml` files between, the project's
+ * `_variables.yml`, the BibTeX files its metadata names (merged), and the files it includes.
+ * Undefined for any other file. A file that isn't there reads as undefined.
  */
-export async function loadBibliography(path: string, text: string | undefined, read: (path: string) => Promise<string | undefined>): Promise<Bibliography | undefined> {
+export async function loadQuartoContext(path: string, text: string | undefined, read: (path: string) => Promise<string | undefined>): Promise<QuartoContext | undefined> {
   if (text === undefined || fileLanguage(path) !== 'quarto') {
     return undefined;
   }
-  const files = bibliographyPaths(path, readFrontMatter(text.replace(/\r\n/g, '\n').split('\n')).data);
-  const texts = await Promise.all(files.map(f => read(f).catch(() => undefined)));
-  const found = texts.filter((t): t is string => t !== undefined);
-  if (!found.length) {
-    return undefined;
+  const get = (p: string) => read(p).catch(() => undefined);
+  const at = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
+  const dirs = parentDirs(path);
+  const projects = await Promise.all(dirs.map(d => get(at(d, '_quarto.yml'))));
+  const k = projects.findIndex(t => t !== undefined);
+  const projectDir = k < 0 ? undefined : dirs[k];
+  // Directory metadata applies from the project folder down to the document's.
+  const metaDirs = projectDir === undefined ? [] : dirs.slice(0, k + 1).reverse();
+  const [metas, vars] = await Promise.all([
+    Promise.all(metaDirs.map(d => get(at(d, '_metadata.yml')))),
+    projectDir === undefined ? undefined : get(at(projectDir, '_variables.yml')),
+  ]);
+  // `project:` holds the project's own settings, not metadata.
+  const projectMeta = { ...readYaml(projects[k]) };
+  delete projectMeta.project;
+  const project = projectDir === undefined ? undefined : mergeMeta(projectMeta, ...metas.map(readYaml));
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const own = readFrontMatter(lines).data;
+  // A bibliography is relative to the file that names it: the document, or the project.
+  const bibFiles = own?.bibliography !== undefined
+    ? bibliographyPaths(path, own)
+    : project?.bibliography !== undefined ? bibliographyPaths(at(projectDir!, '_quarto.yml'), project) : [];
+  const ctx: QuartoContext = { path, projectDir, project, vars: readYaml(vars), includes: new Map() };
+  // Includes, and what they include, two levels down.
+  let todo = includePaths(path, text, projectDir);
+  for (let depth = 0; depth < 3 && todo.length; depth++) {
+    const texts = await Promise.all(todo.map(get));
+    const next: string[] = [];
+    todo.forEach((p, i) => {
+      const t = texts[i];
+      if (t !== undefined && !ctx.includes!.has(p)) {
+        ctx.includes!.set(p, t);
+        next.push(...includePaths(p, t, projectDir));
+      }
+    });
+    todo = next.filter(p => !ctx.includes!.has(p));
   }
-  const bib: Bibliography = new Map();
-  for (const t of found) {
-    for (const [k, v] of parseBibtex(t)) {
-      bib.set(k, v);
+  const bibs = (await Promise.all(bibFiles.map(get))).filter((t): t is string => t !== undefined);
+  if (bibs.length) {
+    ctx.bibliography = new Map();
+    for (const t of bibs) {
+      for (const [key, v] of parseBibtex(t)) {
+        ctx.bibliography.set(key, v);
+      }
     }
   }
-  return bib;
+  return ctx;
 }
 
 /**
@@ -103,7 +138,7 @@ export function buildFileViewModel(
   head: string | undefined,
   pr: { number: number; title: string; url: string },
   range?: PageRange,
-  options: { hideNoise?: boolean; bibliography?: { base?: Bibliography; head?: Bibliography } } = {},
+  options: { hideNoise?: boolean; quarto?: { base?: QuartoContext; head?: QuartoContext } } = {},
 ): ViewModel {
   const language = fileLanguage(file.filename);
   const rendered = language === 'markdown' || language === 'quarto';
@@ -128,7 +163,7 @@ export function buildFileViewModel(
     pr,
     range,
     hideNoise: !!options.hideNoise,
-    bibliography: options.bibliography,
+    quarto: options.quarto,
   });
 }
 
@@ -206,8 +241,8 @@ function modelFromCells(args: {
   pr: { number: number; title: string; url: string };
   range?: PageRange;
   hideNoise: boolean;
-  /** For a Quarto file: the bibliography of each version, for the text of its citations. */
-  bibliography?: { base?: Bibliography; head?: Bibliography };
+  /** For a Quarto file: what each version takes from its project (see loadQuartoContext). */
+  quarto?: { base?: QuartoContext; head?: QuartoContext };
 }): ViewModel {
   const { range, language } = args;
   const hide = args.hideNoise;
@@ -293,19 +328,19 @@ function markdownHtml(p: ReturnType<typeof diffCells>[number], same: boolean): {
 function documentHtml(
   p: ReturnType<typeof diffCells>[number],
   same: boolean,
-  args: { language: string; bibliography?: { base?: Bibliography; head?: Bibliography } },
+  args: { language: string; quarto?: { base?: QuartoContext; head?: QuartoContext } },
 ): { baseHtml?: string; headHtml?: string } {
   const base = p.base?.type === 'markdown' ? p.base : undefined;
   const head = p.head?.type === 'markdown' ? p.head : undefined;
   const quarto = args.language === 'quarto';
-  const bib = args.bibliography;
+  const ctx = args.quarto;
   if (base && head && p.sourceChanged) {
-    const diff = renderDocumentDiff(base.source, head.source, { quarto, baseBibliography: bib?.base, headBibliography: bib?.head });
+    const diff = renderDocumentDiff(base.source, head.source, { quarto, base: ctx?.base, head: ctx?.head });
     return { baseHtml: diff.base, headHtml: diff.head };
   }
   return {
-    baseHtml: base && !same ? renderDocument(base.source, { quarto, bibliography: bib?.base }) : undefined,
-    headHtml: head ? renderDocument(head.source, { quarto, bibliography: bib?.head }) : undefined,
+    baseHtml: base && !same ? renderDocument(base.source, { quarto, context: ctx?.base }) : undefined,
+    headHtml: head ? renderDocument(head.source, { quarto, context: ctx?.head }) : undefined,
   };
 }
 

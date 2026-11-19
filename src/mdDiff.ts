@@ -5,7 +5,7 @@
 import type MarkdownIt from 'markdown-it';
 import { cellMarkdown, escapeHtml, highlightLines, quartoMarkdown } from './render.ts';
 import { diffLines } from './core/cellDiff.ts';
-import { fenceLabel, fenceLanguage } from './core/quarto.ts';
+import { cellHtml, fenceLabel, fenceLanguage } from './core/quarto.ts';
 
 type Token = ReturnType<MarkdownIt['parse']>[number];
 
@@ -64,7 +64,7 @@ export function renderMarkdownDiff(base: string[], head: string[], options: Mark
       for (; j < k; j++) {
         mark(b, added[j], 'md-added');
       }
-      diffPair(md, a, x, b, added[k]);
+      diffPair(md, a, x, b, added[k], envA, envB);
       j = k + 1;
     }
     for (; j < added.length; j++) {
@@ -143,7 +143,7 @@ function mark(tokens: Token[], leaf: Leaf, cls: string): void {
   target?.attrJoin('class', cls);
 }
 
-function diffPair(md: MarkdownIt, a: Token[], x: Leaf, b: Token[], y: Leaf): void {
+function diffPair(md: MarkdownIt, a: Token[], x: Leaf, b: Token[], y: Leaf, envA: Record<string, unknown>, envB: Record<string, unknown>): void {
   const ta = a[x.index];
   const tb = b[y.index];
   if (isCode(ta) && isCode(tb)) {
@@ -151,8 +151,8 @@ function diffPair(md: MarkdownIt, a: Token[], x: Leaf, b: Token[], y: Leaf): voi
     const linesA = codeLines(ta);
     const linesB = codeLines(tb);
     const ops = diffLines(linesA, linesB);
-    replaceCode(md, ta, linesA, new Set(ops.flatMap(o => (o.op === 'del' ? [o.base] : []))), 'line-del');
-    replaceCode(md, tb, linesB, new Set(ops.flatMap(o => (o.op === 'add' ? [o.head] : []))), 'line-ins');
+    replaceCode(md, ta, linesA, new Set(ops.flatMap(o => (o.op === 'del' ? [o.base] : []))), 'line-del', envA);
+    replaceCode(md, tb, linesB, new Set(ops.flatMap(o => (o.op === 'add' ? [o.head] : []))), 'line-ins', envB);
     return;
   }
   if (ta.type !== 'inline' || tb.type !== 'inline') {
@@ -268,19 +268,16 @@ function codeLines(t: Token): string[] {
  * Renders a code block as highlighted lines with the given ones marked. The block keeps its
  * source lines (`data-src`) so comments still anchor to it, and `md-changed` for the margin bar.
  */
-function replaceCode(md: MarkdownIt, t: Token, lines: string[], marked: Set<number>, cls: string): void {
+function replaceCode(md: MarkdownIt, t: Token, lines: string[], marked: Set<number>, cls: string, env: Record<string, unknown>): void {
   const language = fenceLanguage(t.info) || 'plaintext';
   const html = highlightLines(lines, language)
     .map((line, i) => `<span class="code-line${marked.has(i) ? ` ${cls}` : ''}">${line || '&#8203;'}</span>`)
     .join('');
   const src = t.attrGet('data-src') ?? (t.map ? `${t.map[0]}-${Math.max(t.map[0], t.map[1] - 1)}` : '');
+  const pre = `<pre class="md-code-diff md-changed" data-src="${escapeHtml(src)}"><code class="hljs">${html}</code></pre>`;
+  // A Quarto code cell keeps its label, figures and folding, as when it is rendered unchanged.
+  t.content = md === quartoMarkdown && fenceLabel(t.info, escapeHtml) ? cellHtml(md, t, pre, env) : `${pre}\n`;
   t.type = 'html_block';
-  t.content = `<pre class="md-code-diff md-changed" data-src="${escapeHtml(src)}"><code class="hljs">${html}</code></pre>\n`;
-  // A Quarto code cell keeps its label, as when it is rendered unchanged.
-  const label = md === quartoMarkdown ? fenceLabel(t.info, escapeHtml) : '';
-  if (label) {
-    t.content = `<div class="qcell${t.info.trim().startsWith('{=') ? ' raw' : ''}">${label}${t.content.trimEnd()}</div>\n`;
-  }
 }
 
 /** Makes an inline token render as the given HTML. */

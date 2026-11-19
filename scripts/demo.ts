@@ -125,7 +125,7 @@ const quartoBase = readFileSync('docs/demo/value.base.qmd', 'utf8');
 const quartoHead = readFileSync('docs/demo/value.head.qmd', 'utf8');
 const quartoBib = parseBibtex(readFileSync('docs/demo/refs.bib', 'utf8'));
 const quartoFile = { filename: 'docs/value.qmd', status: 'modified' as const, additions: 9, deletions: 4, patch: '' };
-const quartoModel = buildFileViewModel(quartoFile, quartoBase, quartoHead, { number: 44, title: 'Explain the value estimates', url: 'https://github.com/' }, undefined, { bibliography: { base: quartoBib, head: quartoBib } });
+const quartoModel = buildFileViewModel(quartoFile, quartoBase, quartoHead, { number: 44, title: 'Explain the value estimates', url: 'https://github.com/' }, undefined, { quarto: { base: { bibliography: quartoBib }, head: { bibliography: quartoBib } } });
 
 const quartoThreads = buildFileThreads([
   {

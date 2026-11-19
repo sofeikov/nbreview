@@ -1137,7 +1137,18 @@ function decorateBlocks(col: HTMLElement, c: CellVM, side: Side, cellId: string)
   if (rest.length) {
     col.append(h('div', { class: 'md-threads' }, ...rest.map(x => ('comments' in x ? renderThread(x) : renderComposer(x)))));
   }
-  void c;
+  // Code a Quarto document doesn't show is folded; one opened or closed by hand stays so when the
+  // page is drawn again.
+  for (const d of col.querySelectorAll<HTMLDetailsElement>('details.qcode')) {
+    const key = `qcode:${c.key}:${side}:${d.querySelector<HTMLElement>('[data-src]')?.dataset.src ?? ''}`;
+    if (key in ui.expanded) {
+      d.open = ui.expanded[key];
+    }
+    d.addEventListener('toggle', () => {
+      ui.expanded[key] = d.open;
+      persist();
+    });
+  }
 }
 
 // Outputs --------------------------------------------------------------------------------------

@@ -1,6 +1,8 @@
 // Quarto syntax on top of Markdown, for .qmd files on the review page: attributes of headings,
 // section numbers, cross-references, table captions, equation labels, citations, fenced divs,
-// code cells and shortcodes. Also the YAML front matter of Markdown and Quarto files.
+// code cells with their options (`#| echo: false`, figure labels and captions), inline
+// expressions, shortcodes and includes. Also the YAML front matter of Markdown and Quarto files,
+// and what a document takes from its project (`_quarto.yml`, `_metadata.yml`, `_variables.yml`).
 //
 // Nothing runs Quarto. The rules imitate the text Quarto shows, close enough for a review. They
 // come from the author's mdiff extension (src/core/quarto.ts there). Numbers and citations are
@@ -61,6 +63,12 @@ const XREF_PREFIXES: Record<string, string> = {
 
 const CALLOUTS = new Set(['note', 'tip', 'warning', 'important', 'caution']);
 
+/** Cells whose output is a diagram drawn from their source, not a result of running code. */
+const DIAGRAMS = new Set(['mermaid', 'dot']);
+
+/** A cell option line: `#| key: value`, also `# | ` as code formatters write it, `%%|` and `//|`. */
+const OPTION_LINE = /^[ \t]*(?:#|%%|\/\/|--)[ \t]*\|[ \t]?(.*)$/;
+
 /** A citation key: Pandoc allows some punctuation inside a key, but not at its end. */
 const KEY = /[\p{L}\p{N}_](?:[\p{L}\p{N}_:.#$%&\-+?<>~/]*[\p{L}\p{N}_])?/uy;
 
@@ -100,6 +108,36 @@ function state(env: Record<string, unknown>): QuartoState {
     env.quarto = s;
   }
   return s;
+}
+
+/** Reads a value at a dotted path, `a.b.c`, of YAML data. */
+export function metaValue(data: unknown, path: string): unknown {
+  let v = data;
+  for (const k of path.split('.')) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) {
+      return undefined;
+    }
+    v = (v as Record<string, unknown>)[k];
+  }
+  return v;
+}
+
+/** One output option of the document: at the top level or under any of its formats. */
+function formatOption(meta: unknown, key: string): unknown {
+  const top = metaValue(meta, key);
+  if (top !== undefined) {
+    return top;
+  }
+  const format = metaValue(meta, 'format');
+  if (format && typeof format === 'object') {
+    for (const f of Object.values(format)) {
+      const v = metaValue(f, key);
+      if (v !== undefined) {
+        return v;
+      }
+    }
+  }
+  return undefined;
 }
 
 /** True when the front matter asks for section numbers, at the top level or in one of its formats. */
@@ -222,30 +260,109 @@ export function authorNames(value: unknown): string[] {
 export function bibliographyPaths(docPath: string, frontMatter: Record<string, unknown> | undefined): string[] {
   const b = frontMatter?.bibliography;
   const names = typeof b === 'string' ? [b] : Array.isArray(b) ? b.filter((x): x is string => typeof x === 'string') : [];
-  const dir = docPath.includes('/') ? docPath.slice(0, docPath.lastIndexOf('/')).split('/') : [];
   const out: string[] = [];
   for (const name of names) {
     // A URL or an absolute path can't be read from the pull request.
     if (!/\.bib$/i.test(name) || /^([a-z]+:|\/)/i.test(name)) {
       continue;
     }
-    const parts = [...dir];
-    let ok = true;
-    for (const p of name.split('/')) {
-      if (p === '..') {
-        ok = parts.pop() !== undefined;
-      } else if (p && p !== '.') {
-        parts.push(p);
-      }
-      if (!ok) {
-        break;
-      }
-    }
-    if (ok) {
-      out.push(parts.join('/'));
+    const path = joinPath(dirOf(docPath), name);
+    if (path !== undefined) {
+      out.push(path);
     }
   }
   return out;
+}
+
+// Project ----------------------------------------------------------------------------------------
+
+/** What a Quarto document takes from the files around it. */
+export interface QuartoContext {
+  /** The document's path in the repository, for the files it includes. */
+  path?: string;
+  /** The folder of the project's `_quarto.yml`, `''` at the root; undefined outside a project. */
+  projectDir?: string;
+  /** The metadata of the project (`_quarto.yml`, then `_metadata.yml` files), under the front matter's. */
+  project?: Record<string, unknown>;
+  /** The project's `_variables.yml`, for `{{< var >}}`. */
+  vars?: Record<string, unknown>;
+  bibliography?: Bibliography;
+  /** The text of the files that `{{< include >}}` names, by their path in the repository. */
+  includes?: Map<string, string>;
+}
+
+/** The folder of a path in the repository, `''` at the root. */
+export function dirOf(path: string): string {
+  return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+}
+
+/** A relative path resolved against a folder; undefined when it leaves the repository. */
+export function joinPath(dir: string, rel: string): string | undefined {
+  const parts = dir ? dir.split('/') : [];
+  for (const p of rel.split('/')) {
+    if (p === '..') {
+      if (parts.pop() === undefined) {
+        return undefined;
+      }
+    } else if (p && p !== '.') {
+      parts.push(p);
+    }
+  }
+  return parts.join('/');
+}
+
+/** The folders a project file can be in for a document: its own, then each one up to the root. */
+export function parentDirs(path: string): string[] {
+  const parts = dirOf(path).split('/').filter(Boolean);
+  return parts.map((_p, i) => parts.slice(0, parts.length - i).join('/')).concat('');
+}
+
+/** Parses a YAML file as an object; undefined when it isn't one. */
+export function readYaml(text: string | undefined): Record<string, unknown> | undefined {
+  if (text === undefined) {
+    return undefined;
+  }
+  try {
+    const data = yaml.load(text, { schema: yaml.CORE_SCHEMA });
+    return data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Metadata merged as Quarto does: objects key by key, anything else replaced by the later value. */
+export function mergeMeta(...layers: (Record<string, unknown> | undefined)[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const layer of layers) {
+    for (const [k, v] of Object.entries(layer ?? {})) {
+      const old = out[k];
+      const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
+      out[k] = isObj(old) && isObj(v) ? mergeMeta(old, v) : v;
+    }
+  }
+  return out;
+}
+
+const INCLUDE = /\{\{<\s*include\s+("[^"]+"|'[^']+'|\S+)\s*>\}\}/g;
+
+/**
+ * The files a document includes with `{{< include path >}}`, by their path in the repository. A
+ * path is relative to the document, or to the project (the repository outside one) when it starts with `/`.
+ */
+export function includePaths(docPath: string, text: string, projectDir?: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(INCLUDE)) {
+    const path = includePath(docPath, m[1], projectDir);
+    if (path !== undefined && !out.includes(path)) {
+      out.push(path);
+    }
+  }
+  return out;
+}
+
+function includePath(docPath: string, arg: string, projectDir?: string): string | undefined {
+  const name = arg.replace(/^(["'])(.*)\1$/, '$2');
+  return name.startsWith('/') ? joinPath(projectDir ?? '', name.slice(1)) : joinPath(dirOf(docPath), name);
 }
 
 /** Reads the author names and the year of each entry of a BibTeX file. Other fields are ignored. */
@@ -472,6 +589,24 @@ function blocksRule(s: StateCore): void {
         tok.attrSet('id', id);
         register(id, { prefix: XREF_PREFIXES.tbl, num });
       }
+      const cell = asisCell(tokens[i - 1]);
+      if (cell) {
+        cell.writesTable = true;
+      }
+    } else if (tok.type === 'fence' && cellLanguage(tok.info)) {
+      const info = cellInfo(cellLanguage(tok.info)!, tok.content, s.env.frontMatter);
+      const targets = info.targets.map(t => ({ ...t, num: next(t.kind) }));
+      for (const t of targets) {
+        register(t.id, { prefix: XREF_PREFIXES[t.kind], num: t.num });
+      }
+      tok.meta = { ...tok.meta, cell: { ...info, targets } satisfies CellInfo };
+    } else if (tok.type === 'paragraph_open' && inline && tokens[i + 2]?.type === 'paragraph_close' && INCLUDE_ALONE.test(inline.content.trim())) {
+      // An include on its own line: the included file, rendered in its place.
+      tok.type = 'html_block';
+      tok.tag = '';
+      tok.nesting = 0;
+      tok.content = includeHtml(s, INCLUDE_ALONE.exec(inline.content.trim())![1], tok.map);
+      tokens.splice(i + 1, 2);
     } else if (tok.type === 'math_block' && tok.map) {
       const label = q.eqLabels.get(tok.map[1] - 1);
       if (label) {
@@ -503,12 +638,173 @@ function blocksRule(s: StateCore): void {
   }
 }
 
+const INCLUDE_ALONE = /^\{\{<\s*include\s+("[^"]+"|'[^']+'|\S+)\s*>\}\}$/;
+
+/**
+ * An included file in its place, rendered by itself: its blocks lose their source lines, since
+ * they are lines of another file, and the whole of it takes comments on the include's line.
+ */
+function includeHtml(s: StateCore, arg: string, map: [number, number] | null): string {
+  const esc = s.md.utils.escapeHtml;
+  const ctx = s.env.quartoContext as QuartoContext | undefined;
+  const depth = (s.env.includeDepth as number | undefined) ?? 0;
+  const path = ctx?.path !== undefined ? includePath(ctx.path, arg, ctx.projectDir) : undefined;
+  const text = path !== undefined && depth < 3 ? ctx?.includes?.get(path) : undefined;
+  const src = map ? ` data-src="${map[0]}-${Math.max(map[0], map[1] - 1)}"` : '';
+  const name = esc(path ?? arg.replace(/^(["'])(.*)\1$/, '$2'));
+  if (text === undefined) {
+    return `<div class="qinclude missing"${src}><div class="qinclude-label">Includes <code>${name}</code>, which isn't in the repository at this commit</div></div>\n`;
+  }
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const child = { ...s.env, quarto: undefined, quartoContext: { ...ctx, path }, includeDepth: depth + 1 };
+  const html = s.md.render(blankFrontMatter(lines, readFrontMatter(lines)).join('\n'), child).replace(/ data-src="[^"]*"/g, '');
+  return `<div class="qinclude"${src}><div class="qinclude-label">Included from <code>${name}</code></div>${html}</div>\n`;
+}
+
+// Code cells -------------------------------------------------------------------------------------
+
+/** A figure or a table that a code cell makes. */
+export interface CellTarget {
+  id: string;
+  kind: 'fig' | 'tbl';
+  num: string;
+  caption?: string;
+}
+
+/** A code cell as the rendered document has it. */
+export interface CellInfo {
+  lang: string;
+  /** How its code shows: as it is, folded under a button, not at all, or the whole cell left out. */
+  code: 'shown' | 'folded' | 'hidden' | 'excluded';
+  /** It writes Markdown into the document (`output: asis`), such as a table. */
+  asis: boolean;
+  /** A Mermaid or Graphviz diagram, drawn from its source. */
+  diagram: boolean;
+  targets: CellTarget[];
+  /** It writes Markdown and a table caption follows it: the table is what it writes. */
+  writesTable?: boolean;
+}
+
+/** The options of a code cell, from the `#|` lines at its top. Lines that aren't valid YAML give none. */
+export function cellOptions(code: string): Record<string, unknown> {
+  const body: string[] = [];
+  for (const line of code.split('\n')) {
+    const m = OPTION_LINE.exec(line);
+    if (!m) {
+      break;
+    }
+    body.push(m[1]);
+  }
+  return readYaml(body.join('\n')) ?? {};
+}
+
+/** The language of an executable cell, `{python}` → `python`; undefined for a raw block or a plain fence. */
+export function cellLanguage(info: string): string | undefined {
+  return /^\{([A-Za-z][\w-]*)[^}]*\}/.exec(info.trim())?.[1];
+}
+
+/**
+ * How a code cell shows in the rendered document, from its options and the document's: `echo`,
+ * `include` and `output` under `execute:`, `code-fold` as an output option. Without numbers: the
+ * caller numbers the targets in document order.
+ */
+export function cellInfo(lang: string, code: string, meta: unknown): Omit<CellInfo, 'targets'> & { targets: Omit<CellTarget, 'num'>[] } {
+  const o = cellOptions(code);
+  const exec = (key: string) => o[key] ?? metaValue(meta, `execute.${key}`) ?? metaValue(meta, key);
+  const diagram = DIAGRAMS.has(lang.toLowerCase());
+  const fold = o['code-fold'] ?? formatOption(meta, 'code-fold');
+  const code_: CellInfo['code'] = exec('include') === false
+    ? 'excluded'
+    : (exec('echo') ?? !diagram) === false
+      ? 'hidden'
+      : fold === true || fold === 'true' || fold === 'hide' ? 'folded' : 'shown';
+  const asis = exec('output') === 'asis';
+  const targets: Omit<CellTarget, 'num'>[] = [];
+  if (code_ !== 'excluded') {
+    const label = typeof o.label === 'string' ? o.label : undefined;
+    const kind = label ? /^(fig|tbl)-/.exec(label)?.[1] as 'fig' | 'tbl' | undefined : undefined;
+    if (label && kind) {
+      const cap = o[`${kind}-cap`];
+      targets.push({ id: label, kind, caption: typeof cap === 'string' ? cap : undefined });
+    }
+    // A cell that writes Markdown can write a table or a figure with its id, `{#tbl-x}`; in an
+    // f-string the braces are doubled.
+    if (asis) {
+      for (const m of code.matchAll(/\{\{?#((fig|tbl)-[\w-]+)\}?\}/g)) {
+        if (!targets.some(t => t.id === m[1])) {
+          targets.push({ id: m[1], kind: m[2] as 'fig' | 'tbl' });
+        }
+      }
+    }
+  }
+  return { lang, code: code_, asis, diagram, targets };
+}
+
+/** An inline expression, `` `{python} x` ``: its language, its code, and a short form to show. */
+export function inlineExpr(code: string): { lang: string; expr: string; short: string } | undefined {
+  const m = /^\{([A-Za-z][\w-]*)\}\s+(\S[\s\S]*)$/.exec(code);
+  if (!m) {
+    return undefined;
+  }
+  const expr = m[2].trim();
+  // An f-string that is one placeholder, `f"{x:.2f}"`, shows as the expression in it, without the
+  // conversion and the format spec, which close no bracket.
+  const f = /^f(["'])\{([^{}]+)\}\1$/.exec(expr);
+  const short = f ? f[2].replace(/(?:![rsa])?(?::[^'"\])}]*)?$/, '').trim() || f[2] : expr;
+  return { lang: m[1], expr, short: short.length > 48 ? `${short.slice(0, 47)}…` : short };
+}
+
+/**
+ * HTML of a code cell: its code, folded away when the document doesn't show it, and a place for
+ * each figure or table it makes, with its number and caption. `pre` is the highlighted code. The
+ * code is open when it is marked as changed, so a change is never folded away.
+ */
+export function cellHtml(md: MarkdownIt, tok: Token, pre: string, env: Record<string, unknown>): string {
+  const esc = md.utils.escapeHtml;
+  const cell = (tok.meta as { cell?: CellInfo } | null)?.cell;
+  const label = fenceLabel(tok.info, esc);
+  if (!cell) {
+    return `<div class="qcell${tok.info.trim().startsWith('{=') ? ' raw' : ''}">${label}${pre}</div>\n`;
+  }
+  const caption = (t: CellTarget) => {
+    const name = `${t.kind === 'fig' ? 'Figure' : 'Table'} ${t.num}`;
+    // Without a caption, the id says which one it is.
+    return t.caption ? `<span class="cap-label">${name}:</span> ${md.renderInline(t.caption, env)}` : `<span class="cap-label">${name}</span> <code class="qfig-id">${esc(t.id)}</code>`;
+  };
+  const target = (t: CellTarget, inner: string) => `<figure class="qfig" id="${esc(t.id)}">${inner}<figcaption>${caption(t)}</figcaption></figure>`;
+  const lines = tok.content.replace(/\n$/, '').split('\n').length;
+  const lang = esc(cell.lang);
+  if (cell.diagram && cell.code !== 'excluded') {
+    // The diagram's source is the nearest thing to the picture, so it stays in view.
+    const head = `<div class="cell-label">${lang} diagram · drawn when the document is rendered</div>`;
+    const [t, ...rest] = cell.targets;
+    return `<div class="qcell diagram">${head}${t ? target(t, pre) : `<figure class="qfig">${pre}</figure>`}${rest.map(x => target(x, '')).join('')}</div>\n`;
+  }
+  const made = cell.targets.map(t => target(t, `<div class="qfig-ph">${t.kind === 'fig' ? 'Figure' : 'Table'} made by this cell when the document is rendered</div>`));
+  if (cell.asis && !cell.targets.length) {
+    made.push(`<div class="qfig-ph">${cell.writesTable ? 'Table made by this cell when the document is rendered' : 'Writes Markdown into the document when it is rendered'}</div>`);
+  }
+  if (cell.code === 'shown') {
+    return `<div class="qcell">${label}${pre}${made.join('')}</div>\n`;
+  }
+  const note = { folded: 'folded in the document', hidden: 'not shown in the document', excluded: 'left out of the document' }[cell.code];
+  const open = /\bmd-(changed|added|removed)\b/.test(pre) ? ' open' : '';
+  const summary = `<summary class="cell-label">${lang} · ${lines} line${lines === 1 ? '' : 's'} · ${note}</summary>`;
+  return `<div class="qcell code-${cell.code}"><details class="qcode"${open}>${summary}${pre}</details>${made.join('')}</div>\n`;
+}
+
 /** A paragraph that starts with `: ` or `Table: ` right before or after a table is its caption. */
 function isCaption(tokens: Token[], open: number, inline: Token): boolean {
   if (!/^(?:Table)?:\s/.test(inline.content)) {
     return false;
   }
-  return tokens[open - 1]?.type === 'table_close' || tokens[open + 3]?.type === 'table_open';
+  return tokens[open - 1]?.type === 'table_close' || tokens[open + 3]?.type === 'table_open' || !!asisCell(tokens[open - 1]);
+}
+
+/** A cell that writes Markdown: the caption right after it is that of the table it writes. */
+function asisCell(tok: Token | undefined): CellInfo | undefined {
+  const cell = tok?.type === 'fence' ? (tok.meta as { cell?: CellInfo } | null)?.cell : undefined;
+  return cell?.asis ? cell : undefined;
 }
 
 /** Core rule after `inline`: resolves cross-references and citations to their text. */
@@ -540,6 +836,9 @@ function resolveRule(s: StateCore): void {
         const r = citeText(meta.items, meta.bracket, bib);
         meta.text = r.text;
         meta.missing = r.missing;
+      } else if (child.type === 'quarto_shortcode') {
+        // Resolved here, not when rendered: the diff renders a changed paragraph without the env.
+        child.meta = { html: shortcodeHtml(child.content, s.env, s.md.utils.escapeHtml) };
       }
     }
   }
@@ -664,6 +963,45 @@ function shortcodeRule(s: StateInline, silent: boolean): boolean {
   return true;
 }
 
+/** The words of a shortcode, `{{< name a "b c" >}}` → `['name', 'a', 'b c']`. */
+export function shortcodeArgs(raw: string): string[] {
+  const body = /^\{\{<\s*([\s\S]*?)\s*>\}\}$/.exec(raw)?.[1] ?? '';
+  return [...body.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(m => m[1] ?? m[2] ?? m[3]);
+}
+
+/**
+ * What a shortcode shows: a value from the metadata or `_variables.yml`, a key, a page break, or
+ * the shortcode as written when it is filled in only by Quarto (`env`, `lipsum`, extensions).
+ */
+function shortcodeHtml(raw: string, env: Record<string, unknown>, esc: (s: string) => string): string {
+  const [name, ...args] = shortcodeArgs(raw);
+  const chip = (title?: string, missing = false) =>
+    `<code class="shortcode${missing ? ' missing' : ''}"${title ? ` title="${esc(title)}"` : ''}>${esc(raw)}</code>`;
+  const value = (v: unknown, title: string) =>
+    typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+      ? `<span class="shortcode-value" title="${esc(`${raw} · ${title}`)}">${esc(String(v))}</span>`
+      : chip(`Not found: ${title}`, true);
+  if (name === 'meta' && args[0]) {
+    return value(metaValue(env.frontMatter, args[0]), 'from the front matter and the project');
+  }
+  if (name === 'var' && args[0]) {
+    return value(metaValue((env.quartoContext as QuartoContext | undefined)?.vars, args[0]), 'from _variables.yml');
+  }
+  if (name === 'pagebreak') {
+    return '<span class="pagebreak">page break</span>';
+  }
+  if (name === 'kbd' && args.length) {
+    return args.filter(a => !a.includes('=')).map(k => `<kbd>${esc(k)}</kbd>`).join(' ') || chip();
+  }
+  if (name === 'video' && args[0] && /^https?:\/\//.test(args[0])) {
+    return `<a class="shortcode-video" href="${esc(args[0])}">Video: ${esc(args[0])}</a>`;
+  }
+  if (name === 'include') {
+    return chip('An include inside a paragraph: Quarto puts the file here when it renders the document');
+  }
+  return chip('Filled in by Quarto when it renders the document');
+}
+
 /** Block rule: a fenced div, `::: {.callout-note}` … `:::`. Divs nest. */
 function divRule(s: StateBlock, startLine: number, endLine: number, silent: boolean): boolean {
   if (s.sCount[startLine] - s.blkIndent >= 4) {
@@ -734,6 +1072,61 @@ function divKind(tok: Token): { kind: 'callout'; type: string; title: string } |
   return { kind: 'plain' };
 }
 
+/**
+ * What a layout or conditional div does in the rendered document, said above its content, which
+ * the review page shows all of: tabs, content for some formats only, the margin, wider columns.
+ */
+export function divNote(attrs: Attrs): string | undefined {
+  const c = new Set(attrs.classes);
+  const v = attrs.values;
+  if (c.has('panel-tabset')) {
+    return 'Tabs: each heading below is a tab';
+  }
+  for (const [cls, shown] of [['content-visible', true], ['content-hidden', false]] as const) {
+    if (!c.has(cls)) {
+      continue;
+    }
+    const when = v['when-format'] ?? v['when-profile'] ?? v['when-meta'];
+    const unless = v['unless-format'] ?? v['unless-profile'] ?? v['unless-meta'];
+    const what = v['when-meta'] || v['unless-meta'] ? 'when' : v['when-profile'] || v['unless-profile'] ? 'in profile' : 'in';
+    const out = v['when-format'] || v['unless-format'] ? ' output' : '';
+    if (when) {
+      return `${shown ? 'Only' : 'Not'} ${what} ${when}${out}`;
+    }
+    if (unless) {
+      return `${shown ? 'Not' : 'Only'} ${what} ${unless}${out}`;
+    }
+    return shown ? undefined : 'Hidden in the document';
+  }
+  if (c.has('hidden')) {
+    return 'Hidden in the document';
+  }
+  if (c.has('column-margin') || c.has('aside')) {
+    return 'In the margin';
+  }
+  const column = attrs.classes.find(x => /^column-(page|screen|body)/.test(x));
+  if (column) {
+    return `Wider than the text (${column})`;
+  }
+  if (c.has('notes')) {
+    return 'Speaker notes';
+  }
+  return undefined;
+}
+
+/** A div's layout as an inline style: `.column width="40%"`, `layout-ncol=2`. Only plain values are kept. */
+function divStyle(attrs: Attrs): string | undefined {
+  const width = attrs.values.width;
+  if (attrs.classes.includes('column') && width && /^\d+(\.\d+)?(%|px|em)$/.test(width)) {
+    return `flex: 0 1 ${width}`;
+  }
+  const n = Number(attrs.values['layout-ncol']);
+  if (Number.isInteger(n) && n > 1 && n <= 6) {
+    return `display: grid; grid-template-columns: repeat(${n}, minmax(0, 1fr)); gap: 12px`;
+  }
+  return undefined;
+}
+
 /** The label of a code cell or a raw block, for example `python` or `raw latex`; empty for a plain fence. */
 export function fenceLabel(info: string, esc: (s: string) => string): string {
   const m = /^\{(=?)([\w.+-]+)[^}]*\}/.exec(info.trim());
@@ -772,7 +1165,16 @@ export function quartoPlugin(md: MarkdownIt): void {
     const meta = tok.meta as CiteMeta;
     return `<span class="${meta.missing ? 'cite missing' : 'cite'}" title="${esc(tok.content)}">${esc(meta.text ?? tok.content)}</span>`;
   };
-  r.quarto_shortcode = (tokens, idx) => `<code class="shortcode">${esc(tokens[idx].content)}</code>`;
+  r.quarto_shortcode = (tokens, idx) => (tokens[idx].meta as { html?: string } | null)?.html ?? `<code class="shortcode">${esc(tokens[idx].content)}</code>`;
+  // An inline expression shows what it computes, not as code in the middle of a sentence.
+  const codeInline = r.code_inline!;
+  r.code_inline = (tokens, idx, options, env, self) => {
+    const e = inlineExpr(tokens[idx].content);
+    if (!e) {
+      return codeInline(tokens, idx, options, env, self);
+    }
+    return `<code class="qexpr" title="${esc(`Computed when the document is rendered · ${e.lang}: ${e.expr}`)}">${esc(e.short)}</code>`;
+  };
   // Every div gets `qdiv`, so the review page looks into it for blocks to comment on, as it does
   // for a quote. The div's own lines are its `:::` fences, which have nothing to comment on.
   r.quarto_div_open = (tokens, idx) => {
@@ -785,7 +1187,10 @@ export function quartoPlugin(md: MarkdownIt): void {
       return '<div class="qdiv quarto-refs">References: the list Quarto makes from the citations.';
     }
     const attrs = (tok.meta as { attrs: Attrs }).attrs;
-    return `<div${attrs.id ? ` id="${esc(attrs.id)}"` : ''} class="${esc(['qdiv', ...attrs.classes].join(' '))}">\n`;
+    const note = divNote(attrs);
+    const style = divStyle(attrs);
+    return `<div${attrs.id ? ` id="${esc(attrs.id)}"` : ''} class="${esc(['qdiv', ...attrs.classes].join(' '))}"${style ? ` style="${esc(style)}"` : ''}>`
+      + `${note ? `<div class="qdiv-label">${esc(note)}</div>` : ''}\n`;
   };
   r.quarto_div_close = () => '</div>\n';
 
@@ -801,7 +1206,7 @@ export function quartoPlugin(md: MarkdownIt): void {
     tok.info = fenceLanguage(info);
     const html = fence(tokens, idx, options, env, self);
     tok.info = info;
-    return `<div class="qcell${info.trim().startsWith('{=') ? ' raw' : ''}">${label}${html}</div>\n`;
+    return cellHtml(md, tok, html, env);
   };
 
   for (const type of ['heading_open', 'paragraph_open']) {
