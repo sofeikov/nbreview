@@ -6,6 +6,7 @@ import {
 } from '../src/core/prStatus.ts';
 import { GitHub, checksFrom, timelineItem, type GhOverview, type GhTimelineItem } from '../src/github.ts';
 import { renderGitHubMarkdown } from '../src/render.ts';
+import { mermaidTheme } from '../src/webview/mermaid.ts';
 import { buildTimeline, duration, labelColors, mergeVM, snippetLines } from '../src/overviewModel.ts';
 
 const check = (name: string, state: Check['state'], extra: Partial<Check> = {}): Check => ({ name, state, required: false, ...extra });
@@ -281,4 +282,16 @@ test('merging sends the head GitHub must still be at, and only the message parts
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('A ```mermaid block in a description stays a code block the Overview finds and draws', () => {
+  assert.match(renderGitHubMarkdown('```mermaid\nflowchart LR\n  a --> b\n```\n'), /^<pre><code class="language-mermaid">flowchart LR\n {2}a --&gt; b\n<\/code><\/pre>/);
+});
+
+test('Diagrams follow VS Code’s colour theme', () => {
+  assert.equal(mermaidTheme('vscode-dark'), 'dark');
+  assert.equal(mermaidTheme('vscode-high-contrast'), 'dark');
+  assert.equal(mermaidTheme('vscode-light'), 'default');
+  assert.equal(mermaidTheme('vscode-high-contrast-light'), 'default');
+  assert.equal(mermaidTheme(''), 'default');
 });

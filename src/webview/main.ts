@@ -8,6 +8,7 @@ import { REACTIONS, REACTION_NAMES, type ReactionContent } from '../core/reactio
 import { showsThread, type CommentFilter } from '../core/commentFilter.ts';
 import { diffPixels, pairImages, type ImagePair } from './imageDiff.ts';
 import { button, h, icon, sanitize, timeAgo, type Child } from './dom.ts';
+import { drawDiagrams } from './mermaid.ts';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: WebviewMessage): void;
@@ -118,6 +119,8 @@ function render(): void {
 
   shown = threads.filter(t => showsThread(panel.comments, { isResolved: t.resolved, comments: t.comments }));
   app.replaceChildren(renderToolbar(model), renderCells(model), h('div', { class: 'toast', id: 'toast' }));
+  // Before the scroll position is restored: the diagrams drawn before go in at once.
+  drawDiagrams(app);
   scheduleChangeMap();
   if (!restoredScroll) {
     restoredScroll = true;
@@ -2148,6 +2151,9 @@ function toast(message: string): void {
 }
 
 // --- Messages from the extension ---------------------------------------------------------------
+
+// VS Code changes the body's class when the colour theme changes; diagrams are drawn again to match.
+new MutationObserver(render).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
 window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
   const msg = event.data;

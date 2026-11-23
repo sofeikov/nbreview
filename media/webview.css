@@ -818,3 +818,7 @@ button.range.on { background: var(--vscode-button-secondaryBackground, var(--vsc
 ::highlight(nav-spot) { background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33)); }
 ::highlight(nav-target) { color: var(--vscode-textLink-foreground, #4daafc); text-decoration: underline; }
 body.nav-target .code .text { cursor: pointer; }
+
+/* A Mermaid diagram, drawn below its code (see webview/mermaid.ts). */
+.mermaid-diagram { margin: 0.6em 0; overflow-x: auto; text-align: center; }
+.mermaid-error { margin: -0.3em 0 0.6em; font-size: 0.85em; color: var(--muted); }

@@ -8,6 +8,7 @@ import type { CheckVM, MergeAction, OverviewHostMessage, OverviewMessage, Overvi
 import type { MergeMethod, Reviewer, StatusLine, Tone } from '../core/prStatus.ts';
 import { REACTIONS, REACTION_NAMES } from '../core/reactions.ts';
 import { button, h, icon, timeAgo, type Child } from './dom.ts';
+import { drawDiagrams } from './mermaid.ts';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: OverviewMessage): void;
@@ -160,6 +161,7 @@ function render(): void {
     h('div', { class: 'toast', id: 'toast' })));
   firstPaint = false;
   watchHeader();
+  drawDiagrams(app);
   if (focusKey) {
     const el = app.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-focus-key="${focusKey}"]`);
     el?.focus({ preventScroll: true });
@@ -801,6 +803,13 @@ window.addEventListener('keydown', e => {
     post({ type: 'refresh' });
   }
 });
+
+// VS Code changes the body's class when the colour theme changes; diagrams are drawn again to match.
+new MutationObserver(() => {
+  if (vm) {
+    render();
+  }
+}).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
 window.addEventListener('message', (event: MessageEvent<OverviewHostMessage>) => {
   const msg = event.data;

@@ -369,6 +369,8 @@ export class OverviewPage implements vscode.Disposable {
       `img-src ${webview.cspSource} https: data:`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `script-src 'nonce-${nonce}'`,
+      // The page fetches Mermaid's script itself (see webview/mermaid.ts).
+      `connect-src ${webview.cspSource}`,
     ].join('; ');
     const pr = this.state.session?.pr;
     return `<!DOCTYPE html>
@@ -379,7 +381,7 @@ export class OverviewPage implements vscode.Disposable {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${uri('overview.css')}">
 </head>
-<body data-pr="${pr ? `${pr.owner}/${pr.repo}#${pr.number}` : ''}">
+<body data-pr="${pr ? `${pr.owner}/${pr.repo}#${pr.number}` : ''}" data-mermaid="${uri('mermaid.js')}">
 <div id="app"></div>
 <script nonce="${nonce}" src="${uri('overview.js')}"></script>
 </body>

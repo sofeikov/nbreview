@@ -189,7 +189,8 @@ test('Quarto: hidden code is folded, and figures and tables of cells are numbere
   assert.match(html, /<div class="qcell code-hidden"><details class="qcode"><summary class="cell-label">python · 3 lines · not shown in the document<\/summary><pre>/);
   assert.match(html, /<figure class="qfig" id="fig-a"><div class="qfig-ph">Figure made by this cell when the document is rendered<\/div><figcaption><span class="cap-label">Figure 1:<\/span> A <em>plot<\/em> of <a class="xref" href="#tbl-lit">Table 1<\/a><\/figcaption><\/figure>/);
   assert.match(html, /<figure class="qfig" id="tbl-made">.*<span class="cap-label">Table 2<\/span> <code class="qfig-id">tbl-made<\/code>/);
-  assert.match(html, /<div class="qcell diagram"><div class="cell-label">mermaid diagram · drawn when the document is rendered<\/div><figure class="qfig" id="fig-flow"><pre>.*<figcaption><span class="cap-label">Figure 2:<\/span> The flow<\/figcaption>/s);
+  // The review page draws a Mermaid diagram below its source, which it gets from `data-mermaid`.
+  assert.match(html, /<div class="qcell diagram"><div class="cell-label">mermaid diagram<\/div><figure class="qfig" id="fig-flow"><pre data-mermaid="[^"]+">.*<figcaption><span class="cap-label">Figure 2:<\/span> The flow<\/figcaption>/s);
   assert.match(html, /<div class="qcell"><div class="cell-label">python<\/div><pre><code[^>]*><span class="code-line" data-src="\d+-\d+"><span class="hljs-comment">#\| echo: true<\/span><\/span><span class="code-line" data-src="\d+-\d+">shown/, 'options stay in the code under review');
   // A caption right after a cell that writes Markdown is that of the table the cell writes.
   const written = render('See @tbl-w.\n\n```{python}\n#| output: asis\nprint(table)\n```\n\n: Written {#tbl-w}\n');
@@ -279,4 +280,22 @@ test('project helpers: folders, paths, includes and merged metadata', () => {
 
 test('notebook Markdown cells keep plain Markdown', () => {
   assert.match(renderMarkdownCell(['## A {#sec-a}', '', 'See @sec-a.']), /A \{#sec-a\}/);
+});
+
+test('Mermaid diagrams are marked for drawing: {mermaid} cells in Quarto, ```mermaid blocks in Markdown', () => {
+  const source = (html: string) => [...html.matchAll(/data-mermaid="([^"]*)"/g)].map(m => decodeURIComponent(m[1]));
+  // The source keeps its arrows, URI-encoded: the page's sanitizer drops an attribute with `-->` in it.
+  const md = renderMarkdownCell(['```mermaid', 'flowchart LR', '  a --> b', '```', '', '```python', 'x = 1', '```']);
+  assert.deepEqual(source(md), ['flowchart LR\n  a --> b\n']);
+  assert.doesNotMatch(md, /data-mermaid="[^"]*-->/);
+  const qmd = render(['```{mermaid}', '%%| label: fig-x', 'flowchart TD', '  a --> b', '```', '', '```mermaid', 'flowchart TD', '```', '', '```{dot}', 'digraph { a -> b }', '```', '', '```{mermaid}', '%%| include: false', 'flowchart TD', '```', ''].join('\n'));
+  // Quarto draws only the cell; a plain fence is code there, and Graphviz isn't drawn here.
+  assert.deepEqual(source(qmd), ['%%| label: fig-x\nflowchart TD\n  a --> b\n']);
+  assert.match(qmd, /dot diagram · drawn when the document is rendered/);
+});
+
+test('A changed Mermaid block keeps its source for drawing in both columns of the diff', () => {
+  const { base, head } = renderDocumentDiff(lines('```mermaid\nflowchart LR\n  a --> b\n```\n'), lines('```mermaid\nflowchart LR\n  a --> c\n```\n'), {});
+  assert.match(base, /class="md-code-diff md-changed"[^>]* data-mermaid="flowchart%20LR%0A%20%20a%20--%3E%20b%0A"/);
+  assert.match(head, /data-mermaid="flowchart%20LR%0A%20%20a%20--%3E%20c%0A"/);
 });

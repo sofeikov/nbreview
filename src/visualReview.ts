@@ -697,6 +697,8 @@ export class VisualReview implements vscode.Disposable {
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `font-src ${webview.cspSource}`,
       `script-src 'nonce-${nonce}'`,
+      // The page fetches Mermaid's script itself (see webview/mermaid.ts).
+      `connect-src ${webview.cspSource}`,
     ].join('; ');
     return `<!DOCTYPE html>
 <html lang="en">
@@ -707,7 +709,7 @@ export class VisualReview implements vscode.Disposable {
 <link rel="stylesheet" href="${uri('katex', 'katex.min.css')}">
 <link rel="stylesheet" href="${uri('webview.css')}">
 </head>
-<body data-path="${escapeAttr(nbPath)}">
+<body data-path="${escapeAttr(nbPath)}" data-mermaid="${uri('mermaid.js')}">
 <div id="app"><div class="loading">Loading…</div></div>
 <script nonce="${nonce}" src="${uri('webview.js')}"></script>
 </body>

@@ -304,7 +304,7 @@ writeFileSync('out/demo/index.html', `<!DOCTYPE html>
 ${THEME}
 </style>
 </head>
-<body class="vscode-dark" data-path="${path}">
+<body class="vscode-dark" data-path="${path}" data-mermaid="dist/mermaid.js">
 <div id="app"></div>
 <script>
 // Messages are delivered synchronously so the page is fully drawn when the load event fires
@@ -557,6 +557,12 @@ const overview: GhOverview = {
     '- `02_xg_model.ipynb`: adds the feature, refits, and redraws the calibration curve',
     '- `src/xg/train.py`: the same feature in the pipeline, with `C` as a parameter',
     '',
+    '```mermaid',
+    'flowchart LR',
+    '  shots[Shots] --> features[Distance, angle, header]',
+    '  features --> fit[Logistic fit] --> curve[Calibration curve]',
+    '```',
+    '',
     '## Checklist',
     '- [x] Calibration curve redrawn',
     '- [x] Pipeline and notebook agree',
@@ -628,7 +634,7 @@ writeFileSync('out/demo/overview.html', `<!DOCTYPE html>
 ${THEME}
 </style>
 </head>
-<body class="vscode-dark" data-pr="example-org/xg-models#42">
+<body class="vscode-dark" data-pr="example-org/xg-models#42" data-mermaid="dist/mermaid.js">
 <div id="app"></div>
 <script>
 const deliver = data => window.dispatchEvent(new MessageEvent('message', { data }));

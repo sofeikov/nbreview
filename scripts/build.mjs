@@ -19,6 +19,9 @@ await Promise.all([
 
 await cp('media/webview.css', 'dist/webview.css');
 await cp('media/overview.css', 'dist/overview.css');
+// Mermaid for the diagrams in pull request descriptions and comments, loaded by the Overview only
+// when it has one. The tiny build leaves out mindmaps and architecture diagrams for half the size.
+await cp('node_modules/@mermaid-js/tiny/dist/mermaid.tiny.js', 'dist/mermaid.js');
 // The page loads the woff2 fonts only, so the woff and ttf references are dropped from the CSS.
 const katexCss = (await readFile('node_modules/katex/dist/katex.min.css', 'utf8')).replace(/,url\([^)]+\.(woff|ttf)\) format\("(woff|truetype)"\)/g, '');
 await writeFile('dist/katex/katex.min.css', katexCss);

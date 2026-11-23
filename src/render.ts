@@ -36,14 +36,28 @@ function highlightFence(code: string, lang: string): string {
  * A code block as highlighted lines, each with its source line (`data-src`): `skip` is the number
  * of lines before the code, 1 for the opening fence. The block keeps its own source lines on `<code>`.
  */
-function codeBlockHtml(t: Token, lang: string, skip: number): string {
+function codeBlockHtml(t: Token, lang: string, skip: number, quarto: boolean): string {
   const lines = t.content.replace(/\n$/, '').split('\n');
   const known = !!lang && !!hljs.getLanguage(lang);
   const first = t.map ? t.map[0] + skip : undefined;
   return codeLinesHtml(highlightLines(lines, known ? lang : 'plaintext'), first, [], {
-    pre: '',
+    pre: mermaidAttr(t, quarto),
     code: [...(t.attrs ?? []).filter(([k]) => k !== 'class'), ['class', ['hljs', known ? `language-${lang}` : '', t.attrGet('class') ?? ''].filter(Boolean).join(' ')]],
   });
+}
+
+/**
+ * ` data-mermaid="…"` with the diagram's source when a code block is a Mermaid diagram, which the
+ * review page draws below the code: a ```mermaid block in Markdown, as GitHub draws it, and a
+ * `{mermaid}` cell in Quarto, as Quarto does (a plain ```mermaid block stays code there).
+ */
+export function mermaidAttr(t: Token, quarto: boolean): string {
+  const cell = (t.meta as { cell?: { lang: string; diagram: boolean; code: string } } | null)?.cell;
+  const mermaid = quarto
+    ? !!cell?.diagram && cell.lang.toLowerCase() === 'mermaid' && cell.code !== 'excluded'
+    : t.type === 'fence' && t.info.trim().split(/\s+/)[0].toLowerCase() === 'mermaid';
+  // Encoded, as the page's sanitizer drops an attribute with `-->` in it, and every arrow has one.
+  return mermaid ? ` data-mermaid="${encodeURIComponent(t.content)}"` : '';
 }
 
 /**
@@ -62,7 +76,7 @@ export function codeLinesHtml(lines: string[], first: number | undefined, marks:
  * A parser for Markdown that is shown on the review page (notebook cells, Markdown and Quarto
  * files), with maths, and with the source lines of every block (see below).
  */
-function documentMarkdown(): MarkdownIt {
+function documentMarkdown(quarto = false): MarkdownIt {
   const md = new MarkdownIt({ html: true, linkify: true, highlight: highlightFence });
   (md as any).use((katex as any).default ?? katex, { throwOnError: false });
 
@@ -91,8 +105,8 @@ function documentMarkdown(): MarkdownIt {
   // A code block is drawn line by line, each line with its own source line, so a comment can go on
   // one line of it, as on a line of a code cell. (The KaTeX plugin is set up without fenced maths,
   // so a ```math block is code here too.)
-  md.renderer.rules.fence = (tokens, idx) => codeBlockHtml(tokens[idx], tokens[idx].info.trim().split(/\s+/)[0] ?? '', 1);
-  md.renderer.rules.code_block = (tokens, idx) => codeBlockHtml(tokens[idx], '', 0);
+  md.renderer.rules.fence = (tokens, idx) => codeBlockHtml(tokens[idx], tokens[idx].info.trim().split(/\s+/)[0] ?? '', 1, quarto);
+  md.renderer.rules.code_block = (tokens, idx) => codeBlockHtml(tokens[idx], '', 0, quarto);
 
   // Display maths is rendered by the KaTeX plugin, which drops token attributes; wrap it so it keeps
   // its source lines like every other block.
@@ -113,7 +127,7 @@ const cellMd = documentMarkdown();
 export const cellMarkdown = cellMd;
 
 /** The renderer for Quarto (.qmd) files: Markdown with Quarto's syntax (see core/quarto.ts). */
-export const quartoMarkdown = documentMarkdown();
+export const quartoMarkdown = documentMarkdown(true);
 quartoPlugin(quartoMarkdown);
 
 const commentMd = new MarkdownIt({ html: true, linkify: true, breaks: true, highlight: highlightFence });
