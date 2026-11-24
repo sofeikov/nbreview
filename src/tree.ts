@@ -9,7 +9,7 @@ import type { Tone } from './core/prStatus.ts';
 import type { PendingComment } from './core/pending.ts';
 import type { OverviewPage } from './overview.ts';
 import { findingPlace, type Finding } from './core/checks.ts';
-import { basename, buildFolderTree, dirname, shortPath, treeOrder, type FolderNode } from './paths.ts';
+import { basename, buildFolderTree, nameMatches, dirname, shortPath, treeOrder, type FolderNode } from './paths.ts';
 
 export type Node =
   | { kind: 'pr' }
@@ -49,6 +49,29 @@ export async function setFileLayout(layout: FileLayout | undefined): Promise<voi
 
 export const onDidChangeFileLayout = layoutChanged.event;
 
+// The name filter of the title bar, as on GitHub: it keeps the files whose own name contains the
+// text. It belongs to the pull request in view, so it is kept only in memory.
+let filterText = '';
+const filterChanged = new vscode.EventEmitter<void>();
+
+export function fileFilter(): string {
+  return filterText;
+}
+
+export function setFileFilter(text: string): void {
+  if (text.trim() !== filterText) {
+    filterText = text.trim();
+    filterChanged.fire();
+  }
+}
+
+export const onDidChangeFileFilter = filterChanged.event;
+
+/** The paths the name filter keeps. */
+function shown(paths: string[]): string[] {
+  return filterText ? paths.filter(p => nameMatches(p, filterText)) : paths;
+}
+
 export class FilesTree implements vscode.TreeDataProvider<Node> {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
@@ -57,6 +80,7 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
     state.onDidChange(() => this.changed.fire());
     overview.onDidChangeStatus(() => this.changed.fire());
     onDidChangeFileLayout(() => this.changed.fire());
+    onDidChangeFileFilter(() => this.changed.fire());
     vscode.workspace.onDidChangeConfiguration(e => e.affectsConfiguration('nbreview.checks') && this.changed.fire());
   }
 
@@ -66,9 +90,15 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
       return [];
     }
     if (!node) {
-      const nodes: Node[] = [{ kind: 'pr' }, { kind: 'group', id: 'notebooks', label: 'Notebooks', paths: [...s.notebooks.keys()] }];
-      if (s.others.length) {
-        nodes.push({ kind: 'group', id: 'other', label: 'Other files', paths: s.others.map(o => o.file.filename) });
+      const notebooks = shown([...s.notebooks.keys()]);
+      const others = shown(s.others.map(o => o.file.filename));
+      const nodes: Node[] = [{ kind: 'pr' }];
+      // While filtering, a group with no match is left out, as GitHub leaves out empty folders.
+      if (notebooks.length || !filterText) {
+        nodes.push({ kind: 'group', id: 'notebooks', label: 'Notebooks', paths: notebooks });
+      }
+      if (others.length) {
+        nodes.push({ kind: 'group', id: 'other', label: 'Other files', paths: others });
       }
       return nodes;
     }
@@ -76,7 +106,10 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
       if (fileLayout() === 'tree') {
         return this.folderChildren(node.id, buildFolderTree(node.paths));
       }
-      return node.id === 'notebooks' ? notebookNodes(this.state) : s.others.map(other => ({ kind: 'file', other }));
+      const keep = new Set(node.paths);
+      return node.id === 'notebooks'
+        ? notebookNodes(this.state).filter(n => keep.has(nodePath(n)!))
+        : s.others.filter(o => keep.has(o.file.filename)).map(other => ({ kind: 'file', other }));
     }
     if (node.kind === 'folder') {
       return this.folderChildren(node.group, node.folder);
@@ -111,8 +144,10 @@ export class FilesTree implements vscode.TreeDataProvider<Node> {
       case 'group': {
         const item = new vscode.TreeItem(
           node.label,
-          node.id === 'notebooks' ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
+          node.id === 'notebooks' || filterText ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
         );
+        // A new id while filtering, so the matches show unfolded and the reviewer's own folding is back afterwards.
+        item.id = filterText ? `group:${node.id}:${filterText}` : undefined;
         const viewed = node.paths.filter(p => this.state.isViewed(p)).length;
         item.description = viewed ? `${viewed}/${node.paths.length} viewed` : String(node.paths.length);
         item.iconPath = new vscode.ThemeIcon(node.id === 'notebooks' ? 'notebook' : 'files');

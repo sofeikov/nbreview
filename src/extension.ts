@@ -6,8 +6,8 @@ import { ReviewState } from './state.ts';
 import { TextReview } from './textReview.ts';
 import { VisualReview } from './visualReview.ts';
 import { OverviewPage } from './overview.ts';
-import { FilesTree, fileLayout, initFileLayout, nodePath, nodePaths, nodeTarget, onDidChangeFileLayout, pendingInOrder, reviewOrder, setFileLayout, type Node } from './tree.ts';
-import { allFolders, viewedToggle } from './paths.ts';
+import { FilesTree, fileFilter, fileLayout, onDidChangeFileFilter, setFileFilter, initFileLayout, nodePath, nodePaths, nodeTarget, onDidChangeFileLayout, pendingInOrder, reviewOrder, setFileLayout, type Node } from './tree.ts';
+import { allFolders, nameMatches, viewedToggle } from './paths.ts';
 import { githubFileUrl } from './core/navigate.ts';
 import type { PendingComment } from './core/pending.ts';
 import { showError } from './notify.ts';
@@ -72,6 +72,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nbreview.viewAsTree', () => setFileLayout('tree')),
     vscode.commands.registerCommand('nbreview.viewAsList', () => setFileLayout('list')),
     onDidChangeFileLayout(updateLayoutContext),
+    vscode.commands.registerCommand('nbreview.filterFiles', filterFiles),
+    vscode.commands.registerCommand('nbreview.clearFileFilter', () => setFileFilter('')),
+    onDidChangeFileFilter(updateFileFilterView),
+    // A filter is for the pull request it was typed on, as on GitHub.
+    state.onDidChange(e => {
+      const key = state.session && `${state.session.pr.owner}/${state.session.pr.repo}#${state.session.pr.number}`;
+      if (e.session && key !== filteredPr) {
+        filteredPr = key;
+        setFileFilter('');
+      }
+    }),
     vscode.commands.registerCommand('nbreview.showAllComments', () => state.setCommentFilter('all')),
     vscode.commands.registerCommand('nbreview.showUnresolvedComments', () => state.setCommentFilter('unresolved')),
     vscode.commands.registerCommand('nbreview.hideComments', () => state.setCommentFilter('none')),
@@ -244,6 +255,33 @@ function reviewPath(arg?: vscode.Uri | string): string | undefined {
 function updateActiveContext(): void {
   const path = reviewPath();
   void vscode.commands.executeCommand('setContext', 'nbreview.activeViewed', !!path && state.isViewed(path));
+}
+
+let filteredPr: string | undefined;
+
+/** Filters the Review panel's files by name as the reviewer types; an empty box shows them all. */
+function filterFiles(): void {
+  if (!state.session) {
+    return;
+  }
+  const box = vscode.window.createInputBox();
+  box.title = 'Filter Files';
+  box.placeholder = 'Part of a file name, e.g. train or .ipynb';
+  box.prompt = 'Matches the file name and extension, not its folders.';
+  box.value = fileFilter();
+  box.onDidChangeValue(setFileFilter);
+  box.onDidAccept(() => box.hide());
+  box.onDidHide(() => box.dispose());
+  box.show();
+}
+
+/** Says in the Review panel that a filter is on, and shows the title bar's Clear Filter button. */
+function updateFileFilterView(): void {
+  const text = fileFilter();
+  const s = state.session;
+  const any = !!s && [...s.notebooks.keys(), ...s.others.map(o => o.file.filename)].some(p => nameMatches(p, text));
+  treeView.message = !text ? undefined : any ? `Files named like "${text}"` : `No file names contain "${text}"`;
+  void vscode.commands.executeCommand('setContext', 'nbreview.fileFilter', !!text);
 }
 
 function updateLayoutContext(): void {

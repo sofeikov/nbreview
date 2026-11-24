@@ -2,7 +2,7 @@
   "name": "nbreview",
   "displayName": "Notebook Review for GitHub Pull Requests (Jupyter .ipynb)",
   "description": "Review Jupyter notebooks (.ipynb) in GitHub pull requests inside VS Code: rendered cell-by-cell diffs of code, Markdown, LaTeX and outputs, with line comments on any cell that post to GitHub as a normal PR review.",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "publisher": "KonstantinSofeikov",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -129,6 +129,19 @@
         "category": "Notebook Review",
         "icon": "$(github)",
         "enablement": "nbreview.active"
+      },
+      {
+        "command": "nbreview.filterFiles",
+        "title": "Filter Files by Name",
+        "category": "Notebook Review",
+        "icon": "$(search)",
+        "enablement": "nbreview.active"
+      },
+      {
+        "command": "nbreview.clearFileFilter",
+        "title": "Clear File Filter",
+        "category": "Notebook Review",
+        "icon": "$(search-stop)"
       },
       {
         "command": "nbreview.viewAsTree",
@@ -365,6 +378,16 @@
           "command": "nbreview.openOnGitHub",
           "when": "view == nbreview.files && nbreview.active",
           "group": "navigation@3"
+        },
+        {
+          "command": "nbreview.filterFiles",
+          "when": "view == nbreview.files && nbreview.active && !nbreview.fileFilter",
+          "group": "navigation@4"
+        },
+        {
+          "command": "nbreview.clearFileFilter",
+          "when": "view == nbreview.files && nbreview.active && nbreview.fileFilter",
+          "group": "navigation@4"
         },
         {
           "command": "nbreview.viewAsList",

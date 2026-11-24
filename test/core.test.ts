@@ -232,7 +232,7 @@ test('threads on ordinary files go on their own line', () => {
   assert.deepEqual(locateFileThread({ ...base, line: null, subjectType: 'FILE' }), { side: 'RIGHT', docLine: 0, note: 'file comment' });
 });
 
-import { allFolders, buildFolderTree, pageTitle, pathFromPageTitle, treeOrder, viewedToggle } from '../src/paths.ts';
+import { allFolders, buildFolderTree, nameMatches, pageTitle, pathFromPageTitle, treeOrder, viewedToggle } from '../src/paths.ts';
 
 test('Space in the Review panel marks the selection viewed, or unmarks it when all of it is viewed', () => {
   const viewed = new Set(['a.py', 'b.py']);
@@ -329,4 +329,13 @@ test('image sizes are read from PNG, GIF and JPEG headers', () => {
   assert.deepEqual(imageSize(jpeg), { w: 200, h: 100 });
   assert.equal(imageSize(new TextEncoder().encode('not an image')), undefined);
   assert.deepEqual([formatSize(812), formatSize(53_000), formatSize(1_500_000)], ['812 B', '52 KB', '1.4 MB']);
+});
+
+test('nameMatches looks at the file name and extension only, ignoring case', () => {
+  assert.equal(nameMatches('steps/Train_Model.ipynb', 'train'), true);
+  assert.equal(nameMatches('steps/train_model.ipynb', '.IPYNB'), true);
+  assert.equal(nameMatches('steps/train_model.ipynb', 'steps'), false);
+  assert.equal(nameMatches('data/q_value_step1/run.py', 'q_value'), false);
+  assert.equal(nameMatches('run.py', '  run '), true);
+  assert.equal(nameMatches('run.py', ''), true);
 });

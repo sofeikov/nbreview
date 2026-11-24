@@ -2,6 +2,11 @@ export function basename(p: string): string {
   return p.slice(p.lastIndexOf('/') + 1);
 }
 
+/** Whether a file's own name (with its extension, not its folders) contains `query`, ignoring case. */
+export function nameMatches(path: string, query: string): boolean {
+  return basename(path).toLowerCase().includes(query.trim().toLowerCase());
+}
+
 export function dirname(p: string): string {
   const i = p.lastIndexOf('/');
   return i < 0 ? '' : p.slice(0, i);
