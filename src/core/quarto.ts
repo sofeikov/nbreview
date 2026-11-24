@@ -11,6 +11,7 @@
 // so a new section that renumbers the ones after it doesn't mark the references to them.
 import type MarkdownIt from 'markdown-it';
 import yaml from 'js-yaml';
+import { needsFrame } from './outputFrame.ts';
 import { OPTION_LINE, RunCursor, outputsKey, type QuartoRun, type RunCell, type RunExpr, type RunOutput } from './quartoRun.ts';
 
 type Token = ReturnType<MarkdownIt['parse']>[number];
@@ -796,9 +797,11 @@ function outputHtml(md: MarkdownIt, o: RunOutput, asis: boolean): string {
     case 'image':
       return `<img class="qout-img" alt="" src="${o.mime === 'image/svg+xml' ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(o.data)}` : `data:${esc(o.mime)};base64,${esc(o.data)}`}">`;
     case 'html':
-      // The page runs no scripts of a document, so an interactive plot can't be drawn here.
-      return /<script[\s>]/i.test(o.html)
-        ? '<div class="qfig-ph">Interactive output: drawn only in the rendered document</div>'
+      // The page runs no script of a document. An output that draws itself with scripts goes
+      // into a sandboxed frame, which the page makes from the HTML it finds here (URI-encoded, as
+      // the page's sanitizer drops an attribute with `-->` in it).
+      return needsFrame(o.html)
+        ? `<div class="qout-frame" data-frame="${encodeURIComponent(o.html)}"><div class="qfig-ph">Interactive output</div></div>`
         : `<div class="qout-html html-output">${o.html}</div>`;
     case 'stream':
       // What a cell prints with `output: asis` is Markdown of the document.

@@ -135,6 +135,26 @@ const runTexts = ['base', 'head'].map(side => readFileSync(`test/fixtures/quarto
 const runPr = { number: 45, title: 'Refresh the report\'s data', url: 'https://github.com/' };
 const quartoRunModel = buildFileViewModel(runFile, runTexts[0], runTexts[1], runPr, undefined, { quarto: { base: runSide('base'), head: runSide('head') } });
 const quartoNoRunModel = buildFileViewModel(runFile, runTexts[0], runTexts[1], runPr);
+// The same with its figure as an interactive output: HTML with a script of its own and one it loads
+// from the web, which the page below answers with a few lines in the library's place.
+const framed = (side: string, values: number[]) => {
+  const { run } = runSide(side);
+  const id = side === 'base' ? '3f2c1a9e-0b7d-4c55-9e21-6a1f0c8d2b11' : 'a81d7e02-5c3f-4b90-8f6e-2d4b9c7e1f33';
+  const figure = run.cells.find(c => c.outputs.some(o => o.kind === 'image'));
+  if (figure) {
+    figure.outputs = [{
+      kind: 'html',
+      text: '<IPython.core.display.HTML object>',
+      html: `<div style="height:220px; width:100%;"><script src="https://cdn.example.org/tinyplot.min.js"></script><div id="${id}" style="height:100%; width:100%;"></div>`
+        + `<script>window.TinyPlot.bars(document.getElementById("${id}"), ${JSON.stringify(values)});</script></div>`,
+    }];
+  }
+  return { run };
+};
+const quartoFrameModel = buildFileViewModel(runFile, runTexts[0], runTexts[1], runPr, undefined, { quarto: { base: framed('base', [3, 5, 2, 6]), head: framed('head', [3, 5, 4, 7]) } });
+const TINYPLOT = 'window.TinyPlot = { bars: function (el, values) { var max = Math.max.apply(null, values); el.style.cssText += "display:flex;align-items:flex-end;gap:12px;padding:12px;box-sizing:border-box;"; '
+  + 'values.forEach(function (v) { var b = document.createElement("div"); b.title = String(v); b.style.cssText = "flex:1;background:#2a78d6;height:" + (100 * v / max) + "%"; '
+  + 'b.onmouseenter = function () { b.style.background = "#d9622b"; }; b.onmouseleave = function () { b.style.background = "#2a78d6"; }; el.appendChild(b); }); } };';
 
 const quartoThreads = buildFileThreads([
   {
@@ -297,6 +317,8 @@ writeFileSync('out/demo/data.js', [
   `window.__QUARTO_THREADS__ = ${JSON.stringify(quartoThreads)};`,
   `window.__QUARTO_RUN_MODEL__ = ${JSON.stringify(quartoRunModel)};`,
   `window.__QUARTO_NORUN_MODEL__ = ${JSON.stringify(quartoNoRunModel)};`,
+  `window.__QUARTO_FRAME_MODEL__ = ${JSON.stringify(quartoFrameModel)};`,
+  `window.__TINYPLOT__ = ${JSON.stringify(TINYPLOT)};`,
   `window.__CHECKS_MODEL__ = ${JSON.stringify(checksModel)};`,
   `window.__CHECKS_FILE_MODEL__ = ${JSON.stringify(checksFileModel)};`,
   `window.__SINCE_MODEL__ = ${JSON.stringify(sinceModel)};`,
@@ -330,6 +352,10 @@ window.acquireVsCodeApi = () => ({
     if (m.type === 'plan') {
       deliver({ type: 'plan', requestId: m.requestId, describe: location.hash.startsWith('#quarto') ? 'Will post as a line comment → docs/value.qmd L27' : location.hash.startsWith('#checks') ? 'Will post as a line comment → ' + model.path : 'Will post as a line comment · cell line 2 → ${path} L41' });
     }
+    // The extension downloads the scripts an interactive output loads; here a stand-in comes back, a moment later.
+    if (m.type === 'outputScripts') {
+      m.scripts.forEach(s => setTimeout(() => deliver({ type: 'outputScript', url: s.url, text: window.__TINYPLOT__ }), 50));
+    }
     if (m.type === 'loadCommits') {
       deliver({ type: 'commits', head: window.__COMMITS__[3].sha, commits: window.__COMMITS__ });
     }
@@ -354,14 +380,15 @@ window.acquireVsCodeApi = () => ({
 const scene = location.hash.slice(1);
 // The range picker: #range (on "Since your review", the default) and #range-commit (one earlier
 // commit picked, so the page is read-only). The experimental Quarto build: #quarto-run (a document
-// built at both versions), #quarto-norun (the same before a build) and #quarto-box (its box open).
+// built at both versions), #quarto-frame (the same with an interactive figure, in its frame),
+// #quarto-norun (the same before a build) and #quarto-box (its box open).
 const checks = scene.startsWith('checks');
-const built = scene === 'quarto-run';
-const models = { 'quarto-run': window.__QUARTO_RUN_MODEL__, 'quarto-norun': window.__QUARTO_NORUN_MODEL__, 'quarto-box': window.__QUARTO_NORUN_MODEL__, file: window.__FILE_MODEL__, quarto: window.__QUARTO_MODEL__, 'quarto-rows': window.__QUARTO_MODEL__, 'checks-file': window.__CHECKS_FILE_MODEL__, range: window.__SINCE_MODEL__, 'range-commit': window.__COMMIT_MODEL__ };
+const built = scene === 'quarto-run' || scene === 'quarto-frame';
+const models = { 'quarto-run': window.__QUARTO_RUN_MODEL__, 'quarto-frame': window.__QUARTO_FRAME_MODEL__, 'quarto-norun': window.__QUARTO_NORUN_MODEL__, 'quarto-box': window.__QUARTO_NORUN_MODEL__, file: window.__FILE_MODEL__, quarto: window.__QUARTO_MODEL__, 'quarto-rows': window.__QUARTO_MODEL__, 'checks-file': window.__CHECKS_FILE_MODEL__, range: window.__SINCE_MODEL__, 'range-commit': window.__COMMIT_MODEL__ };
 const model = models[scene] ?? (checks ? window.__CHECKS_MODEL__ : window.__MODEL__);
 deliver({ type: 'model', model });
 deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : scene === 'quarto-rows' ? window.__QUARTO_THREADS__ : checks || scene === 'range-commit' || scene.startsWith('quarto-') && scene !== 'quarto-rows' ? [] : window.__THREADS__ });
-if (scene === 'quarto-run' || scene === 'quarto-norun' || scene === 'quarto-box') {
+if (scene === 'quarto-run' || scene === 'quarto-frame' || scene === 'quarto-norun' || scene === 'quarto-box') {
   panelState.quarto = { sides: [{ side: 'RIGHT', sha: '5c1e9d27aa', built }, { side: 'LEFT', sha: '8d02be81f4', built }] };
 }
 if (scene.startsWith('range')) {

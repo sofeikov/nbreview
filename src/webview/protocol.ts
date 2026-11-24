@@ -3,6 +3,7 @@ import type { ReactionContent } from '../core/reactions.ts';
 import type { CommentFilter } from '../core/commentFilter.ts';
 import type { Finding } from '../core/checks.ts';
 import type { PrCommit, RangeChoice } from '../core/range.ts';
+import type { FrameScript } from '../core/outputFrame.ts';
 
 export type { Finding, PrCommit, RangeChoice };
 
@@ -233,6 +234,8 @@ export type HostMessage =
   | { type: 'commits'; head: string; commits: CommitVM[]; error?: string }
   /** A short note, such as where a definition came from. */
   | { type: 'toast'; message: string }
+  /** The text of a script an interactive output loads by URL, or why the extension couldn't get it. */
+  | { type: 'outputScript'; url: string; text?: string; error?: string }
   | { type: 'error'; message: string }
   | { type: 'submitted'; ok: boolean; url?: string; message?: string };
 
@@ -265,5 +268,7 @@ export type WebviewMessage =
   /** Build this Quarto file with Quarto, at the versions the page shows (asks first), or drop what was built. */
   | { type: 'buildQuarto' }
   | { type: 'clearQuarto' }
+  /** The scripts an interactive output of a Quarto build loads by URL: the extension downloads them. */
+  | { type: 'outputScripts'; scripts: FrameScript[] }
   /** Copies the pull request's GitHub link to the clipboard. */
   | { type: 'copyLink'; url: string };

@@ -8,6 +8,7 @@
 // in document order (`RunCursor`), so a piece Quarto read differently leaves a placeholder and
 // doesn't shift the values after it.
 import { fnv } from './notebook.ts';
+import { withoutRunIds } from './outputFrame.ts';
 
 /** A cell option line: `#| key: value`, also `# | ` as code formatters write it, `%%|`, `//|` and `--|`. */
 export const OPTION_LINE = /^[ \t]*(?:#|%%|\/\/|--)[ \t]*\|[ \t]?(.*)$/;
@@ -174,9 +175,12 @@ export class RunCursor {
   }
 }
 
-/** A short key of a cell's outputs: two runs of a cell with the same key show the same. */
+/**
+ * A short key of a cell's outputs: two runs of a cell with the same key show the same. The ids a
+ * plotting library makes up for each run don't count.
+ */
 export function outputsKey(outputs: RunOutput[]): string {
-  return fnv(JSON.stringify(outputs));
+  return fnv(JSON.stringify(outputs.map(o => (o.kind === 'html' ? { ...o, html: withoutRunIds(o.html) } : o))));
 }
 
 /** Splits a command line into its words; quotes keep spaces in a word. */

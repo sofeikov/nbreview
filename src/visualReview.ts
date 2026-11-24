@@ -10,6 +10,7 @@ import type { TextReview } from './textReview.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
 import type { Finding, HostMessage, PageSpot, QuartoState, RangeState, Side, ViewModel, WebviewMessage } from './webview/protocol.ts';
 import { QuartoBuilds, type BuildTarget } from './quartoBuild.ts';
+import { OutputScripts } from './outputScripts.ts';
 import { resolveRange, type RangeChoice, type ResolvedRange } from './core/range.ts';
 import { Navigator, type LocalRepo } from './navigation.ts';
 import { pageTitle, pathFromPageTitle } from './paths.ts';
@@ -35,6 +36,7 @@ export class VisualReview implements vscode.Disposable {
   private readonly nav: Navigator;
   /** Experimental: builds of Quarto files with Quarto, for what they compute. */
   private readonly builds: QuartoBuilds;
+  private readonly scripts: OutputScripts;
 
   /** The workspace folder that clones the pull request's repository, if one is open. */
   localRepo(): Promise<LocalRepo | undefined> {
@@ -58,6 +60,7 @@ export class VisualReview implements vscode.Disposable {
     this.nav = new Navigator(state, storage);
     this.nav.onPage = (spot, from) => this.showOnPage(spot, from);
     this.builds = new QuartoBuilds(storage.fsPath, () => this.state.session?.gh.gitEnv());
+    this.scripts = new OutputScripts(storage.fsPath);
     this.disposables.push(
       this.builds,
       // A new result redraws the Quarto pages; a build that moves on only changes their state.
@@ -395,6 +398,12 @@ export class VisualReview implements vscode.Disposable {
         return;
       case 'clearQuarto':
         await this.builds.remove(this.quartoTargets(nbPath, (await this.range(nbPath))?.resolved).map(t => t.target));
+        return;
+      case 'outputScripts':
+        // Only a built Quarto document has outputs with scripts.
+        if (isQuarto(nbPath) && Array.isArray(msg.scripts)) {
+          await Promise.all(msg.scripts.slice(0, 20).map(async script => this.post(panel, { type: 'outputScript', url: script.url, ...await this.scripts.get(script) })));
+        }
         return;
     }
   }

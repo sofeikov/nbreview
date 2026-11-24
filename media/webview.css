@@ -441,6 +441,9 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .md-col .qout.md-changed { padding: 4px 6px; }
 /* A changed table has its changed numbers marked, which says more than a tint over all of it. */
 .md-col .qout.md-changed:has(.x-ins, .x-del) { background: transparent; padding: 0; }
+/* An output that draws itself with scripts, in a frame of its own; white, as such outputs are made for a white page. */
+.md-col .qout-frame { margin: 2px 0; }
+.md-col .qout-iframe { display: block; width: 100%; border: 0; border-radius: 3px; background: #fff; }
 .md-col .qout-img { max-width: 100%; max-height: 80vh; background: #fff; border-radius: 3px; }
 .md-col .qout-text { margin: 2px 0; font-family: var(--code-font); font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
 .md-col .qout-text.error, .md-col .qout-text.stderr { color: var(--vscode-errorForeground); }

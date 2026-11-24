@@ -9,6 +9,7 @@ import { showsThread, type CommentFilter } from '../core/commentFilter.ts';
 import { diffPixels, pairImages, type ImagePair } from './imageDiff.ts';
 import { button, h, icon, sanitize, timeAgo, type Child } from './dom.ts';
 import { drawDiagrams } from './mermaid.ts';
+import { fromOutputFrame, initFrames, parkFrames, placeFrames, scriptReply } from './frames.ts';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: WebviewMessage): void;
@@ -120,9 +121,12 @@ function render(): void {
   const caret = active instanceof HTMLTextAreaElement ? active.selectionStart : undefined;
 
   shown = threads.filter(t => showsThread(panel.comments, { isResolved: t.resolved, comments: t.comments }));
+  parkFrames();
   app.replaceChildren(renderToolbar(model), renderCells(model), h('div', { class: 'toast', id: 'toast' }));
-  // Before the scroll position is restored: the diagrams drawn before go in at once.
+  // Before the scroll position is restored: the diagrams drawn before go in at once, and the
+  // frames of interactive outputs go back in their places.
   drawDiagrams(app);
+  placeFrames(app);
   scheduleChangeMap();
   if (!restoredScroll) {
     restoredScroll = true;
@@ -2209,9 +2213,18 @@ function toast(message: string): void {
 // VS Code changes the body's class when the colour theme changes; diagrams are drawn again to match.
 new MutationObserver(render).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
+initFrames(scripts => post({ type: 'outputScripts', scripts }));
+
 window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
+  // A script of the pull request, in the frame of an interactive output, can post here too.
+  if (fromOutputFrame(event)) {
+    return;
+  }
   const msg = event.data;
   switch (msg.type) {
+    case 'outputScript':
+      scriptReply(msg.url, { text: msg.text, error: msg.error });
+      break;
     case 'model':
       model = msg.model;
       render();

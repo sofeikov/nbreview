@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RunCursor, cellCode, outputsKey, parseQuartoRun, readQuartoRun, type QuartoRun } from '../src/core/quartoRun.ts';
 import { renderDocument, renderDocumentDiff } from '../src/mdDoc.ts';
+import { frameDocument, frameScripts, needsFrame, withoutRunIds } from '../src/core/outputFrame.ts';
+import { integrityHolds } from '../src/outputScripts.ts';
+import { createHash } from 'node:crypto';
 
 // The fixtures are a small document at two versions, and the notebooks Quarto 1.6 kept of them
 // (`quarto render x.qmd --to gfm -M keep-ipynb:true`).
@@ -91,7 +94,7 @@ test('without a run the document is as before, and a run that lacks a piece says
   assert.match(partial, /<div class="qfig-ph">Not in the Quarto build of this version<\/div>/);
 });
 
-test('a cell with output: false shows none, and an interactive output is not drawn', () => {
+test('a cell with output: false shows none, and an interactive output goes to a frame, not into the page', () => {
   const src = lines('```{python}\n#| output: false\nx\n```\n\n```{python}\ny\n```');
   const run: QuartoRun = {
     exprs: [],
@@ -102,8 +105,10 @@ test('a cell with output: false shows none, and an interactive output is not dra
   };
   const html = renderDocument(src, { quarto: true, context: { run } });
   assert.doesNotMatch(html, /hidden/);
-  assert.doesNotMatch(html, /draw\(\)/);
-  assert.match(html, /Interactive output: drawn only in the rendered document/);
+  // The output's HTML is there for the page to make a frame of, encoded: nothing of it is markup of the page.
+  assert.doesNotMatch(html, /<script/);
+  const holder = /<div class="qout-frame" data-frame="([^"]*)">/.exec(html);
+  assert.equal(decodeURIComponent(holder?.[1] ?? ''), '<div id="p"></div><script>draw()</script>');
   assert.match(html, /<div class="qout-html html-output"><table>/);
 });
 
@@ -141,6 +146,72 @@ test('with a run of one version only, its values show and nothing is marked for 
   assert.match(d.base, /<code class="qexpr"/);
   assert.doesNotMatch(d.head, /<span class="x-ins"><span class="qval"/);
   assert.doesNotMatch(d.head, /qout md-changed/);
+});
+
+const PLOTLY = (id: string, y: number[]) => '<div style="height:440px; width:100%;">'
+  + '<script>window.PlotlyConfig = {MathJaxConfig: \'local\'};</script>\n'
+  + '<script charset="utf-8" src="https://cdn.plot.ly/plotly-3.0.1.min.js" integrity="sha256-abc=" crossorigin="anonymous"></script>'
+  + `<div id="${id}" class="plotly-graph-div" style="height:100%; width:100%;"></div>`
+  + `<script>if (document.getElementById("${id}")) { Plotly.newPlot("${id}", [{"y":${JSON.stringify(y)}}], {}, {"responsive": true}) }</script></div>`;
+
+test('an output needs a frame when it has a script, and loads the scripts it names over https', () => {
+  assert.equal(needsFrame('<table><tr><td>1</td></tr></table>'), false);
+  assert.equal(needsFrame(PLOTLY('a', [1])), true);
+  assert.deepEqual(frameScripts(PLOTLY('a', [1])), [{ url: 'https://cdn.plot.ly/plotly-3.0.1.min.js', integrity: 'sha256-abc=' }]);
+  // Each once, `//host` as https, and nothing that isn't on the web over https.
+  assert.deepEqual(
+    frameScripts('<script src="//cdn.jsdelivr.net/npm/vega@5?a=1&amp;b=2"></script><script src=\'https://cdn.plot.ly/x.js\'></script><script src="https://cdn.plot.ly/x.js"></script><script src="http://example.org/a.js"></script><script src="lib/b.js"></script><script src="file:///etc/passwd"></script>'),
+    [{ url: 'https://cdn.jsdelivr.net/npm/vega@5?a=1&b=2' }, { url: 'https://cdn.plot.ly/x.js' }],
+  );
+});
+
+test('the frame document gives every script the nonce, and puts the downloaded ones in as text', () => {
+  const lib = 'window.Plotly = { newPlot: function () { return "</script><!-- x -->"; } };';
+  const doc = frameDocument(PLOTLY('fig1', [1, 2]), new Map([['https://cdn.plot.ly/plotly-3.0.1.min.js', lib]]), 'N0nce', 7);
+  // No script without the nonce, and none that the frame would have to load.
+  const scripts = [...doc.matchAll(/<script\b([^>]*)>/g)].map(m => m[1]);
+  assert.equal(scripts.length, 4);
+  assert.ok(scripts.every(a => / nonce="N0nce"/.test(a) && !/src=/.test(a)));
+  // The library's text can't end its script element early.
+  assert.ok(doc.includes('return "<\\/script><\\!-- x -->"; } };</script><div id="fig1"'));
+  assert.ok(doc.includes('Plotly.newPlot("fig1", [{"y":[1,2]}]'));
+  assert.match(doc, /parent\.postMessage\(\{ nbreviewFrame: 7, height: h \}, '\*'\)/);
+  assert.match(doc, /^<!DOCTYPE html>/);
+});
+
+test('a script that could not be downloaded, or is not on the web, is left out of the frame', () => {
+  const doc = frameDocument('<script src="https://cdn.example.org/a.js"></script><script src="lib/b.js"></script><script type="module">go()</script>', new Map(), 'n', 1);
+  assert.doesNotMatch(doc, /a\.js|b\.js/);
+  assert.match(doc, /<script nonce="n" type="module">go\(\)<\/script>/);
+});
+
+test('two runs of the same figure differ only in the id the library made up, which does not count', () => {
+  const a = PLOTLY('99a5c6d6-316c-4570-a5c7-584093b1c791', [1, 2]);
+  const b = PLOTLY('bff3fcf1-736d-46de-9f4a-04470445c0b3', [1, 2]);
+  const c = PLOTLY('1a739377-c29a-4a3f-aee8-911051efe7cf', [1, 3]);
+  assert.equal(withoutRunIds(a), withoutRunIds(b));
+  const key = (html: string) => outputsKey([{ kind: 'html', html, text: '' }]);
+  assert.equal(key(a), key(b));
+  assert.notEqual(key(a), key(c));
+
+  const src = lines('```{python}\n#| echo: false\nshow(fig)\n```');
+  const run = (html: string): QuartoRun => ({ exprs: [], cells: [{ code: 'show(fig)', outputs: [{ kind: 'html', html, text: '' }] }] });
+  const diff = (x: string, y: string) => renderDocumentDiff(src, src, { quarto: true, base: { run: run(x) }, head: { run: run(y) } });
+  assert.doesNotMatch(diff(a, b).head, /md-changed/);
+  const changed = diff(a, c);
+  assert.match(changed.base, /<div class="qout md-changed"><div class="qout-frame"/);
+  assert.match(changed.head, /<div class="qout md-changed"><div class="qout-frame"/);
+});
+
+test('a downloaded script must have the hash its output expects, when it gives one', () => {
+  const bytes = new TextEncoder().encode('window.x = 1;');
+  const hash = (alg: string) => `${alg}-${createHash(alg).update(bytes).digest('base64')}`;
+  assert.equal(integrityHolds(undefined, bytes), true);
+  assert.equal(integrityHolds(hash('sha256'), bytes), true);
+  assert.equal(integrityHolds(`sha384-AAAA ${hash('sha512')}`, bytes), true);
+  assert.equal(integrityHolds(hash('sha256'), new TextEncoder().encode('window.x = 2;')), false);
+  // A hash of a kind we don't know says nothing either way.
+  assert.equal(integrityHolds('md5-AAAA', bytes), true);
 });
 
 test('the build command: Quarto as installed, through uv for a uv project, or the user\'s own', async () => {
