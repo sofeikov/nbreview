@@ -5,7 +5,7 @@
 import type MarkdownIt from 'markdown-it';
 import { cellMarkdown, codeLinesHtml, escapeHtml, highlightLines, mermaidAttr, quartoMarkdown } from './render.ts';
 import { diffLines } from './core/cellDiff.ts';
-import { cellHtml, fenceLabel, fenceLanguage } from './core/quarto.ts';
+import { cellHtml, fenceLabel, fenceLanguage, shownOutputs, type CellInfo } from './core/quarto.ts';
 
 type Token = ReturnType<MarkdownIt['parse']>[number];
 
@@ -17,6 +17,11 @@ interface Leaf {
   index: number;
   /** Text used to compare and to measure similarity. */
   text: string;
+  /**
+   * What else makes two leaves differ: the values and outputs of a Quarto build, which change
+   * with the data while the source stays the same (the `diffKey` of their tokens).
+   */
+  extra: string;
 }
 
 /** The smallest unit of the word diff: a word, a space, a punctuation mark, or an inline element. */
@@ -91,16 +96,20 @@ function leaves(tokens: Token[]): Leaf[] {
   tokens.forEach((t, index) => {
     if (t.type === 'inline') {
       const open = tokens[index - 1];
-      out.push({ kind: open?.tag || open?.type || 'inline', index, text: t.content });
+      out.push({ kind: open?.tag || open?.type || 'inline', index, text: t.content, extra: (t.children ?? []).map(diffKey).join('\u0001') });
     } else if (t.type === 'fence' || t.type === 'code_block' || t.type.startsWith('math_block') || t.type === 'html_block') {
-      out.push({ kind: t.type, index, text: t.content });
+      out.push({ kind: t.type, index, text: t.content, extra: diffKey(t) });
     }
   });
   return out;
 }
 
+function diffKey(t: Token): string {
+  return (t.meta as { diffKey?: string } | null)?.diffKey ?? '';
+}
+
 function key(leaf: Leaf): string {
-  return `${leaf.kind}\u0000${leaf.text}`;
+  return `${leaf.kind}\u0000${leaf.text}\u0000${leaf.extra}`;
 }
 
 /** Share of words the two texts have in common (Dice coefficient). */
@@ -147,6 +156,11 @@ function diffPair(md: MarkdownIt, a: Token[], x: Leaf, b: Token[], y: Leaf, envA
   const ta = a[x.index];
   const tb = b[y.index];
   if (isCode(ta) && isCode(tb)) {
+    diffOutputs(md, ta, tb);
+    if (ta.content === tb.content && ta.info === tb.info) {
+      // The same code with other outputs: the outputs are marked, and the code stays as it is.
+      return;
+    }
     // A long code block (a file tree, a command list) often changes in one line: mark that line.
     const linesA = codeLines(ta);
     const linesB = codeLines(tb);
@@ -223,9 +237,11 @@ function atomize(md: MarkdownIt, inline: Token): Atom[] {
       atoms.push({ key: `${ctxKey}| `, html: '\n', ctx, space: true });
     } else {
       // Code spans, inline maths, images, line breaks: one unit each. A Quarto cross-reference or
-      // citation is compared by its source, so a renumbered section isn't a change.
+      // citation is compared by its source, so a renumbered section isn't a change. An inline
+      // expression is compared by its value when both versions were built, and by its source
+      // otherwise: a value on one side only isn't a change.
       const html = md.renderer.renderInline([tok], md.options, {});
-      const what = tok.type.startsWith('quarto_') ? '' : html;
+      const what = tok.type.startsWith('quarto_') ? '' : (tok.meta as { expr?: boolean } | null)?.expr ? diffKey(tok) : html;
       atoms.push({ key: `${ctxKey}|${tok.type}:${tok.content}:${what}`, html, ctx, space: false });
     }
   }
@@ -254,6 +270,33 @@ function renderAtoms(atoms: Atom[], marked: Set<number>, cls: string): string {
     html += `</${open.pop()!.tag}>`;
   }
   return html;
+}
+
+/**
+ * Marks the outputs of two paired Quarto cells that differ in a build of both versions. Tables
+ * written as Markdown are compared like the document's own, so the changed numbers are marked.
+ */
+function diffOutputs(md: MarkdownIt, ta: Token, tb: Token): void {
+  const ca = (ta.meta as { cell?: CellInfo } | null)?.cell;
+  const cb = (tb.meta as { cell?: CellInfo } | null)?.cell;
+  if (!ca?.ran || !cb?.ran || diffKey(ta) === diffKey(tb)) {
+    return;
+  }
+  ca.runChanged = cb.runChanged = true;
+  const outA = shownOutputs(ca, ca.run);
+  const outB = shownOutputs(cb, cb.run);
+  const text = (cell: CellInfo, o: (typeof outA)[number] | undefined) =>
+    o?.kind === 'markdown' || (o?.kind === 'stream' && cell.asis && o.name !== 'stderr') ? o.text : undefined;
+  outA.forEach((a, i) => {
+    const x = text(ca, a);
+    const y = text(cb, outB[i]);
+    if (x !== undefined && y !== undefined && x !== y) {
+      const d = renderMarkdownDiff(x.split('\n'), y.split('\n'), { md });
+      const wrap = (html: string) => `<div class="qout-md">${html.replace(/ data-src="[^"]*"/g, '')}</div>`;
+      (ca.outputHtml ??= [])[i] = wrap(d.base);
+      (cb.outputHtml ??= [])[i] = wrap(d.head);
+    }
+  });
 }
 
 function isCode(t: Token): boolean {

@@ -11,6 +11,7 @@
 // so a new section that renumbers the ones after it doesn't mark the references to them.
 import type MarkdownIt from 'markdown-it';
 import yaml from 'js-yaml';
+import { OPTION_LINE, RunCursor, outputsKey, type QuartoRun, type RunCell, type RunExpr, type RunOutput } from './quartoRun.ts';
 
 type Token = ReturnType<MarkdownIt['parse']>[number];
 type CoreRule = Parameters<MarkdownIt['core']['ruler']['push']>[1];
@@ -65,9 +66,6 @@ const CALLOUTS = new Set(['note', 'tip', 'warning', 'important', 'caution']);
 
 /** Cells whose output is a diagram drawn from their source, not a result of running code. */
 const DIAGRAMS = new Set(['mermaid', 'dot']);
-
-/** A cell option line: `#| key: value`, also `# | ` as code formatters write it, `%%|` and `//|`. */
-const OPTION_LINE = /^[ \t]*(?:#|%%|\/\/|--)[ \t]*\|[ \t]?(.*)$/;
 
 /** A citation key: Pandoc allows some punctuation inside a key, but not at its end. */
 const KEY = /[\p{L}\p{N}_](?:[\p{L}\p{N}_:.#$%&\-+?<>~/]*[\p{L}\p{N}_])?/uy;
@@ -289,6 +287,31 @@ export interface QuartoContext {
   bibliography?: Bibliography;
   /** The text of the files that `{{< include >}}` names, by their path in the repository. */
   includes?: Map<string, string>;
+  /** What the document computed in a Quarto build of this version, when one was made (see quartoRun.ts). */
+  run?: QuartoRun;
+}
+
+/**
+ * The run of the document being parsed, handed out in document order; undefined without one. It
+ * is kept in the env, which an included file's env copies, so the include takes its values from
+ * the same run.
+ */
+function runCursor(env: Record<string, unknown>): RunCursor | undefined {
+  const run = (env.quartoContext as QuartoContext | undefined)?.run;
+  if (!run) {
+    return undefined;
+  }
+  return (env.quartoRunCursor ??= new RunCursor(run)) as RunCursor;
+}
+
+/** What an inline expression token carries: its result in the run, and what the diff compares it by. */
+interface ExprMeta {
+  expr: true;
+  /** The document has a run: `value` is the expression's result in it, if it has one. */
+  ran: boolean;
+  value?: RunExpr;
+  /** Set when both versions have a run: the value, so a number that changed is a change. */
+  diffKey?: string;
 }
 
 /** The folder of a path in the repository, `''` at the root. */
@@ -599,7 +622,11 @@ function blocksRule(s: StateCore): void {
       for (const t of targets) {
         register(t.id, { prefix: XREF_PREFIXES[t.kind], num: t.num });
       }
-      tok.meta = { ...tok.meta, cell: { ...info, targets } satisfies CellInfo };
+      const cursor = runCursor(s.env);
+      const run = cursor && info.code !== 'excluded' ? cursor.cell(tok.content) : undefined;
+      // With a run of both versions, a cell whose outputs changed is a change, whatever its code.
+      const diffKey = cursor && s.env.quartoCompare ? outputsKey(shownOutputs(info, run)) : undefined;
+      tok.meta = { ...tok.meta, cell: { ...info, targets, ...(cursor ? { ran: true } : {}), ...(run ? { run } : {}) } satisfies CellInfo, ...(diffKey ? { diffKey } : {}) };
     } else if (tok.type === 'paragraph_open' && inline && tokens[i + 2]?.type === 'paragraph_close' && INCLUDE_ALONE.test(inline.content.trim())) {
       // An include on its own line: the included file, rendered in its place.
       tok.type = 'html_block';
@@ -683,6 +710,15 @@ export interface CellInfo {
   targets: CellTarget[];
   /** It writes Markdown and a table caption follows it: the table is what it writes. */
   writesTable?: boolean;
+  /** The document doesn't show the cell's outputs (`output: false`), or its warnings (`warning: false`). */
+  noOutput?: boolean;
+  noWarning?: boolean;
+  /** The document has a run (see quartoRun.ts), and `run` is this cell in it, when it ran. */
+  ran?: boolean;
+  run?: RunCell;
+  /** Set by the diff: the outputs differ from the other version's, and the HTML of those it compared. */
+  runChanged?: boolean;
+  outputHtml?: (string | undefined)[];
 }
 
 /** The options of a code cell, from the `#|` lines at its top. Lines that aren't valid YAML give none. */
@@ -719,6 +755,8 @@ export function cellInfo(lang: string, code: string, meta: unknown): Omit<CellIn
       ? 'hidden'
       : fold === true || fold === 'true' || fold === 'hide' ? 'folded' : 'shown';
   const asis = exec('output') === 'asis';
+  const noOutput = exec('output') === false;
+  const noWarning = exec('warning') === false;
   const targets: Omit<CellTarget, 'num'>[] = [];
   if (code_ !== 'excluded') {
     const label = typeof o.label === 'string' ? o.label : undefined;
@@ -737,7 +775,39 @@ export function cellInfo(lang: string, code: string, meta: unknown): Omit<CellIn
       }
     }
   }
-  return { lang, code: code_, asis, diagram, targets };
+  return { lang, code: code_, asis, diagram, targets, ...(noOutput ? { noOutput } : {}), ...(noWarning ? { noWarning } : {}) };
+}
+
+/** The outputs of a cell's run that the rendered document shows. */
+export function shownOutputs(cell: Pick<CellInfo, 'code' | 'noOutput' | 'noWarning'>, run: RunCell | undefined): RunOutput[] {
+  if (!run || cell.noOutput || cell.code === 'excluded') {
+    return [];
+  }
+  return run.outputs.filter(o => !(cell.noWarning && o.kind === 'stream' && o.name === 'stderr'));
+}
+
+/** HTML of one output of a cell's run. Rendered Markdown loses its source lines: they are the output's, not the file's. */
+function outputHtml(md: MarkdownIt, o: RunOutput, asis: boolean): string {
+  const esc = md.utils.escapeHtml;
+  const markdown = (text: string) => `<div class="qout-md">${md.render(text, {}).replace(/ data-src="[^"]*"/g, '')}</div>`;
+  switch (o.kind) {
+    case 'markdown':
+      return markdown(o.text);
+    case 'image':
+      return `<img class="qout-img" alt="" src="${o.mime === 'image/svg+xml' ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(o.data)}` : `data:${esc(o.mime)};base64,${esc(o.data)}`}">`;
+    case 'html':
+      // The page runs no scripts of a document, so an interactive plot can't be drawn here.
+      return /<script[\s>]/i.test(o.html)
+        ? '<div class="qfig-ph">Interactive output: drawn only in the rendered document</div>'
+        : `<div class="qout-html html-output">${o.html}</div>`;
+    case 'stream':
+      // What a cell prints with `output: asis` is Markdown of the document.
+      return asis && o.name !== 'stderr' ? markdown(o.text) : `<pre class="qout-text${o.name === 'stderr' ? ' stderr' : ''}">${esc(o.text.replace(/\n$/, ''))}</pre>`;
+    case 'error':
+      return `<pre class="qout-text error">${esc(o.text)}</pre>`;
+    default:
+      return `<pre class="qout-text">${esc(o.text)}</pre>`;
+  }
 }
 
 /** An inline expression, `` `{python} x` ``: its language, its code, and a short form to show. */
@@ -781,8 +851,8 @@ export function cellHtml(md: MarkdownIt, tok: Token, pre: string, env: Record<st
     const [t, ...rest] = cell.targets;
     return `<div class="qcell diagram">${head}${t ? target(t, pre) : `<figure class="qfig">${pre}</figure>`}${rest.map(x => target(x, '')).join('')}</div>\n`;
   }
-  const made = cell.targets.map(t => target(t, `<div class="qfig-ph">${t.kind === 'fig' ? 'Figure' : 'Table'} made by this cell when the document is rendered</div>`));
-  if (cell.asis && !cell.targets.length) {
+  const made = cell.ran ? ranHtml(md, cell, target) : cell.targets.map(t => target(t, `<div class="qfig-ph">${t.kind === 'fig' ? 'Figure' : 'Table'} made by this cell when the document is rendered</div>`));
+  if (!cell.ran && cell.asis && !cell.targets.length) {
     made.push(`<div class="qfig-ph">${cell.writesTable ? 'Table made by this cell when the document is rendered' : 'Writes Markdown into the document when it is rendered'}</div>`);
   }
   if (cell.code === 'shown') {
@@ -792,6 +862,27 @@ export function cellHtml(md: MarkdownIt, tok: Token, pre: string, env: Record<st
   const open = /\bmd-(changed|added|removed)\b/.test(pre) ? ' open' : '';
   const summary = `<summary class="cell-label">${lang} · ${lines} line${lines === 1 ? '' : 's'} · ${note}</summary>`;
   return `<div class="qcell code-${cell.code}"><details class="qcode"${open}>${summary}${pre}</details>${made.join('')}</div>\n`;
+}
+
+/**
+ * What a cell made in the document's run, in place of the placeholders: its outputs, under the
+ * number and caption of its figure or table when it has one. Markdown a cell writes brings its
+ * own captions, so it is shown as it is.
+ */
+function ranHtml(md: MarkdownIt, cell: CellInfo, target: (t: CellTarget, inner: string) => string): string[] {
+  const outputs = shownOutputs(cell, cell.run);
+  const changed = cell.runChanged ? ' md-changed' : '';
+  const body = outputs.map((o, i) => cell.outputHtml?.[i] ?? outputHtml(md, o, cell.asis)).join('');
+  const [first, ...rest] = cell.targets;
+  if (!outputs.length) {
+    // A labelled cell keeps its place, which a reference scrolls to, and says why it is empty.
+    const why = !cell.run ? 'Not in the Quarto build of this version' : 'No output in the Quarto build';
+    return cell.targets.map(t => target(t, `<div class="qfig-ph">${why}</div>`));
+  }
+  if (!first || cell.asis) {
+    return [`<div class="qout${changed}"${first ? ` id="${md.utils.escapeHtml(first.id)}"` : ''}>${body}</div>`];
+  }
+  return [target(first, `<div class="qout${changed}">${body}</div>`), ...rest.map(t => target(t, ''))];
 }
 
 /** A paragraph that starts with `: ` or `Table: ` right before or after a table is its caption. */
@@ -808,10 +899,15 @@ function asisCell(tok: Token | undefined): CellInfo | undefined {
   return cell?.asis ? cell : undefined;
 }
 
-/** Core rule after `inline`: resolves cross-references and citations to their text. */
+/**
+ * Core rule after `inline`: resolves cross-references and citations to their text, and inline
+ * expressions to their values when the document has a run.
+ */
 function resolveRule(s: StateCore): void {
   const q = state(s.env);
   const bib = s.env.bibliography as Bibliography | undefined;
+  // Not for a piece rendered by itself (a title, a caption): Quarto computes only the body's.
+  const cursor = s.inlineMode ? undefined : runCursor(s.env);
   for (const tok of s.tokens) {
     if (tok.type !== 'inline') {
       continue;
@@ -840,6 +936,13 @@ function resolveRule(s: StateCore): void {
       } else if (child.type === 'quarto_shortcode') {
         // Resolved here, not when rendered: the diff renders a changed paragraph without the env.
         child.meta = { html: shortcodeHtml(child.content, s.env, s.md.utils.escapeHtml) };
+      } else if (child.type === 'code_inline') {
+        const e = inlineExpr(child.content);
+        if (e) {
+          const value = cursor?.expr(e.expr);
+          const diffKey = cursor && s.env.quartoCompare ? `=${value?.text ?? ''}` : undefined;
+          child.meta = { expr: true, ran: !!cursor, ...(value ? { value } : {}), ...(diffKey !== undefined ? { diffKey } : {}) } satisfies ExprMeta;
+        }
       }
     }
   }
@@ -1174,7 +1277,14 @@ export function quartoPlugin(md: MarkdownIt): void {
     if (!e) {
       return codeInline(tokens, idx, options, env, self);
     }
-    return `<code class="qexpr" title="${esc(`Computed when the document is rendered · ${e.lang}: ${e.expr}`)}">${esc(e.short)}</code>`;
+    const meta = tokens[idx].meta as ExprMeta | null;
+    const value = meta?.value;
+    if (value?.text !== undefined) {
+      // The value reads as text of the sentence; the expression is a hover away.
+      return `<span class="qval" title="${esc(`${e.lang}: ${e.expr}`)}">${value.markdown ? md.renderInline(value.text, {}) : esc(value.text)}</span>`;
+    }
+    const why = meta?.ran ? (value ? 'Failed in the Quarto build' : 'Not in the Quarto build of this version') : 'Computed when the document is rendered';
+    return `<code class="qexpr${meta?.ran ? ' missing' : ''}" title="${esc(`${why} · ${e.lang}: ${e.expr}`)}">${esc(e.short)}</code>`;
   };
   // Every div gets `qdiv`, so the review page looks into it for blocks to comment on, as it does
   // for a quote. The div's own lines are its `:::` fences, which have nothing to comment on.

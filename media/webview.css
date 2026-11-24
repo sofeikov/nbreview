@@ -432,6 +432,18 @@ body.vscode-light .hljs-params, body.vscode-light .hljs-attr, body.vscode-light 
 .md-col .qcell.diagram .qfig > pre { border-left: 3px solid var(--border); }
 /* Inline expressions: the value Quarto computes, shown by the code that computes it. */
 .md-col .qexpr { font-size: 0.85em; padding: 0 4px; border: 1px dotted var(--muted); border-radius: 3px; background: transparent; white-space: nowrap; cursor: help; }
+/* With a Quarto build: a value reads as text of its sentence, and is marked as computed by a dotted line. */
+.md-col .qexpr.missing { border-style: dashed; opacity: 0.75; }
+.md-col .qval { border-bottom: 1px dotted var(--muted); cursor: help; }
+.md-col .qout { overflow-x: auto; }
+.md-col .qout > :first-child, .md-col .qout-md > :first-child { margin-top: 0; }
+.md-col .qout > :last-child, .md-col .qout-md > :last-child { margin-bottom: 0; }
+.md-col .qout.md-changed { padding: 4px 6px; }
+/* A changed table has its changed numbers marked, which says more than a tint over all of it. */
+.md-col .qout.md-changed:has(.x-ins, .x-del) { background: transparent; padding: 0; }
+.md-col .qout-img { max-width: 100%; max-height: 80vh; background: #fff; border-radius: 3px; }
+.md-col .qout-text { margin: 2px 0; font-family: var(--code-font); font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
+.md-col .qout-text.error, .md-col .qout-text.stderr { color: var(--vscode-errorForeground); }
 .md-col .shortcode-value { border-bottom: 1px dotted var(--muted); }
 .md-col .shortcode.missing { color: var(--vscode-errorForeground); }
 .md-col .pagebreak { display: inline-block; font-size: 0.8em; color: var(--muted); border-top: 1px dashed var(--border); padding: 0 8px; }
@@ -720,6 +732,34 @@ button.checks.high { color: var(--finding-high); border-color: color-mix(in srgb
   z-index: 20;
 }
 .checks-box-head { font-weight: 600; padding: 0 6px 6px; }
+
+/* The experimental Quarto build: a box like the one of the checks. */
+.quarto-wrap { position: relative; }
+button.quarto.on { color: var(--vscode-textLink-foreground); }
+button.quarto.busy > .codicon-beaker { animation: quarto-busy 1.2s ease-in-out infinite; }
+@keyframes quarto-busy { 50% { opacity: 0.3; } }
+.quarto-box {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  width: min(400px, calc(100vw - 24px));
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--vscode-editorWidget-background, var(--card));
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.45));
+  z-index: 20;
+  white-space: normal;
+}
+.quarto-box-head { display: flex; align-items: center; gap: 8px; font-weight: 600; padding-bottom: 6px; }
+.quarto-box-head .tag { font-weight: 400; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); }
+.quarto-box > .muted { font-size: 11px; }
+.quarto-sides { margin: 8px 0; }
+.quarto-side { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.quarto-side > .codicon { width: 16px; }
+.quarto-side.built > .codicon { color: var(--add-mark); }
+.quarto-actions { display: flex; gap: 8px; margin: 8px 0; }
+.quarto-busy { margin: 8px 0; font-style: italic; }
 .checks-box > .muted { padding: 6px 6px 0; font-size: 11px; }
 .finding-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
 .finding-item:hover, .finding-item:focus { background: var(--vscode-list-hoverBackground); outline: none; }

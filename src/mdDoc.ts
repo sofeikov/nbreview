@@ -35,8 +35,10 @@ export function renderDocumentDiff(
   const md = options.quarto ? quartoMarkdown : cellMarkdown;
   const fmA = readFrontMatter(base);
   const fmB = readFrontMatter(head);
-  const baseEnv = docEnv(fmA, options.base);
-  const headEnv = docEnv(fmB, options.head);
+  // With a Quarto build of both versions, their values and outputs are compared too.
+  const compare = !!options.base?.run && !!options.head?.run;
+  const baseEnv = { ...docEnv(fmA, options.base), quartoCompare: compare };
+  const headEnv = { ...docEnv(fmB, options.head), quartoCompare: compare };
   const diff = renderMarkdownDiff(blankFrontMatter(base, fmA), blankFrontMatter(head, fmB), { md, baseEnv, headEnv });
   return {
     base: frontMatterHtml(md, fmA, fieldMarks(fmA, fmB, 'md-removed'), baseEnv) + diff.base,

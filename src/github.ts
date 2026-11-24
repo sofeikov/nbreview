@@ -338,6 +338,20 @@ const PR_FIELDS = `... on PullRequest {
 export class GitHub {
   constructor(private readonly token: string) {}
 
+  /**
+   * Environment variables that let `git` fetch from github.com as the signed-in user, for this
+   * one call: the token goes to git as a header in its environment, never on a command line or
+   * into a config file, and git doesn't ask for a password when it is refused.
+   */
+  gitEnv(): Record<string, string> {
+    return {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+      GIT_CONFIG_VALUE_0: `Authorization: Basic ${Buffer.from(`x-access-token:${this.token}`).toString('base64')}`,
+      GIT_TERMINAL_PROMPT: '0',
+    };
+  }
+
   private async request(url: string, init: RequestInit & { accept?: string } = {}): Promise<Response> {
     const res = await fetch(url.startsWith('http') ? url : `https://api.github.com${url}`, {
       ...init,

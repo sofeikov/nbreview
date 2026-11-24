@@ -52,6 +52,8 @@ let filterOpen = false;
 let checksOpen = false;
 /** The range picker is open. */
 let rangeOpen = false;
+/** The box of the experimental Quarto build is open. */
+let quartoOpen = false;
 /** The pull request's commits for the range picker, asked for when it is first opened; `head` is the latest then. */
 let commitList: { loading?: boolean; commits?: CommitVM[]; error?: string; head?: string } = {};
 /**
@@ -179,6 +181,7 @@ function renderToolbar(m: ViewModel): HTMLElement {
       rangeControl(),
       noiseButton(m),
       checksControl(m),
+      quartoControl(),
       m.kind === 'notebook' && segmented([
         ['Changes', 'Show changed cells; fold the rest', !ui.showAll, () => { ui.showAll = false; persist(); render(); }],
         ['All cells', 'Show every cell', ui.showAll, () => { ui.showAll = true; persist(); render(); }],
@@ -236,6 +239,52 @@ function noiseButton(m: ViewModel): HTMLElement | false {
     title,
     'aria-pressed': m.hideNoise ? 'true' : 'false',
   });
+}
+
+// Quarto build (experimental) ---------------------------------------------------------------------
+// A Quarto file is drawn from its source, which can't say what its code computes. On request the
+// extension builds the file with Quarto, at both versions the page shows, and the page then has
+// the values, tables and figures in place of the placeholders. A build runs the pull request's
+// code, so it starts only from this box, after a confirmation.
+
+function quartoControl(): HTMLElement | false {
+  const q = panel.quarto;
+  if (!q) {
+    return false;
+  }
+  const built = q.sides.filter(s => s.built).length;
+  const title = q.building
+    ? `Quarto build: ${q.building}`
+    : built ? 'Experimental: this page shows what a Quarto build of the document computed' : 'Experimental: build this document with Quarto to see what it computes';
+  return h('div', { class: 'quarto-wrap' },
+    button([icon('beaker'), q.building ? 'Building…' : built ? 'Built' : null, icon('chevron-down')], () => { quartoOpen = !quartoOpen; render(); }, {
+      class: `ghost quarto${built ? ' on' : ''}${q.building ? ' busy' : ''}`,
+      title,
+      'aria-haspopup': 'true',
+      'aria-expanded': quartoOpen ? 'true' : 'false',
+    }),
+    quartoOpen && renderQuartoBox(q));
+}
+
+function renderQuartoBox(q: NonNullable<PanelState['quarto']>): HTMLElement {
+  const built = q.sides.some(s => s.built);
+  const all = q.sides.every(s => s.built);
+  const what = q.sides.length > 1 ? 'the old and the new version' : 'this version';
+  return h('div', { class: 'quarto-box', role: 'dialog', 'aria-label': 'Quarto build' },
+    h('div', { class: 'quarto-box-head' }, 'Quarto build', h('span', { class: 'tag', text: 'Experimental' })),
+    h('div', { class: 'muted', text: `Builds the document with Quarto at ${what}, and shows what it computes: the values in its sentences, its tables and its figures. With both versions built, a number that changed is marked even where the text around it didn't.` }),
+    h('div', { class: 'quarto-sides' }, ...q.sides.map(s =>
+      h('div', { class: `quarto-side${s.built ? ' built' : ''}` },
+        s.built ? icon('check') : h('span', { class: 'codicon' }),
+        h('span', { text: `${s.side === 'RIGHT' ? 'New' : 'Old'} version` }),
+        h('code', { text: short(s.sha) }),
+        h('span', { class: 'muted', text: s.built ? 'built' : 'not built' })))),
+    q.building
+      ? h('div', { class: 'quarto-busy', text: q.building })
+      : h('div', { class: 'quarto-actions' },
+        button(all ? 'Build again' : built ? 'Build the other version' : 'Build with Quarto…', () => { quartoOpen = false; post({ type: 'buildQuarto' }); render(); }, { class: 'primary' }),
+        built && button('Remove', () => { post({ type: 'clearQuarto' }); }, { class: 'ghost', title: 'Show the document as it is without a build' })),
+    h('div', { class: 'muted', text: 'A build runs the pull request\u2019s code on this computer and can take a while. It asks before it starts.' }));
 }
 
 // Checks -----------------------------------------------------------------------------------------
@@ -2097,6 +2146,10 @@ window.addEventListener('mousedown', e => {
     rangeOpen = false;
     render();
   }
+  if (quartoOpen && !(e.target as HTMLElement).closest('.quarto-wrap')) {
+    quartoOpen = false;
+    render();
+  }
   if (submitBox.open && !submitBox.sending && !(e.target as HTMLElement).closest('.submit-wrap')) {
     submitBox.open = false;
     render();
@@ -2105,10 +2158,11 @@ window.addEventListener('mousedown', e => {
 
 window.addEventListener('keydown', e => {
   const target = e.target as HTMLElement;
-  if (e.key === 'Escape' && (filterOpen || checksOpen || rangeOpen)) {
+  if (e.key === 'Escape' && (filterOpen || checksOpen || rangeOpen || quartoOpen)) {
     filterOpen = false;
     checksOpen = false;
     rangeOpen = false;
+    quartoOpen = false;
     render();
     return;
   }

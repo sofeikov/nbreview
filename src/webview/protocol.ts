@@ -163,6 +163,17 @@ export interface PanelState {
   local?: { branch?: string; atHead: boolean };
   /** The label of the Back button, after go to definition moved within the review pages. */
   back?: string;
+  /** For a Quarto file: the experimental build with Quarto, which shows what the document computes. */
+  quarto?: QuartoState;
+}
+
+/**
+ * The Quarto builds of a page's file. `sides` has each version the page shows, with its commit
+ * and whether it has been built; `building` says what a running build is doing.
+ */
+export interface QuartoState {
+  sides: { side: Side; sha: string; built: boolean }[];
+  building?: string;
 }
 
 /** A line of the page for code navigation: its text, and its notebook cell (id and whole source). */
@@ -251,5 +262,8 @@ export type WebviewMessage =
   /** Jump to one of the viewer's pending comments, on this file or another. */
   | { type: 'goToPendingComment'; id: string }
   | { type: 'openExternal'; url: string }
+  /** Build this Quarto file with Quarto, at the versions the page shows (asks first), or drop what was built. */
+  | { type: 'buildQuarto' }
+  | { type: 'clearQuarto' }
   /** Copies the pull request's GitHub link to the clipboard. */
   | { type: 'copyLink'; url: string };

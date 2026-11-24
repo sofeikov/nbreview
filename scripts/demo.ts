@@ -8,6 +8,7 @@ import { buildReviewDoc, docLineForSource } from '../src/core/reviewDoc.ts';
 import { parsePatch } from '../src/core/patch.ts';
 import { buildFileThreads, buildFileViewModel, buildPendingList, buildThreads, buildViewModel } from '../src/viewModel.ts';
 import { parseBibtex } from '../src/core/quarto.ts';
+import { readQuartoRun } from '../src/core/quartoRun.ts';
 import type { FileThread, NotebookEntry, PlacedThread, ReviewSession } from '../src/session.ts';
 import type { GhOverview } from '../src/github.ts';
 import { buildOverview } from '../src/overviewModel.ts';
@@ -126,6 +127,14 @@ const quartoHead = readFileSync('docs/demo/value.head.qmd', 'utf8');
 const quartoBib = parseBibtex(readFileSync('docs/demo/refs.bib', 'utf8'));
 const quartoFile = { filename: 'docs/value.qmd', status: 'modified' as const, additions: 9, deletions: 4, patch: '' };
 const quartoModel = buildFileViewModel(quartoFile, quartoBase, quartoHead, { number: 44, title: 'Explain the value estimates', url: 'https://github.com/' }, undefined, { quarto: { base: { bibliography: quartoBib }, head: { bibliography: quartoBib } } });
+
+// A Quarto document with a Quarto build of both versions (the experimental build): the unit tests' fixtures.
+const runFile = { filename: 'docs/report.qmd', status: 'modified' as const, additions: 1, deletions: 1, patch: '' };
+const runSide = (side: string) => ({ run: readQuartoRun(readFileSync(`test/fixtures/quarto-run.${side}.ipynb`, 'utf8')) });
+const runTexts = ['base', 'head'].map(side => readFileSync(`test/fixtures/quarto-run.${side}.qmd`, 'utf8'));
+const runPr = { number: 45, title: 'Refresh the report\'s data', url: 'https://github.com/' };
+const quartoRunModel = buildFileViewModel(runFile, runTexts[0], runTexts[1], runPr, undefined, { quarto: { base: runSide('base'), head: runSide('head') } });
+const quartoNoRunModel = buildFileViewModel(runFile, runTexts[0], runTexts[1], runPr);
 
 const quartoThreads = buildFileThreads([
   {
@@ -286,6 +295,8 @@ writeFileSync('out/demo/data.js', [
   `window.__FILE_THREADS__ = ${JSON.stringify(fileThreads)};`,
   `window.__QUARTO_MODEL__ = ${JSON.stringify(quartoModel)};`,
   `window.__QUARTO_THREADS__ = ${JSON.stringify(quartoThreads)};`,
+  `window.__QUARTO_RUN_MODEL__ = ${JSON.stringify(quartoRunModel)};`,
+  `window.__QUARTO_NORUN_MODEL__ = ${JSON.stringify(quartoNoRunModel)};`,
   `window.__CHECKS_MODEL__ = ${JSON.stringify(checksModel)};`,
   `window.__CHECKS_FILE_MODEL__ = ${JSON.stringify(checksFileModel)};`,
   `window.__SINCE_MODEL__ = ${JSON.stringify(sinceModel)};`,
@@ -342,12 +353,17 @@ window.acquireVsCodeApi = () => ({
 // name) and #navtest checks Ctrl+click in the browser, writing the results on the page.
 const scene = location.hash.slice(1);
 // The range picker: #range (on "Since your review", the default) and #range-commit (one earlier
-// commit picked, so the page is read-only).
+// commit picked, so the page is read-only). The experimental Quarto build: #quarto-run (a document
+// built at both versions), #quarto-norun (the same before a build) and #quarto-box (its box open).
 const checks = scene.startsWith('checks');
-const models = { file: window.__FILE_MODEL__, quarto: window.__QUARTO_MODEL__, 'quarto-rows': window.__QUARTO_MODEL__, 'checks-file': window.__CHECKS_FILE_MODEL__, range: window.__SINCE_MODEL__, 'range-commit': window.__COMMIT_MODEL__ };
+const built = scene === 'quarto-run';
+const models = { 'quarto-run': window.__QUARTO_RUN_MODEL__, 'quarto-norun': window.__QUARTO_NORUN_MODEL__, 'quarto-box': window.__QUARTO_NORUN_MODEL__, file: window.__FILE_MODEL__, quarto: window.__QUARTO_MODEL__, 'quarto-rows': window.__QUARTO_MODEL__, 'checks-file': window.__CHECKS_FILE_MODEL__, range: window.__SINCE_MODEL__, 'range-commit': window.__COMMIT_MODEL__ };
 const model = models[scene] ?? (checks ? window.__CHECKS_MODEL__ : window.__MODEL__);
 deliver({ type: 'model', model });
-deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : scene === 'quarto-rows' ? window.__QUARTO_THREADS__ : checks || scene === 'range-commit' ? [] : window.__THREADS__ });
+deliver({ type: 'threads', threads: scene === 'file' ? window.__FILE_THREADS__ : scene === 'quarto-rows' ? window.__QUARTO_THREADS__ : checks || scene === 'range-commit' || scene.startsWith('quarto-') && scene !== 'quarto-rows' ? [] : window.__THREADS__ });
+if (scene === 'quarto-run' || scene === 'quarto-norun' || scene === 'quarto-box') {
+  panelState.quarto = { sides: [{ side: 'RIGHT', sha: '5c1e9d27aa', built }, { side: 'LEFT', sha: '8d02be81f4', built }] };
+}
 if (scene.startsWith('range')) {
   const first = window.__COMMITS__[0].sha;
   panelState.range = scene === 'range'

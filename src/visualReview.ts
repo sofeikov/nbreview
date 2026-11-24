@@ -8,7 +8,8 @@ import { imageMime } from './core/binary.ts';
 import type { Anchor } from './webview/protocol.ts';
 import type { TextReview } from './textReview.ts';
 import { docLinesForAnchor, headerLine } from './core/reviewDoc.ts';
-import type { Finding, HostMessage, PageSpot, RangeState, ViewModel, WebviewMessage } from './webview/protocol.ts';
+import type { Finding, HostMessage, PageSpot, QuartoState, RangeState, Side, ViewModel, WebviewMessage } from './webview/protocol.ts';
+import { QuartoBuilds, type BuildTarget } from './quartoBuild.ts';
 import { resolveRange, type RangeChoice, type ResolvedRange } from './core/range.ts';
 import { Navigator, type LocalRepo } from './navigation.ts';
 import { pageTitle, pathFromPageTitle } from './paths.ts';
@@ -32,6 +33,8 @@ export class VisualReview implements vscode.Disposable {
    */
   private readonly modelSyncs = new Map<vscode.WebviewPanel, number>();
   private readonly nav: Navigator;
+  /** Experimental: builds of Quarto files with Quarto, for what they compute. */
+  private readonly builds: QuartoBuilds;
 
   /** The workspace folder that clones the pull request's repository, if one is open. */
   localRepo(): Promise<LocalRepo | undefined> {
@@ -54,7 +57,11 @@ export class VisualReview implements vscode.Disposable {
     const storage = ctx.globalStorageUri.scheme === 'vscode-userdata' ? vscode.Uri.file(ctx.globalStorageUri.fsPath) : ctx.globalStorageUri;
     this.nav = new Navigator(state, storage);
     this.nav.onPage = (spot, from) => this.showOnPage(spot, from);
+    this.builds = new QuartoBuilds(storage.fsPath, () => this.state.session?.gh.gitEnv());
     this.disposables.push(
+      this.builds,
+      // A new result redraws the Quarto pages; a build that moves on only changes their state.
+      this.builds.onDidChange(e => [...this.panels].filter(([path]) => isQuarto(path)).forEach(([path, panel]) => void this.sync(panel, path, { model: e.results }))),
       this.nav,
       this.nav.onDidChange(() => [...this.panels].forEach(([path, panel]) => void this.sync(panel, path, {}))),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.nav.refresh()),
@@ -383,6 +390,12 @@ export class VisualReview implements vscode.Disposable {
       case 'copyLink':
         await vscode.commands.executeCommand('nbreview.copyPrLink');
         return;
+      case 'buildQuarto':
+        await this.buildQuarto(nbPath);
+        return;
+      case 'clearQuarto':
+        await this.builds.remove(this.quartoTargets(nbPath, (await this.range(nbPath))?.resolved).map(t => t.target));
+        return;
     }
   }
 
@@ -433,6 +446,58 @@ export class VisualReview implements vscode.Disposable {
   }
 
 
+  /**
+   * The versions of a Quarto file that its page shows, each as a build target, the new one first:
+   * the pull request's base and head, or the two commits of the page's range. None for any other file.
+   */
+  private quartoTargets(path: string, r: ResolvedRange | undefined): { side: Side; target: BuildTarget }[] {
+    const s = this.state.session;
+    const file = s?.files.find(f => f.filename === path);
+    if (!s || !file || !isQuarto(path)) {
+      return [];
+    }
+    const at = (sha: string, p: string): BuildTarget => ({ owner: s.pr.owner, repo: s.pr.repo, sha, path: p });
+    return [
+      ...(file.status !== 'removed' ? [{ side: 'RIGHT' as const, target: at(r?.to ?? s.pr.headSha, path) }] : []),
+      ...(file.status !== 'added' ? [{ side: 'LEFT' as const, target: at(r?.from ?? s.pr.baseSha, file.previousFilename ?? path) }] : []),
+    ];
+  }
+
+  /**
+   * Builds a Quarto file with Quarto at the versions its page shows, after the reviewer confirms:
+   * a build runs the pull request's code on this computer.
+   */
+  private async buildQuarto(path: string): Promise<void> {
+    if (!vscode.workspace.isTrusted) {
+      throw new Error('A Quarto build runs the pull request\'s code, which this window doesn\'t allow: it is in Restricted Mode.');
+    }
+    const all = this.quartoTargets(path, (await this.range(path))?.resolved);
+    // The versions not built yet; when every one is, all of them again.
+    const built = await Promise.all(all.map(t => this.builds.run(t.target)));
+    const targets = built.every(Boolean) ? all : all.filter((_t, i) => !built[i]);
+    if (!targets.length) {
+      return;
+    }
+    const name = (side: Side) => (side === 'RIGHT' ? 'the new version' : 'the old version');
+    const commits = targets.map(t => `${name(t.side)} (${t.target.sha.slice(0, 7)})`).join(' and ');
+    const command = vscode.workspace.getConfiguration('nbreview').get<string>('quarto.command', '').trim()
+      || '"quarto render", through "uv run" when the project has a uv.lock';
+    const pick = await vscode.window.showWarningMessage(
+      `Build ${path.split('/').pop()} with Quarto?`,
+      {
+        modal: true,
+        detail: `Quarto will run the document at ${commits}, to show what it computes: the values in its sentences, its tables and its figures.\n\n`
+          + 'This runs the pull request\'s code on this computer, with your access to it, and can take a while. Build only pull requests you trust.\n\n'
+          + `Each commit is fetched into the extension's storage and built there; your own checkout isn't touched. Command: ${command}.`,
+      },
+      'Build',
+    );
+    if (pick !== 'Build') {
+      return;
+    }
+    await this.builds.build(targets.map(t => t.target), [path], targets.map(t => name(t.side)));
+  }
+
   /** Sends the page what changed, in order: the notebook, then its threads, then the toolbar state. */
   private async sync(panel: vscode.WebviewPanel, nbPath: string, what: { model?: boolean; threads?: boolean }): Promise<void> {
     const id = ++this.syncCount;
@@ -466,7 +531,7 @@ export class VisualReview implements vscode.Disposable {
         const list = (s.fileThreads.get(nbPath) ?? []).filter(f => keepThread(f.side, r));
         this.post(panel, { type: 'threads', threads: vm.buildFileThreads(list, gh => this.state.describe(gh)) });
       }
-      this.post(panel, this.stateMessage(nbPath, range?.state, local, vm));
+      this.post(panel, this.stateMessage(nbPath, range?.state, local, vm, await this.quartoState(nbPath, r)));
       return;
     }
     if (s && entry && what.model) {
@@ -532,6 +597,13 @@ export class VisualReview implements vscode.Disposable {
       vm.loadQuartoContext(file.previousFilename ?? path, old, p => s.contentAt(p, r?.from ?? s.pr.baseSha)),
       vm.loadQuartoContext(path, head, p => s.contentAt(p, r?.to ?? s.pr.headSha)),
     ]);
+    // And what a Quarto build of that commit computed, when the reviewer has made one.
+    for (const { side, target } of this.quartoTargets(path, r)) {
+      const ctx = side === 'RIGHT' ? headCtx : baseCtx;
+      if (ctx) {
+        ctx.run = await this.builds.run(target);
+      }
+    }
     return vm.buildFileViewModel(file, old, head, pr, page, { hideNoise: this.hideNoise(), quarto: { base: baseCtx, head: headCtx } });
   }
 
@@ -666,7 +738,18 @@ export class VisualReview implements vscode.Disposable {
     [...this.panels].forEach(([path, panel]) => void this.sync(panel, path, {}));
   }
 
-  private stateMessage(nbPath: string, range: RangeState | undefined, local: LocalRepo | undefined, vm: typeof import('./viewModel.ts')): HostMessage {
+  /** The Quarto builds of a page's file, for its toolbar; undefined for a file that isn't a Quarto document. */
+  private async quartoState(path: string, r: ResolvedRange | undefined): Promise<QuartoState | undefined> {
+    const targets = this.quartoTargets(path, r);
+    if (!targets.length) {
+      return undefined;
+    }
+    const sides = await Promise.all(targets.map(async t => ({ side: t.side, sha: t.target.sha, built: !!(await this.builds.run(t.target)) })));
+    const building = this.builds.building(path);
+    return { sides, ...(building ? { building } : {}) };
+  }
+
+  private stateMessage(nbPath: string, range: RangeState | undefined, local: LocalRepo | undefined, vm: typeof import('./viewModel.ts'), quarto?: QuartoState): HostMessage {
     const last = this.backStack().at(-1);
     return {
       type: 'state',
@@ -680,6 +763,7 @@ export class VisualReview implements vscode.Disposable {
         ...(range ? { range } : {}),
         ...(local ? { local: { branch: local.branch, atHead: local.atHead } } : {}),
         ...(last ? { back: last.path === nbPath ? 'Back' : `Back to ${last.path.split('/').pop()}` } : {}),
+        ...(quarto ? { quarto } : {}),
       },
     };
   }
@@ -715,6 +799,11 @@ export class VisualReview implements vscode.Disposable {
 </body>
 </html>`;
   }
+}
+
+/** A Quarto document, by its name. */
+function isQuarto(path: string): boolean {
+  return /\.qmd$/i.test(path);
 }
 
 function escapeAttr(text: string): string {
