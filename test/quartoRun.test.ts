@@ -144,8 +144,16 @@ test('with a run of one version only, its values show and nothing is marked for 
 });
 
 test('the build command: Quarto as installed, through uv for a uv project, or the user\'s own', async () => {
-  const { keptNotebook, quartoCommand, splitCommand } = await import('../src/core/quartoRun.ts');
-  const tail = ['a.qmd', '--to', 'gfm', '-M', 'keep-ipynb:true', '--no-execute-daemon', '--output-dir', '.nbreview-out'];
+  const { failureLine, hiddenPath, keptNotebook, quartoCommand, splitCommand } = await import('../src/core/quartoRun.ts');
+  // Quarto leaves a file under a hidden folder out of its project; VS Code's storage is under one on Linux.
+  assert.equal(hiddenPath('/home/a/.config/Code/User/globalStorage/x/builds/o/r/sha'), true);
+  assert.equal(hiddenPath('C:\\Users\\a\\.vscode-server\\data'), true);
+  assert.equal(hiddenPath('/tmp/nbreview-Ab12/build'), false);
+  assert.equal(hiddenPath('C:\\Users\\john.doe\\AppData\\Roaming\\Code'), false);
+  // The reason of a failure is Quarto's ERROR line, not the end of its stack trace.
+  assert.equal(failureLine('Installed 265 packages\n\u001b[91mERROR: The --output-dir flag can only be used when rendering projects.\n\nStack trace:\n    at a (x.js:1:2)\n    at b (x.js:3:4)\u001b[39m\n'), 'ERROR: The --output-dir flag can only be used when rendering projects.');
+  assert.equal(failureLine('one\ntwo\nthree\n'), 'two three');
+  const tail = ['a.qmd', '--to', 'gfm', '-M', 'keep-ipynb:true', '--no-execute-daemon'];
   assert.deepEqual(quartoCommand('', 'a.qmd', false), ['quarto', 'render', ...tail]);
   assert.deepEqual(quartoCommand('', 'a.qmd', true), ['uv', 'run', 'quarto', 'render', ...tail]);
   assert.deepEqual(quartoCommand('conda run -n "my env" quarto render', 'a.qmd', true), ['conda', 'run', '-n', 'my env', 'quarto', 'render', ...tail]);

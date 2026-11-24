@@ -13,8 +13,9 @@
 import * as vscode from 'vscode';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import { keptNotebook, parseQuartoRun, quartoCommand, readQuartoRun, type QuartoRun } from './core/quartoRun.ts';
+import { failureLine, hiddenPath, keptNotebook, parseQuartoRun, quartoCommand, readQuartoRun, type QuartoRun } from './core/quartoRun.ts';
 
 /** A document at one commit. */
 export interface BuildTarget {
@@ -185,10 +186,20 @@ export class QuartoBuilds implements vscode.Disposable {
       throw new Error('the file isn\'t in the repository at this commit');
     }
     const folder = path.dirname(file);
-    const command = quartoCommand(setting, path.basename(file), await hasAbove(folder, dir, 'uv.lock'));
+    // Quarto gets the file through a path without hidden folders, or it would build it as a
+    // file outside its project, without the project's settings (see hiddenPath).
+    const alias = hiddenPath(dir) ? await aliasOf(dir) : undefined;
+    if (hiddenPath(dir) && !alias) {
+      this.say('Note: the build folder is under a hidden folder and no other path to it could be made, so Quarto builds the file without its project\'s settings.');
+    }
+    const command = quartoCommand(setting, alias ? path.join(alias.dir, ...t.path.split('/')) : path.basename(file), await hasAbove(folder, dir, 'uv.lock'));
     say('Building');
     const started = Date.now();
-    await this.exec(command, folder, process.env, token);
+    try {
+      await this.exec(command, folder, process.env, token);
+    } finally {
+      await alias?.remove();
+    }
     const kept = keptNotebook(path.basename(file), await fs.readdir(folder));
     const stat = kept ? await fs.stat(path.join(folder, kept)).catch(() => undefined) : undefined;
     if (!kept || !stat || stat.mtimeMs < started - 2000) {
@@ -217,7 +228,7 @@ export class QuartoBuilds implements vscode.Disposable {
       let cancelled = false;
       const out = (chunk: Buffer) => {
         const text = chunk.toString();
-        tail = (tail + text).slice(-400);
+        tail = (tail + text).slice(-4000);
         this.log?.append(text);
       };
       child.stdout.on('data', out);
@@ -258,8 +269,8 @@ export class QuartoBuilds implements vscode.Disposable {
         } else if (late) {
           end(new Error(`stopped after ${TIME_LIMIT / 60000} minutes`));
         } else if (code !== 0) {
-          const last = tail.trim().split('\n').filter(l => l.trim()).slice(-2).join(' ').slice(-240);
-          end(new Error(`${command[0]} ended with code ${code}${last ? `: ${last}` : ''}`));
+          const why = failureLine(tail);
+          end(new Error(`${command[0]} ended with code ${code}${why ? `: ${why}` : ''}`));
         } else {
           end();
         }
@@ -287,6 +298,32 @@ export class QuartoBuilds implements vscode.Disposable {
         }
       }
     }
+  }
+}
+
+/**
+ * Another path to a folder, without hidden folders in it: a link in a new private folder of the
+ * system's temporary folder. Undefined when one can't be made (no right to make links, or the
+ * temporary folder is itself under a hidden one).
+ */
+async function aliasOf(dir: string): Promise<{ dir: string; remove: () => Promise<void> } | undefined> {
+  let top: string | undefined;
+  try {
+    top = await fs.mkdtemp(path.join(os.tmpdir(), 'nbreview-'));
+    const link = path.join(top, 'build');
+    if (hiddenPath(link)) {
+      await fs.rmdir(top);
+      return undefined;
+    }
+    await fs.symlink(dir, link, 'dir');
+    const folder = top;
+    // The link and its folder only: what the link points to is not followed.
+    return { dir: link, remove: () => fs.unlink(link).then(() => fs.rmdir(folder)).catch(() => undefined) };
+  } catch {
+    if (top) {
+      await fs.rmdir(top).catch(() => undefined);
+    }
+    return undefined;
   }
 }
 

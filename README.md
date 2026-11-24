@@ -182,6 +182,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.33.1
+- **The Quarto build works on Linux.** It failed at once with "The --output-dir flag can only be used when rendering projects": Quarto leaves a file out of its project when any folder above it starts with a dot, and VS Code keeps the extension's storage, where the build runs, under `~/.config`. The build now gives Quarto the file through a path without hidden folders, so the project's settings apply as they do in your own checkout, and no longer passes `--output-dir`. A failed build now reports Quarto's error line instead of the end of its stack trace.
+
 ### 0.33.0
 - **Quarto build (experimental).** A `.qmd` file's page has a flask button that builds the document with Quarto at the old and the new version and shows what it computes in place of the placeholders: the values in its sentences, its tables and its figures. With both versions built, values and table cells that changed are marked, also where the source around them is the same. The build runs the pull request's code on your computer: it asks first, and is off in Restricted Mode. Each commit is fetched into the extension's storage and built there with `quarto render` (through `uv run` when the project has a `uv.lock`); new setting `nbreview.quarto.command` gives another command. Needs Quarto and an environment the document runs in; documents run by knitr and interactive outputs aren't covered.
 
