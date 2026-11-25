@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { RunCursor, cellCode, outputsKey, parseQuartoRun, readQuartoRun, type QuartoRun } from '../src/core/quartoRun.ts';
+import { RunCursor, cellCode, hasExecutableCode, outputsKey, parseQuartoRun, readQuartoRun, type QuartoRun } from '../src/core/quartoRun.ts';
 import { renderDocument, renderDocumentDiff } from '../src/mdDoc.ts';
 import { frameDocument, frameScripts, needsFrame, withoutRunIds } from '../src/core/outputFrame.ts';
 import { integrityHolds } from '../src/outputScripts.ts';
@@ -233,4 +233,15 @@ test('the build command: Quarto as installed, through uv for a uv project, or th
   assert.equal(keptNotebook('a.qmd', ['a.qmd', 'a.quarto_ipynb_1']), 'a.quarto_ipynb_1');
   assert.equal(keptNotebook('a.qmd', ['a.qmd', 'a.ipynb']), 'a.ipynb');
   assert.equal(keptNotebook('a.qmd', ['a.qmd', 'ab.ipynb']), undefined);
+});
+
+test('a document has executable code when it has a language cell or an inline expression', () => {
+  assert.equal(hasExecutableCode('Text only.\n\n## A heading {#sec-a}\n'), false);
+  // A raw block, a class and a plain fence run nothing.
+  assert.equal(hasExecutableCode('```{=html}\n<b>x</b>\n```\n\n```{.python}\nx = 1\n```\n\n```python\nx = 1\n```\n'), false);
+  assert.equal(hasExecutableCode('Use `{python}` as the engine name.\n'), false);
+  assert.equal(hasExecutableCode('```{python}\nx = 1\n```\n'), true);
+  assert.equal(hasExecutableCode('Intro\n\n````{r}\n1 + 1\n````\n'), true);
+  assert.equal(hasExecutableCode('There were `{python} n` shots.\n'), true);
+  assert.equal(hasExecutableCode(fx('quarto-run.head.qmd')), true);
 });

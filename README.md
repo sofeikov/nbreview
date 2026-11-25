@@ -182,6 +182,9 @@ The core does not use the VS Code API and is in `src/core/`:
 
 ## Changelog
 
+### 0.35.1
+- **Quarto build: a document with no code is built.** A Quarto document with no code cells and no inline expressions, such as a design document of prose, formulas and diagrams, was reported as a failed build ("Quarto kept no notebook of the document"), although Quarto had rendered it. Quarto runs no engine for such a document and keeps no notebook, because there is nothing to compute. The build now ends without error and the page shows the document as before. A document that has code, but for which Quarto kept no notebook (knitr, for one), is still reported.
+
 ### 0.35.0
 - **Filter files by name in the Review panel.** The search button in the panel's title bar filters the changed files as you type, as GitHub's "Filter files" does: a file shows when its name, with its extension, contains the text, whatever folder it is in. Folders and groups with no match are left out, and the panel says which filter is on, or that no file matches. The clear button shows every file again, and opening another pull request starts unfiltered.
 

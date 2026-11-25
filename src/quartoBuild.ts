@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { failureLine, hiddenPath, keptNotebook, parseQuartoRun, quartoCommand, readQuartoRun, type QuartoRun } from './core/quartoRun.ts';
+import { failureLine, hasExecutableCode, hiddenPath, keptNotebook, parseQuartoRun, quartoCommand, readQuartoRun, type QuartoRun } from './core/quartoRun.ts';
 
 /** A document at one commit. */
 export interface BuildTarget {
@@ -202,10 +202,18 @@ export class QuartoBuilds implements vscode.Disposable {
     }
     const kept = keptNotebook(path.basename(file), await fs.readdir(folder));
     const stat = kept ? await fs.stat(path.join(folder, kept)).catch(() => undefined) : undefined;
+    let run: QuartoRun;
     if (!kept || !stat || stat.mtimeMs < started - 2000) {
-      throw new Error('Quarto kept no notebook of the document: only documents run by its Jupyter engine (Python, for one) can be built');
+      // Quarto keeps a notebook only for a document it ran code of. A document with no code is
+      // built: it has no values and no cells to show, and the page needs no run of it.
+      if (hasExecutableCode(await fs.readFile(file, 'utf8'))) {
+        throw new Error('Quarto kept no notebook of the document: only documents run by its Jupyter engine (Python, for one) can be built');
+      }
+      this.say('The document has no code cells and no inline expressions, so there is nothing to compute.');
+      run = { exprs: [], cells: [] };
+    } else {
+      run = readQuartoRun(await fs.readFile(path.join(folder, kept), 'utf8'));
     }
-    const run = readQuartoRun(await fs.readFile(path.join(folder, kept), 'utf8'));
     const out = this.resultFile(t);
     await fs.mkdir(path.dirname(out), { recursive: true });
     await fs.writeFile(out, JSON.stringify(run));

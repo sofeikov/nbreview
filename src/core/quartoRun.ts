@@ -225,6 +225,16 @@ export function failureLine(output: string): string {
   return (error ?? lines.slice(-2).join(' ')).slice(0, 300);
 }
 
+/**
+ * Whether a document's source has executable code: a fenced cell with a language (`{python}`; a
+ * raw block `{=html}` or a class `{.callout}` is not one) or an inline expression (`` `{python} x` ``).
+ * Quarto starts no engine for a document without any, so it keeps no notebook of it, and a build
+ * of such a document has nothing to compute. It is not a failed build.
+ */
+export function hasExecutableCode(source: string): boolean {
+  return /^[ \t]*(?:`{3,}|~{3,})[ \t]*\{[A-Za-z]/m.test(source) || /`\{[A-Za-z][\w-]*\}[ \t]+[^`\n]+`/.test(source);
+}
+
 /** The notebook Quarto kept of a document, among the names in its folder: `x.quarto_ipynb`, or `x.ipynb` before Quarto 1.5. */
 export function keptNotebook(file: string, names: string[]): string | undefined {
   const stem = file.replace(/\.[^.]+$/, '');
