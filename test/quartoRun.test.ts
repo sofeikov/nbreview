@@ -215,7 +215,7 @@ test('a downloaded script must have the hash its output expects, when it gives o
 });
 
 test('the build command: Quarto as installed, through uv for a uv project, or the user\'s own', async () => {
-  const { failureLine, hiddenPath, keptNotebook, quartoCommand, splitCommand } = await import('../src/core/quartoRun.ts');
+  const { extrasConflict, failureLine, hiddenPath, keptNotebook, quartoCommand, splitCommand } = await import('../src/core/quartoRun.ts');
   // Quarto leaves a file under a hidden folder out of its project; VS Code's storage is under one on Linux.
   assert.equal(hiddenPath('/home/a/.config/Code/User/globalStorage/x/builds/o/r/sha'), true);
   assert.equal(hiddenPath('C:\\Users\\a\\.vscode-server\\data'), true);
@@ -224,9 +224,17 @@ test('the build command: Quarto as installed, through uv for a uv project, or th
   // The reason of a failure is Quarto's ERROR line, not the end of its stack trace.
   assert.equal(failureLine('Installed 265 packages\n\u001b[91mERROR: The --output-dir flag can only be used when rendering projects.\n\nStack trace:\n    at a (x.js:1:2)\n    at b (x.js:3:4)\u001b[39m\n'), 'ERROR: The --output-dir flag can only be used when rendering projects.');
   assert.equal(failureLine('one\ntwo\nthree\n'), 'two three');
+  // A failed cell: its exception, not the last line of its source that Quarto prints above it.
+  const cellRun = 'Executing \'r.quarto_ipynb\'\n  Cell 1/6: \'\'....Done\n  Cell 2/6: \'\'....\n\nAn error occurred while executing the following cell:\n------------------\n\nimport lance\nshare = n / total\n------------------\n\n';
+  assert.equal(failureLine(cellRun + '\u001b[0;31m---------------------------------------------------------------------------\u001b[0m\n\u001b[0;31mModuleNotFoundError\u001b[0m                       Traceback (most recent call last)\nCell \u001b[0;32mIn[2], line 1\u001b[0m\n\u001b[0;32m----> 1\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m lance\n\n\u001b[0;31mModuleNotFoundError\u001b[0m: No module named \'lance\'\n\n'), 'cell 2/6: ModuleNotFoundError: No module named \'lance\'');
+  // Rich's traceback (ZenML installs it) goes to the cell's output, and Quarto reports none.
+  assert.equal(failureLine(cellRun + '\n\n\n'), 'cell 2/6 failed, and its error wasn\'t reported');
   const tail = ['a.qmd', '--to', 'gfm', '-M', 'keep-ipynb:true', '--no-execute-daemon'];
   assert.deepEqual(quartoCommand('', 'a.qmd', false), ['quarto', 'render', ...tail]);
-  assert.deepEqual(quartoCommand('', 'a.qmd', true), ['uv', 'run', 'quarto', 'render', ...tail]);
+  assert.deepEqual(quartoCommand('', 'a.qmd', true), ['uv', 'run', '--all-extras', 'quarto', 'render', ...tail]);
+  assert.deepEqual(quartoCommand('', 'a.qmd', true, false), ['uv', 'run', 'quarto', 'render', ...tail]);
+  assert.equal(extrasConflict('uv ended with code 2: error: Extras `a` and `b` are incompatible with the declared conflicts: {`toy[a]`, `toy[b]`}'), true);
+  assert.equal(extrasConflict('uv ended with code 1: cell 2/6: ModuleNotFoundError: No module named \'lance\''), false);
   assert.deepEqual(quartoCommand('conda run -n "my env" quarto render', 'a.qmd', true), ['conda', 'run', '-n', 'my env', 'quarto', 'render', ...tail]);
   assert.deepEqual(splitCommand(`  a 'b c'  "d"  `), ['a', 'b c', 'd']);
   assert.equal(keptNotebook('a.qmd', ['a.qmd', 'a.quarto_ipynb', 'b.quarto_ipynb']), 'a.quarto_ipynb');

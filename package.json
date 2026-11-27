@@ -2,7 +2,7 @@
   "name": "nbreview",
   "displayName": "Notebook Review for GitHub Pull Requests (Jupyter .ipynb)",
   "description": "Review Jupyter notebooks (.ipynb) in GitHub pull requests inside VS Code: rendered cell-by-cell diffs of code, Markdown, LaTeX and outputs, with line comments on any cell that post to GitHub as a normal PR review.",
-  "version": "0.35.1",
+  "version": "0.35.2",
   "publisher": "KonstantinSofeikov",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -723,7 +723,7 @@
         "nbreview.quarto.command": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Experimental. The command that builds a Quarto file when you ask for a Quarto build in the review page, up to the file name: for example `uv run quarto render`, or `conda run -n myenv quarto render`. Empty uses `quarto render`, run through `uv run` when the project has a `uv.lock`. The build runs in a copy of the repository at each commit, so the command must find the project's packages there."
+          "markdownDescription": "Experimental. The command that builds a Quarto file when you ask for a Quarto build in the review page, up to the file name: for example `uv run quarto render`, or `conda run -n myenv quarto render`. Empty uses `quarto render`, run through `uv run --all-extras` when the project has a `uv.lock` (plain `uv run` when its extras conflict). The build runs in a copy of the repository at each commit, so the command must find the project's packages there."
         },
         "nbreview.showComments": {
           "type": "string",

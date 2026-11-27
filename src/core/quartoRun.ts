@@ -196,16 +196,25 @@ export function splitCommand(text: string): string[] {
  * The command that builds one document, run in the document's folder. `setting` is the user's
  * command up to the file (`nbreview.quarto.command`); empty means Quarto as it is installed, run
  * through uv when the project has a `uv.lock`, so the build gets the project's own packages at
- * that commit. The kept notebook is what the build is for: `gfm` is the cheapest format to write,
- * and needs none of the project's format extensions. Without Quarto's kernel daemon, which would
- * stay alive for minutes after the build, out of reach of a cancel. And without `--output-dir`:
- * Quarto refuses it for a file it doesn't count as part of a project, and the checkout is thrown
- * away anyway.
+ * that commit. With all the project's extras (`allExtras`): a project that keeps a package its
+ * documents import in an extra installs it with `uv sync --all-extras`, and plain `uv run` would
+ * leave it out. A project whose extras conflict can't have them all; the build then runs again
+ * without (see extrasConflict). The kept notebook is what the build is for: `gfm` is the cheapest
+ * format to write, and needs none of the project's format extensions. Without Quarto's kernel
+ * daemon, which would stay alive for minutes after the build, out of reach of a cancel. And
+ * without `--output-dir`: Quarto refuses it for a file it doesn't count as part of a project, and
+ * the checkout is thrown away anyway.
  */
-export function quartoCommand(setting: string, file: string, uvProject: boolean): string[] {
+export function quartoCommand(setting: string, file: string, uvProject: boolean, allExtras = true): string[] {
   const words = splitCommand(setting);
-  const start = words.length ? words : uvProject ? ['uv', 'run', 'quarto', 'render'] : ['quarto', 'render'];
+  const uv = ['uv', 'run', ...(allExtras ? ['--all-extras'] : []), 'quarto', 'render'];
+  const start = words.length ? words : uvProject ? uv : ['quarto', 'render'];
   return [...start, file, '--to', 'gfm', '-M', 'keep-ipynb:true', '--no-execute-daemon'];
+}
+
+/** Whether uv refused to run because the project declares some of its extras in conflict, so `--all-extras` can't be met. */
+export function extrasConflict(message: string): boolean {
+  return /incompatible with the declared conflicts/.test(message);
 }
 
 /**
@@ -217,12 +226,43 @@ export function hiddenPath(path: string): boolean {
   return /[/\\]\./.test(path);
 }
 
-/** The line of a failed command's output that says why: Quarto's `ERROR:` line, or else its last lines. */
+/**
+ * The line of a failed command's output that says why. When a cell failed, the exception that
+ * ended the cell's traceback, with the cell's number (`cell 2/6: ModuleNotFoundError: …`); Quarto
+ * prints the cell's source above it, whose last line says nothing. Otherwise Quarto's `ERROR:`
+ * line, or else the output's last lines.
+ */
 export function failureLine(output: string): string {
   // eslint-disable-next-line no-control-regex
-  const lines = output.replace(/\u001b\[[0-9;]*m/g, '').split('\n').map(l => l.trim()).filter(Boolean);
+  const text = output.replace(/\u001b\[[0-9;]*m/g, '');
+  const cell = cellFailure(text);
+  if (cell !== undefined) {
+    return cell.slice(0, 300);
+  }
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const error = lines.filter(l => /^(ERROR|Error|error)\b/.test(l)).pop();
   return (error ?? lines.slice(-2).join(' ')).slice(0, 300);
+}
+
+const CELL_ERROR = 'An error occurred while executing the following cell:';
+
+/**
+ * Why a cell failed, from Quarto's report of it: the cell's source between two lines of dashes,
+ * then its traceback. Undefined when no cell failed. A traceback can be empty: a library that
+ * draws tracebacks itself (Rich's, which ZenML installs) prints it as the cell's output, which
+ * Quarto doesn't show.
+ */
+function cellFailure(text: string): string | undefined {
+  const at = text.lastIndexOf(CELL_ERROR);
+  if (at < 0) {
+    return undefined;
+  }
+  const which = [...text.slice(0, at).matchAll(/Cell (\d+\/\d+)/g)].pop()?.[1];
+  const name = which ? `cell ${which}` : 'a cell';
+  const parts = text.slice(at + CELL_ERROR.length).split(/^-{10,}[ \t]*$/m);
+  const traceback = parts.length >= 3 ? parts.slice(2).join('\n') : '';
+  const last = traceback.split('\n').map(l => l.trim()).filter(Boolean).pop();
+  return last ? `${name}: ${last}` : `${name} failed, and its error wasn't reported`;
 }
 
 /**

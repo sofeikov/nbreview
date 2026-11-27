@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { failureLine, hasExecutableCode, hiddenPath, keptNotebook, parseQuartoRun, quartoCommand, readQuartoRun, type QuartoRun } from './core/quartoRun.ts';
+import { extrasConflict, failureLine, hasExecutableCode, hiddenPath, keptNotebook, parseQuartoRun, quartoCommand, readQuartoRun, type QuartoRun } from './core/quartoRun.ts';
 
 /** A document at one commit. */
 export interface BuildTarget {
@@ -192,11 +192,23 @@ export class QuartoBuilds implements vscode.Disposable {
     if (hiddenPath(dir) && !alias) {
       this.say('Note: the build folder is under a hidden folder and no other path to it could be made, so Quarto builds the file without its project\'s settings.');
     }
-    const command = quartoCommand(setting, alias ? path.join(alias.dir, ...t.path.split('/')) : path.basename(file), await hasAbove(folder, dir, 'uv.lock'));
+    const target = alias ? path.join(alias.dir, ...t.path.split('/')) : path.basename(file);
+    const uvProject = await hasAbove(folder, dir, 'uv.lock');
+    // ZenML replaces the notebook's traceback with Rich's, printed as the cell's output, which
+    // Quarto doesn't show when the cell fails: the log would say a cell failed but not why.
+    const buildEnv = { ...process.env, ZENML_ENABLE_RICH_TRACEBACK: 'false' };
     say('Building');
     const started = Date.now();
     try {
-      await this.exec(command, folder, process.env, token);
+      try {
+        await this.exec(quartoCommand(setting, target, uvProject), folder, buildEnv, token);
+      } catch (e) {
+        if (setting || !uvProject || !(e instanceof Error) || !extrasConflict(e.message)) {
+          throw e;
+        }
+        this.say('The project\'s extras conflict, so they can\'t all be installed: building without them.');
+        await this.exec(quartoCommand(setting, target, uvProject, false), folder, buildEnv, token);
+      }
     } finally {
       await alias?.remove();
     }
@@ -236,7 +248,8 @@ export class QuartoBuilds implements vscode.Disposable {
       let cancelled = false;
       const out = (chunk: Buffer) => {
         const text = chunk.toString();
-        tail = (tail + text).slice(-4000);
+        // Long enough for a failed cell's source and its traceback, which say why it failed.
+        tail = (tail + text).slice(-20000);
         this.log?.append(text);
       };
       child.stdout.on('data', out);
